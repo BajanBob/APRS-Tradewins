@@ -1,0 +1,517 @@
+#!/usr/bin/env python3
+"""
+Tradewind - Caribbean VHF/UHF propagation beacon, APRS client and soundcard TNC.
+
+Run:   python3 app.py            then open http://127.0.0.1:8073
+       python3 app.py --host 0.0.0.0   (reach the face plate from a phone on your LAN)
+
+The face plate lets you enter your callsign and grid square, choose a radio
+or interface (built-in sound modem, KISS TCP, KISS serial), and watch
+2m / 70cm openings between the Caribbean and North America, Europe and
+Latin America as they're announced on APRS.
+"""
+
+import argparse
+import collections
+import json
+import os
+import sys
+import re
+import threading
+import time
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import tnc as tncmod
+import vhf_prop_aprs as eng
+
+APP_NAME = "Tradewind"
+APP_VERSION = "1.0"
+# When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
+HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+CONF_DIR = os.path.expanduser("~/.tradewind")
+CONF_PATH = os.path.join(CONF_DIR, "config.json")
+STATE_PATH = os.path.join(CONF_DIR, "announce_state.json")
+
+IS_ANDROID = "ANDROID_ARGUMENT" in os.environ or hasattr(sys, "getandroidapilevel")
+
+CALL_RE = re.compile(r"^(?=.*\d)[A-Z0-9]{3,7}(-([0-9]|1[0-5]))?$")
+GRID_RE = re.compile(r"^[A-R]{2}[0-9]{2}([A-X]{2})?$", re.I)
+
+DEFAULTS = {
+    "call": "", "grid": "", "passcode": "",
+    "symbol": "/-", "beacon": True, "beacon_min": 30,
+    "beacon_comment": "Tradewind VHF/UHF prop alerts",
+    "preset": "generic_vox",
+    "tnc": "sound", "audio_in": "", "audio_out": "", "sample_rate": 48000,
+    "ptt": "VOX", "ptt_port": "", "ptt_invert": False, "cm108_gpio": 3,
+    "cat_baud": 9600, "civ_addr": "7C",
+    "txdelay": 300, "txtail": 50, "tx_level": 0.5,
+    "kiss_addr": "127.0.0.1:8001", "kiss_serial": "", "kiss_baud": 9600,
+    "rf_announce": True, "rf_path": "WIDE2-1",
+    "aprsis": True, "server": "rotate.aprs2.net", "igate": False,
+    "window": 60, "interval": 10, "min_km": 800, "min_paths": 2,
+    "strong_km": 1500, "repeat": 30, "announce_close": False, "group": "VHF",
+    "bands": ["2m", "70cm"], "regions": ["NA", "EU", "LA"], "local_km": 300,
+}
+
+# Radio / interface presets. Fields override DEFAULTS when chosen in the UI.
+PRESETS = [
+    {"id": "generic_vox", "label": "Generic soundcard + VOX (SignaLink USB, Easy Digi)",
+     "tnc": "sound", "ptt": "VOX",
+     "note": "Turn the interface's VOX/delay knob low. Set TX audio so the radio deviates about 3 kHz."},
+    {"id": "digirig", "label": "Digirig Mobile",
+     "tnc": "sound", "ptt": "RTS",
+     "note": "Audio device is 'USB PnP Sound Device'. PTT port is the Digirig's serial port (COMx / /dev/ttyUSBx)."},
+    {"id": "aioc", "label": "AIOC all-in-one cable (Baofeng/Kenwood-pin HTs)",
+     "tnc": "sound", "ptt": "DTR",
+     "note": "AIOC keys on DTR with RTS low. Audio device shows as 'All-In-One-Cable'."},
+    {"id": "cm108", "label": "CM108/CM119 USB fob with GPIO PTT",
+     "tnc": "sound", "ptt": "CM108", "cm108_gpio": 3,
+     "note": "Linux only: PTT port is /dev/hidrawN (give your user access via a udev rule)."},
+    {"id": "ic705", "label": "Icom IC-705 (built-in USB sound card)",
+     "tnc": "sound", "ptt": "RTS",
+     "note": "Audio: 'USB Audio CODEC'. PTT port: the IC-705 USB serial port. On the radio set USB SEND to RTS, DATA MOD to USB, and use FM-D (data) mode."},
+    {"id": "ic9700", "label": "Icom IC-9700 (built-in USB sound card)",
+     "tnc": "sound", "ptt": "RTS",
+     "note": "Audio: 'USB Audio CODEC'. PTT port: first IC-9700 USB serial port. Set USB SEND to RTS, DATA MOD to USB, use FM-D."},
+    {"id": "ic7100", "label": "Icom IC-7100 (built-in USB sound card)",
+     "tnc": "sound", "ptt": "RTS",
+     "note": "Audio: 'USB Audio CODEC'. Set USB SEND to RTS and DATA MOD to USB; use FM-D."},
+    {"id": "ic9100", "label": "Icom IC-9100 (built-in USB sound card, CI-V PTT)",
+     "tnc": "sound", "ptt": "CIV", "civ_addr": "7C", "cat_baud": 9600,
+     "note": "One USB cable carries audio and CI-V. Audio: 'USB Audio CODEC'. PTT port: the IC-9100's USB serial port. On the radio set DATA MOD to USB, USB MOD Level about 25-50%, CI-V address 7C and CI-V baud 9600, and use FM data mode. Close other CAT software (logger, WSJT-X) first - only one program can use the port."},
+    {"id": "ft991a", "label": "Yaesu FT-991A (built-in USB sound card)",
+     "tnc": "sound", "ptt": "RTS",
+     "note": "Audio: 'USB Audio CODEC'. PTT port: the 'Enhanced' COM port. Set the radio's PC keying / data PTT option to RTS and use DATA-FM. Alternative: choose PTT 'Yaesu CAT' on the 'Standard' COM port at the radio's CAT baud rate."},
+    {"id": "ft2980", "label": "Yaesu FT-2980R (mic + speaker jacks, via interface)",
+     "tnc": "sound", "ptt": "VOX", "txdelay": 350, "tx_level": 0.3,
+     "note": "The FT-2980R has no data jack or CAT port. Use a soundcard interface with a cable for Yaesu's 8-pin modular mic jack and the 3.5 mm external speaker jack: SignaLink USB (VOX), or a Digirig with Yaesu mic cable (set PTT to Serial RTS). Check the cable's mic-jack pinout against the radio manual. Set squelch just closed, keep TX audio low (mic audio is pre-emphasised), and use Low or Mid power for long sessions."},
+    {"id": "yaesu_datajack", "label": "Yaesu FT-7900R / FT-8800R / FT-8900R (DATA jack)",
+     "tnc": "sound", "ptt": "VOX",
+     "note": "Use the 6-pin mini-DIN DATA jack with a SignaLink, Digirig or Easy Digi data cable. Set the radio's packet speed to 1200. PTT: VOX on a SignaLink, or Serial RTS on a Digirig."},
+    {"id": "yaesu_ftm", "label": "Yaesu FTM-400 / FTM-300 / FTM-200 (DATA jack)",
+     "tnc": "sound", "ptt": "VOX",
+     "note": "These radios' built-in APRS has no KISS mode, so connect a soundcard interface to the rear DATA jack (cable for your model). Set the data jack speed to 1200 bps and turn the radio's own APRS off on that band. PTT: VOX or Serial RTS (Digirig)."},
+    {"id": "rigctld", "label": "Any radio via Hamlib rigctld (CAT PTT)",
+     "tnc": "sound", "ptt": "RIGCTLD", "ptt_port": "127.0.0.1:4532",
+     "note": "Start rigctld for your radio first. Pick the radio's USB audio device for in/out."},
+    {"id": "thd75", "label": "Kenwood TH-D75 (built-in TNC, KISS)",
+     "tnc": "kiss_serial", "kiss_baud": 9600,
+     "note": "Enable KISS mode on the radio, then choose its USB or Bluetooth serial port."},
+    {"id": "thd74", "label": "Kenwood TH-D74 (built-in TNC, KISS)",
+     "tnc": "kiss_serial", "kiss_baud": 9600,
+     "note": "Enable KISS mode on the radio, then choose its USB or Bluetooth serial port."},
+    {"id": "tmd710", "label": "Kenwood TM-D710G / TM-D710GA (built-in TNC)",
+     "tnc": "kiss_serial", "kiss_baud": 9600,
+     "note": "Put the built-in TNC in KISS mode (PACKET mode, then KISS ON). Use the COM port on the control head."},
+    {"id": "mobilinkd", "label": "Mobilinkd TNC3 / TNC4 (Bluetooth or USB)",
+     "tnc": "kiss_serial", "kiss_baud": 115200,
+     "note": "Pair the TNC, then choose its serial port (rfcomm / Bluetooth COM)."},
+    {"id": "direwolf", "label": "Direwolf (external sound modem)",
+     "tnc": "kiss_tcp", "kiss_addr": "127.0.0.1:8001",
+     "note": "Direwolf's default KISS TCP port is 8001. Direwolf handles audio and PTT."},
+    {"id": "uz7ho", "label": "UZ7HO Soundmodem (external sound modem)",
+     "tnc": "kiss_tcp", "kiss_addr": "127.0.0.1:8100",
+     "note": "Enable the KISS server in Soundmodem (default port 8100)."},
+    {"id": "aprsis_only", "label": "No radio - APRS-IS only",
+     "tnc": "none", "rf_announce": False,
+     "note": "Announcements go to APRS-IS only."},
+]
+
+
+def latlon_to_aprs(lat, lon):
+    la, lo = abs(lat), abs(lon)
+    lat_s = f"{int(la):02d}{(la - int(la)) * 60:05.2f}{'N' if lat >= 0 else 'S'}"
+    lon_s = f"{int(lo):03d}{(lo - int(lo)) * 60:05.2f}{'E' if lon >= 0 else 'W'}"
+    return lat_s, lon_s
+
+
+def load_config():
+    cfg = dict(DEFAULTS)
+    if IS_ANDROID:
+        cfg.update(tnc="none", preset="aprsis_only", rf_announce=False)
+    try:
+        with open(CONF_PATH) as f:
+            cfg.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+    return cfg
+
+
+def save_config(cfg):
+    os.makedirs(CONF_DIR, exist_ok=True)
+    tmp = CONF_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=1)
+    os.replace(tmp, CONF_PATH)
+
+
+def validate(cfg):
+    errs = []
+    if IS_ANDROID and cfg.get("tnc") in ("sound", "kiss_serial"):
+        errs.append("On Android use 'APRS-IS only' or 'KISS over TCP' - the sound modem and USB/serial radios need the Windows/PC version.")
+    call = cfg.get("call", "").upper().strip()
+    if not CALL_RE.match(call) or call.startswith("N0CALL"):
+        errs.append("Enter your own callsign (with optional -SSID, e.g. 8P6XX-10).")
+    if not GRID_RE.match(cfg.get("grid", "").strip()):
+        errs.append("Enter a 4 or 6 character Maidenhead grid square (e.g. GK03 or GK03fd).")
+    if cfg.get("tnc") == "sound" and cfg.get("ptt") in ("RTS", "DTR", "CM108", "CIV", "YAESU_CAT") and not cfg.get("ptt_port"):
+        errs.append("Choose the serial / HID port used for PTT.")
+    if cfg.get("ptt") == "CIV" and cfg.get("tnc") == "sound":
+        try:
+            int(str(cfg.get("civ_addr") or "7C"), 16)
+        except ValueError:
+            errs.append("CI-V address must be hex, e.g. 7C for the IC-9100.")
+    if cfg.get("tnc") == "kiss_serial" and not cfg.get("kiss_serial"):
+        errs.append("Choose the radio / TNC serial port.")
+    return errs
+
+
+class Station:
+    """Everything that runs while the station is ON."""
+
+    def __init__(self):
+        self.cfg = load_config()
+        self.lock = threading.RLock()
+        self.running = False
+        self.tnc = None
+        self.isc = None
+        self.log = collections.deque(maxlen=400)
+        self.log_id = 0
+        self.openings = {}
+        self.last_check = 0
+        self.next_check = 0
+        self.next_beacon = 0
+        self.spot_count = 0
+        self.car_count = 0
+        self.local = []
+        self.check_error = ""
+        self.ann_state = eng.load_state(STATE_PATH)
+        self.demo_xml = None
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+
+    # ---- logging
+    def add_log(self, kind, text):
+        with self.lock:
+            self.log_id += 1
+            self.log.append({"id": self.log_id, "t": time.time(), "kind": kind, "text": text})
+
+    # ---- lifecycle
+    def start(self):
+        with self.lock:
+            if self.running:
+                return []
+            errs = validate(self.cfg)
+            if errs:
+                return errs
+            c = self.cfg
+            c["call"] = c["call"].upper().strip()
+            self._stop.clear()
+            self.tnc = tncmod.make_tnc(c)
+            try:
+                self.tnc.start(self.on_rf_packet)
+            except Exception as e:
+                self.tnc = None
+                return [f"Could not start TNC: {e}"]
+            if c.get("aprsis"):
+                pc = c.get("passcode") or eng.aprs_passcode(c["call"])
+                self.isc = tncmod.AprsIsClient(c["call"], int(pc), c.get("server") or "rotate.aprs2.net",
+                                               software=APP_NAME, version=APP_VERSION)
+                self.isc.start()
+            self.running = True
+            self.next_check = time.time() + 3
+            self.next_beacon = time.time() + 10 if c.get("beacon") else 0
+            threading.Thread(target=self._loop, daemon=True).start()
+            self.add_log("SYS", f"Station ON as {c['call']} @ {c['grid']} - TNC: {self.tnc.kind}")
+            return []
+
+    def stop(self):
+        with self.lock:
+            if not self.running:
+                return
+            self._stop.set()
+            self._wake.set()
+            for x in (self.tnc, self.isc):
+                try:
+                    x and x.stop()
+                except Exception:
+                    pass
+            self.tnc = self.isc = None
+            self.running = False
+            self.add_log("SYS", "Station OFF")
+
+    def update_config(self, new):
+        was = self.running
+        if was:
+            trial = dict(self.cfg)
+            trial.update({k: v for k, v in new.items() if k in DEFAULTS})
+            trial["call"] = str(trial.get("call", "")).upper().strip()
+            errs = validate(trial)
+            if errs:  # keep the running station on its last good settings
+                return ["Not applied: " + errs[0]]
+            self.stop()
+        with self.lock:
+            for k, v in new.items():
+                if k in DEFAULTS:
+                    self.cfg[k] = v
+            self.cfg["call"] = self.cfg.get("call", "").upper().strip()
+            self.cfg["group"] = (self.cfg.get("group") or "VHF").upper()[:5]
+            save_config(self.cfg)
+        errs = validate(self.cfg)
+        if was and not errs:
+            errs = self.start()
+        return errs
+
+    # ---- main loop
+    def _loop(self):
+        while not self._stop.is_set():
+            now = time.time()
+            if now >= self.next_check:
+                self.run_check()
+                self.next_check = time.time() + max(eng.MIN_QUERY_INTERVAL, self.cfg["interval"] * 60)
+            if self.next_beacon and now >= self.next_beacon:
+                self.send_beacon()
+                self.next_beacon = time.time() + max(10, self.cfg["beacon_min"]) * 60
+            self._wake.wait(1.0)
+            self._wake.clear()
+
+    def run_check(self):
+        c = self.cfg
+        try:
+            if self.demo_xml:
+                with open(self.demo_xml, "rb") as f:
+                    raw = f.read()
+            else:
+                raw = eng.fetch_pskreporter(c["window"] * 60, c["call"])
+            spots = eng.parse_spots(raw)
+            self.check_error = ""
+        except Exception as e:
+            self.check_error = f"PSKReporter: {e}"
+            self.add_log("ERR", self.check_error)
+            return
+        self.last_check = time.time()
+        spots = [s for s in spots if s.band in c["bands"]]
+        self.spot_count = len(spots)
+        self.car_count = sum(1 for s in spots if "CAR" in (s.tx_region, s.rx_region))
+        me = eng.grid_to_latlon(c["grid"])
+        if me:
+            self.local = []
+            for s in spots:
+                for call, g in ((s.tx, s.tx_grid), (s.rx, s.rx_grid)):
+                    p = eng.grid_to_latlon(g)
+                    if p and eng.haversine_km(me, p) <= c["local_km"] and s.km >= 200:
+                        self.local.append({"band": s.band, "tx": s.tx, "rx": s.rx,
+                                           "km": round(s.km), "mode": s.mode, "snr": s.snr})
+                        break
+            self.local = sorted(self.local, key=lambda x: -x["km"])[:8]
+        ops = eng.detect(spots, c["min_km"], c["min_paths"], c["strong_km"])
+        ops = {k: v for k, v in ops.items() if k[1] in c["regions"]}
+        self.openings = ops
+        self.add_log("PROP", f"{len(spots)} spots, {self.car_count} Caribbean, "
+                             f"{len(ops)} opening(s)" + (": " + ", ".join(f"{b} CAR-{r}" for b, r in sorted(ops)) if ops else ""))
+        msgs = eng.plan_announcements(ops, self.ann_state, int(time.time()),
+                                      c["repeat"] * 60, c["announce_close"], c["group"])
+        for addr, text in msgs:
+            self.transmit(eng.info_field(addr, text))
+        try:
+            eng.save_state(STATE_PATH, self.ann_state)
+        except OSError:
+            pass
+
+    # ---- TX paths
+    def transmit(self, info, rf=True, net=True):
+        c = self.cfg
+        call = c["call"]
+        sent = []
+        if rf and c.get("rf_announce") and self.tnc and c.get("tnc") != "none":
+            path = [p.strip() for p in (c.get("rf_path") or "").split(",") if p.strip()]
+            try:
+                self.tnc.send(call, eng.TOCALL, path, info)
+                sent.append("RF")
+            except Exception as e:
+                self.add_log("ERR", f"RF send: {e}")
+        if net and self.isc:
+            try:
+                self.isc.send(f"{call}>{eng.TOCALL},TCPIP*:{info}")
+                sent.append("IS")
+            except Exception as e:
+                self.add_log("ERR", f"APRS-IS send: {e}")
+        self.add_log("TX", f"[{'+'.join(sent) or 'nothing sent'}] {call}>{eng.TOCALL}:{info}")
+
+    def send_beacon(self):
+        c = self.cfg
+        p = eng.grid_to_latlon(c["grid"])
+        if not p:
+            return
+        lat, lon = latlon_to_aprs(*p)
+        sym = (c.get("symbol") or "/-").ljust(2)[:2]
+        self.transmit(f"!{lat}{sym[0]}{lon}{sym[1]}{c.get('beacon_comment', '')[:43]}")
+
+    def send_test(self):
+        self.transmit(f":{eng.bln_addressee('9', self.cfg['group'])}:{APP_NAME} test - no propagation alert")
+
+    # ---- RX
+    def on_rf_packet(self, line):
+        self.add_log("RX", line)
+        c = self.cfg
+        if not (c.get("igate") and self.isc and self.isc.verified):
+            return
+        head, _, info = line.partition(":")
+        path = head.split(">", 1)[1].split(",") if ">" in head else []
+        if any(p.rstrip("*") in ("TCPIP", "TCPXX", "NOGATE", "RFONLY") for p in path):
+            return
+        if info.startswith(("?", "}")) or head.split(">")[0].rstrip("*") == c["call"]:
+            return
+        try:
+            self.isc.send(f"{head},qAR,{c['call']}:{info}")
+            self.add_log("IGT", f"gated {head.split('>')[0]}")
+        except Exception as e:
+            self.add_log("ERR", f"iGate: {e}")
+
+    # ---- status for the face plate
+    def state(self, since=0):
+        c = self.cfg
+        matrix = []
+        for band in ("2m", "70cm"):
+            for region in ("NA", "EU", "LA"):
+                op = self.openings.get((band, region))
+                cell = {"band": band, "region": region,
+                        "enabled": band in c["bands"] and region in c["regions"], "open": bool(op)}
+                if op:
+                    b = op.best
+                    cell.update(paths=op.score, km=round(b.km), tx=b.tx, rx=b.rx,
+                                tx_grid=b.tx_grid, rx_grid=b.rx_grid, mode=b.mode, snr=b.snr,
+                                modes=sorted(op.modes))
+                matrix.append(cell)
+        tst = self.tnc.status if self.tnc else None
+        return {
+            "app": APP_NAME, "version": APP_VERSION, "running": self.running,
+            "platform": "android" if IS_ANDROID else sys.platform,
+            "config": c, "matrix": matrix, "utc": time.time(),
+            "last_check": self.last_check, "next_check": self.next_check if self.running else 0,
+            "next_beacon": self.next_beacon if self.running else 0,
+            "spots": self.spot_count, "car_spots": self.car_count, "local": self.local,
+            "check_error": self.check_error, "tnc": tst,
+            "aprsis": None if not self.isc else {"connected": self.isc.connected,
+                                                  "verified": self.isc.verified, "error": self.isc.error},
+            "log": [e for e in list(self.log) if e["id"] > since],
+            "errors": validate(c),
+        }
+
+
+STATION = Station()
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = f"{APP_NAME}/{APP_VERSION}"
+
+    def log_message(self, *a):
+        pass
+
+    def _json(self, obj, code=200):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        if not n:
+            return {}
+        try:
+            return json.loads(self.rfile.read(n))
+        except ValueError:
+            return {}
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path in ("/", "/index.html"):
+            with open(os.path.join(HERE, "faceplate.html"), "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/api/state":
+            q = self.path.partition("since=")[2]
+            self._json(STATION.state(int(q) if q.isdigit() else 0))
+        elif path == "/api/devices":
+            audio, aerr = tncmod.list_audio_devices()
+            ports, perr = tncmod.list_serial_ports()
+            self._json({"audio": audio, "audio_error": aerr, "serial": ports, "serial_error": perr})
+        elif path == "/api/presets":
+            self._json(PRESETS)
+        else:
+            self._json({"error": "not found"}, 404)
+
+    def do_POST(self):
+        # Basic CSRF guard: browsers send Origin on cross-site POSTs
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host", "")
+        if origin and origin.split("://", 1)[-1] != host:
+            return self._json({"error": "cross-origin request refused"}, 403)
+        path = self.path.split("?")[0]
+        if path == "/api/config":
+            errs = STATION.update_config(self._body())
+            self._json({"ok": True, "errors": errs})
+        elif path == "/api/start":
+            errs = STATION.start()
+            self._json({"ok": not errs, "errors": errs})
+        elif path == "/api/stop":
+            STATION.stop()
+            self._json({"ok": True})
+        elif path in ("/api/beacon", "/api/test", "/api/check"):
+            if not STATION.running:
+                return self._json({"ok": False, "errors": ["Turn the station ON first."]})
+            if path == "/api/beacon":
+                STATION.send_beacon()
+            elif path == "/api/test":
+                STATION.send_test()
+            else:
+                wait = STATION.last_check + eng.MIN_QUERY_INTERVAL - time.time()
+                if wait > 0:
+                    return self._json({"ok": False, "errors": [
+                        f"PSKReporter allows one query every 5 minutes - try again in {int(wait)}s."]})
+                STATION.next_check = 0
+                STATION._wake.set()
+            self._json({"ok": True})
+        else:
+            self._json({"error": "not found"}, 404)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=f"{APP_NAME} face plate")
+    ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to allow other devices on your LAN")
+    ap.add_argument("--port", type=int, default=8073)
+    ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--autostart", action="store_true", help="turn the station on at launch")
+    ap.add_argument("--demo", metavar="XML", help="replay a saved PSKReporter XML file instead of querying live")
+    a = ap.parse_args()
+    STATION.demo_xml = a.demo
+    srv = ThreadingHTTPServer((a.host, a.port), Handler)
+    url = f"http://{'127.0.0.1' if a.host in ('0.0.0.0', '') else a.host}:{a.port}/"
+    print(f"{APP_NAME} {APP_VERSION} face plate at {url}")
+    if a.host not in ("127.0.0.1", "localhost"):
+        print("WARNING: anyone who can reach this port can key your transmitter. Use only on a trusted LAN.")
+    if a.autostart:
+        errs = STATION.start()
+        if errs:
+            print("Autostart failed:", "; ".join(errs))
+    if not a.no_browser:
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        STATION.stop()
+
+
+if __name__ == "__main__":
+    main()

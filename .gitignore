@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+build/
+dist/
+release/
+*.spec
+!android/buildozer.spec
+Tradewind-windows.zip
+.venv/
+android/src/
+android/.buildozer/
+android/bin/

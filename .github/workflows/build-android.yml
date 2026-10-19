@@ -1,0 +1,54 @@
+# Builds Tradewind.apk for Android phones.
+#  - Every push to main: download the .apk from the run's "Artifacts" section.
+#  - Publish a Release with a new tag (e.g. v1.0): the .apk is attached to it.
+#  - Actions tab -> "Build Android apk" -> "Run workflow" builds on demand.
+# Builds inside a ready-made Buildozer container, so no Android tools need
+# installing by hand. The first build takes 20-40 minutes.
+name: Build Android apk
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage app files
+        run: |
+          mkdir -p android_build/src
+          cp buildozer.spec android_build/
+          cp app.py afsk.py tnc.py vhf_prop_aprs.py faceplate.html icon.png android_build/src/
+          cp android_main.py android_build/src/main.py
+
+      - name: Build APK with Buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
+        with:
+          workdir: android_build
+          buildozer_version: stable
+          command: buildozer android debug
+
+      - name: Collect APK
+        run: |
+          APK=$(ls android_build/bin/*.apk 2>/dev/null | head -n 1)
+          [ -n "$APK" ] || APK="${{ steps.buildozer.outputs.filename }}"
+          cp "$APK" Tradewind.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tradewind-android
+          path: Tradewind.apk
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Tradewind.apk

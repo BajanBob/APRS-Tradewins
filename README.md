@@ -7,7 +7,7 @@ APRS-IS. It has its own AFSK 1200 sound modem, so a PC soundcard or a radio's
 built-in USB sound card works as the TNC. You don't need Direwolf or
 hardware, though both are supported.
 
-![Tradewind face plate](docs/faceplate.png)
+![Tradewind face plate](screenshot.png)
 
 ## Download
 
@@ -137,3 +137,11 @@ Save a PSKReporter response from `https://retrieve.pskreporter.info/query?frange
 Settings are stored in `~/.tradewind/config.json`.
 
 Transmitting requires an amateur licence. Use your own callsign.
+
+## Credits & licence
+
+Tradewind was created by **Brandon St Rose (8P5DG)** and **Kammie Holder (8P5AB)**, Barbados.
+
+It's released under the [MIT License](LICENSE). You're free to use, share and modify it, including
+in your own projects, as long as you keep the copyright notice and licence text. Spot data comes from
+[PSKReporter](https://pskreporter.info). Transmitting requires an amateur licence; use your own callsign.

@@ -111,6 +111,33 @@ Use **MENU → STATION → BCN** to send a beacon while you adjust the TX audio 
 - **Position beacon.** The centre of your grid square, every 30 minutes (optional).
 - **Optional RX iGate.** Packets heard on RF are gated to APRS-IS.
 
+## Propagation modes
+
+Tradewind labels every Caribbean opening with its likely mode and lets you choose which modes to watch,
+which ones switch RF on, and which ones sound an alert (MENU → PROPAGATION and MENU → RADIO / TNC).
+
+| Mode | Shown as | How it's recognised |
+|---|---|---|
+| **TEP** (trans-equatorial) | `TEP` | Path to South America that crosses the equator (far station south of 5° S) |
+| **Tropospheric ducting** | `DUCT` | 70cm, paths longer than 2,300 km, trans-Atlantic paths (Europe, Canaries, Madeira, Azores, Cape Verde), or outside Es season |
+| **Sporadic-E** | `Es` | 2m, 800–2,300 km, May–Aug and Dec–Jan, daytime and evening |
+
+Bulletins include the mode, e.g. `2m TEP OPEN CAR-LA 1 path best 9Y4ZZ>PY7AA 3641km FT8`.
+The labels are best guesses from path geometry, band and season; they can't measure the mode directly.
+
+## Weather bulletins (optional)
+
+Tradewind can send scheduled APRS weather bulletins (MENU → WEATHER). Defaults for Barbados:
+
+| Bulletin | Default times (local) | Sent as | Source |
+|---|---|---|---|
+| General forecast | 08:00 | `BLN1WX`… | Open-Meteo |
+| Marine (seas, swell, wind, small-craft caution) | 05:30, 12:00 | `BLN1MAR`… | Open-Meteo Marine |
+| Aviation: TBPB METAR + TAF, Piarco FIR (TTZP) SIGMETs | 06:30, 18:00 | `BLN1AVN`… | aviationweather.gov |
+
+These are automated, unofficial summaries. For official forecasts and warnings use the
+Barbados Meteorological Services. Grantley Adams (TBPB) lies within the Piarco FIR (TTZP).
+
 ## Tuning
 
 **Default rule:** a band counts as open when there are at least 2 distinct Caribbean paths of 800 km or more, or one path of 1500 km or more. Both thresholds are in **MENU → PROPAGATION**.

@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import tnc as tncmod
 import vhf_prop_aprs as eng
+import wx
 
 APP_NAME = "Tradewind"
 APP_VERSION = "1.0"
@@ -57,6 +58,13 @@ DEFAULTS = {
     "alert_sound": True, "alert_voice": True, "alert_modes": ["TEP", "TROPO", "ES"],
     "watch_modes": ["TEP", "TROPO", "ES"],
     "bands": ["2m", "70cm"], "regions": ["NA", "EU", "LA"], "local_km": 300,
+    # scheduled weather bulletins (times are local, Barbados = UTC-4, no DST)
+    "wx_enabled": False, "wx_rf": True, "wx_utc_offset": -4, "wx_place": "Barbados",
+    "wx_general": True, "wx_general_times": "08:00",
+    "wx_marine": True, "wx_marine_times": "05:30, 12:00",
+    "wx_aviation": True, "wx_aviation_times": "06:30, 18:00",
+    "wx_lat": 13.10, "wx_lon": -59.60, "wx_marine_lat": 13.10, "wx_marine_lon": -59.30,
+    "wx_icao": "TBPB", "wx_fir": "TTZP",
 }
 
 # Radio / interface presets. Fields override DEFAULTS when chosen in the UI.
@@ -64,6 +72,15 @@ PRESETS = [
     {"id": "generic_vox", "label": "Generic soundcard + VOX (SignaLink USB, Easy Digi)",
      "tnc": "sound", "ptt": "VOX",
      "note": "Turn the interface's VOX/delay knob low. Set TX audio so the radio deviates about 3 kHz."},
+    {"id": "signalink", "label": "Tigertronics SignaLink USB",
+     "tnc": "sound", "ptt": "VOX", "txdelay": 300,
+     "note": "Audio device: 'USB Audio CODEC'. The SignaLink keys the radio itself (VOX) - set its DLY knob to about 9 o'clock, TX knob low, and adjust until the radio deviates about 3 kHz. Use the radio jumper / cable for your model on the data or mic jack."},
+    {"id": "rtlsdr_audio", "label": "RTL-SDR dongle via SDR++ / SDR# (receive only)",
+     "tnc": "sound", "ptt": "VOX", "rf_announce": False,
+     "note": "Receive-only. Tune SDR++ or SDR# to the APRS frequency (144.390 MHz in North America - check which frequency your island uses) in narrow FM, 12.5 kHz bandwidth. Send its audio to a virtual audio cable (e.g. VB-Audio Cable) and pick 'CABLE Output' as Tradewind's audio input. Heard packets are shown and can be gated with RX iGate; nothing is transmitted on RF."},
+    {"id": "rtlsdr_direwolf", "label": "RTL-SDR dongle via rtl_fm + Direwolf (receive only)",
+     "tnc": "kiss_tcp", "kiss_addr": "127.0.0.1:8001", "rf_announce": False,
+     "note": "Receive-only. Run: rtl_fm -f 144.39M -s 24000 - | direwolf -r 24000 -D 1 -  (adjust the frequency for your area). Direwolf decodes and Tradewind connects to its KISS port 8001. Turn on RX iGate under MENU > APRS-IS to gate what the dongle hears."},
     {"id": "digirig", "label": "Digirig Mobile",
      "tnc": "sound", "ptt": "RTS",
      "note": "Audio device is 'USB PnP Sound Device'. PTT port is the Digirig's serial port (COMx / /dev/ttyUSBx)."},
@@ -196,6 +213,12 @@ def validate(cfg):
             int(str(cfg.get("civ_addr") or "7C"), 16)
         except ValueError:
             errs.append("CI-V address must be hex, e.g. 7C for the IC-9100.")
+    if cfg.get("wx_enabled"):
+        for k in ("wx_general_times", "wx_marine_times", "wx_aviation_times"):
+            try:
+                wx.parse_times(cfg.get(k))
+            except ValueError as e:
+                errs.append(f"Weather times must look like 05:30, 12:00 (problem: {e}).")
     if cfg.get("tnc") == "kiss_serial" and not cfg.get("kiss_serial"):
         errs.append("Choose the radio / TNC serial port.")
     return errs
@@ -223,6 +246,8 @@ class Station:
         self.ann_state = eng.load_state(STATE_PATH)
         self.demo_xml = None
         self.last_mode = {}
+        self.wx_done = set()          # "kind@HH:MM@YYYY-MM-DD" already sent
+        self.wx_last = {}             # kind -> (time, lines or error)
         self._stop = threading.Event()
         self._wake = threading.Event()
 
@@ -311,8 +336,70 @@ class Station:
             if self.next_beacon and now >= self.next_beacon:
                 self.send_beacon()
                 self.next_beacon = time.time() + max(10, self.cfg["beacon_min"]) * 60
+            if self.cfg.get("wx_enabled"):
+                self._wx_schedule(now)
             self._wake.wait(1.0)
             self._wake.clear()
+
+    # ---- scheduled weather bulletins
+    def _local(self, now):
+        return time.gmtime(now + float(self.cfg.get("wx_utc_offset", -4)) * 3600)
+
+    def wx_next(self, now=None):
+        """{kind: 'HH:MM'} of the next scheduled bulletin of each enabled kind."""
+        now = now or time.time()
+        lt = self._local(now)
+        cur = f"{lt.tm_hour:02d}:{lt.tm_min:02d}"
+        out = {}
+        for kind in ("general", "marine", "aviation"):
+            if not self.cfg.get(f"wx_{kind}"):
+                continue
+            try:
+                ts = sorted(wx.parse_times(self.cfg.get(f"wx_{kind}_times")))
+            except ValueError:
+                continue
+            if ts:
+                out[kind] = next((t for t in ts if t > cur), ts[0])
+        return out
+
+    def _wx_schedule(self, now):
+        lt = self._local(now)
+        today = time.strftime("%Y-%m-%d", lt)
+        mins_now = lt.tm_hour * 60 + lt.tm_min
+        for kind in ("general", "marine", "aviation"):
+            if not self.cfg.get(f"wx_{kind}"):
+                continue
+            try:
+                times = wx.parse_times(self.cfg.get(f"wx_{kind}_times"))
+            except ValueError:
+                continue
+            for t in times:
+                key = f"{kind}@{t}@{today}"
+                h, m = map(int, t.split(":"))
+                due = h * 60 + m
+                # send at the scheduled minute; allow 10 min grace (e.g. PC woke up),
+                # never send a backlog of old bulletins
+                if key not in self.wx_done and 0 <= mins_now - due <= 10:
+                    self.wx_done.add(key)
+                    threading.Thread(target=self.send_wx, args=(kind,), daemon=True).start()
+        if len(self.wx_done) > 200:
+            self.wx_done = {k for k in self.wx_done if k.endswith(today)}
+
+    def send_wx(self, kind):
+        c = self.cfg
+        try:
+            lines = wx.build(kind, c)
+        except Exception as e:
+            self.wx_last[kind] = (time.time(), f"error: {e}")
+            self.add_log("ERR", f"Weather ({kind}) not sent - could not get data: {e}")
+            return
+        self.wx_last[kind] = (time.time(), lines)
+        group = wx.GROUP[kind]
+        self.add_log("WX", f"{kind.capitalize()} weather bulletin ({len(lines)} line(s))")
+        for i, line in enumerate(lines[:wx.MAX_LINES], start=1):
+            addr = f"BLN{i}{group}"[:9].ljust(9)
+            self.transmit(f":{addr}:{line}", rf=bool(c.get("wx_rf")), force_rf=bool(c.get("wx_rf")))
+            time.sleep(2)
 
     def run_check(self):
         c = self.cfg
@@ -463,6 +550,8 @@ class Station:
             "next_beacon": self.next_beacon if self.running else 0,
             "spots": self.spot_count, "car_spots": self.car_count, "local": self.local,
             "check_error": self.check_error, "tnc": tst,
+            "wx": {"enabled": bool(c.get("wx_enabled")), "next": self.wx_next() if c.get("wx_enabled") else {},
+                   "last": {k: {"t": v[0], "lines": v[1]} for k, v in self.wx_last.items()}},
             "rf": ("OFF" if not (self.running and self.rf_possible()) else
                    "ON" if self.rf_live() else "STBY"),
             "aprsis": None if not self.isc else {"connected": self.isc.connected,
@@ -536,6 +625,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": not errs, "errors": errs})
         elif path == "/api/stop":
             STATION.stop()
+            self._json({"ok": True})
+        elif path == "/api/wx":
+            if not STATION.running:
+                return self._json({"ok": False, "errors": ["Turn the station ON first."]})
+            kind = self._body().get("kind")
+            if kind not in ("general", "marine", "aviation"):
+                return self._json({"ok": False, "errors": ["Unknown bulletin type."]})
+            threading.Thread(target=STATION.send_wx, args=(kind,), daemon=True).start()
             self._json({"ok": True})
         elif path in ("/api/beacon", "/api/test", "/api/check"):
             if not STATION.running:

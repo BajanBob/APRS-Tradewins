@@ -36,11 +36,12 @@ def crc16_x25(data: bytes) -> int:
 
 
 def _addr(call, last=False, command=False):
-    base, _, ssid = call.upper().partition("-")
+    c = call.upper()
+    hbit = c.endswith("*")          # 'has been digipeated' marker (WIDE1* or WIDE1-1*)
+    c = c.rstrip("*")
+    base, _, ssid = c.partition("-")
     ssid = int(ssid or 0) & 0x0F
-    hbit = base.endswith("*")
-    base = base.rstrip("*")
-    b = bytes((ord(c) << 1) for c in base.ljust(6)[:6])
+    b = bytes((ord(ch) << 1) for ch in base.ljust(6)[:6])
     sb = 0x60 | (ssid << 1) | (1 if last else 0)
     if command or hbit:
         sb |= 0x80

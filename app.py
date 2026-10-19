@@ -157,9 +157,16 @@ PRESETS = [
 
 
 def latlon_to_aprs(lat, lon):
-    la, lo = abs(lat), abs(lon)
-    lat_s = f"{int(la):02d}{(la - int(la)) * 60:05.2f}{'N' if lat >= 0 else 'S'}"
-    lon_s = f"{int(lo):03d}{(lo - int(lo)) * 60:05.2f}{'E' if lon >= 0 else 'W'}"
+    def _dm(v, nd, hemi):
+        v = abs(v)
+        deg = int(v)
+        mins = round((v - deg) * 60, 2)
+        if mins >= 60.0:      # e.g. 59.995 -> 60.00 rolls into the next degree
+            deg += 1
+            mins = 0.0
+        return f"{deg:0{nd}d}{mins:05.2f}{hemi}"
+    lat_s = _dm(lat, 2, 'N' if lat >= 0 else 'S')
+    lon_s = _dm(lon, 3, 'E' if lon >= 0 else 'W')
     return lat_s, lon_s
 
 
@@ -221,6 +228,8 @@ def validate(cfg):
         errs.append("Enter your own callsign (with optional -SSID, e.g. 8P6XX-10).")
     if not GRID_RE.match(cfg.get("grid", "").strip()):
         errs.append("Enter a 4 or 6 character Maidenhead grid square (e.g. GK03 or GK03fd).")
+    if cfg.get("passcode") and not str(cfg["passcode"]).strip().isdigit():
+        errs.append("APRS-IS passcode must be a number (leave blank to auto-compute).")
     if cfg.get("tnc") == "sound" and cfg.get("ptt") in ("RTS", "DTR", "CM108", "CIV", "YAESU_CAT") and not cfg.get("ptt_port"):
         errs.append("Choose the serial / HID port used for PTT.")
     if cfg.get("ptt") == "CIV" and cfg.get("tnc") == "sound":
@@ -296,7 +305,11 @@ class Station:
                 return [f"Could not start TNC: {e}"]
             if c.get("aprsis"):
                 pc = c.get("passcode") or eng.aprs_passcode(c["call"])
-                self.isc = tncmod.AprsIsClient(c["call"], int(pc), c.get("server") or "rotate.aprs2.net",
+                try:
+                    pc = int(pc)
+                except (TypeError, ValueError):
+                    pc = eng.aprs_passcode(c["call"])
+                self.isc = tncmod.AprsIsClient(c["call"], pc, c.get("server") or "rotate.aprs2.net",
                                                software=APP_NAME, version=APP_VERSION)
                 self.isc.start()
             self.running = True
@@ -675,7 +688,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _body(self):
-        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return {}
         if not n:
             return {}
         try:

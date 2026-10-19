@@ -34,7 +34,11 @@ WMO = {0: "Clear", 1: "Mostly clear", 2: "Partly cloudy", 3: "Cloudy",
        80: "Light showers", 81: "Showers", 82: "Heavy showers",
        95: "Thunderstorms", 96: "Thunderstorms, hail", 99: "Thunderstorms, hail"}
 
-GROUP = {"general": "WX", "marine": "MAR", "aviation": "AVN"}
+GROUP = {"general": "WX", "marine": "MAR", "aviation": "AVN", "tropical": "TC"}
+
+TC_CLASS = {"TD": "Tropical Depression", "STD": "Subtropical Depression", "TS": "Tropical Storm",
+            "STS": "Subtropical Storm", "HU": "Hurricane", "PTC": "Post-tropical Cyclone",
+            "PC": "Potential Tropical Cyclone", "TY": "Typhoon"}
 
 
 def compass(deg):
@@ -251,6 +255,104 @@ def build(kind, cfg):
             raise RuntimeError("; ".join(errs))
         return build_aviation(metar, taf, sig, icao, fir)
     raise ValueError(kind)
+
+
+# --------------------------------------------------------------------------
+# Tropical cyclones (National Hurricane Center)
+# --------------------------------------------------------------------------
+
+def fetch_storms():
+    data = json.loads(_get("https://www.nhc.noaa.gov/CurrentStorms.json") or "{}")
+    return data.get("activeStorms") or []
+
+
+def fetch_text(url):
+    return _get(url) if url else ""
+
+
+def _distance_bearing(lat1, lon1, lat2, lon2):
+    import math
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    km = 6371.0 * 2 * math.asin(math.sqrt(a))
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    brg = (math.degrees(math.atan2(y, x)) + 360) % 360
+    return km, brg
+
+
+def storm_position(st):
+    lat = st.get("latitudeNumeric", st.get("latitude_numeric"))
+    lon = st.get("longitudeNumeric", st.get("longitude_numeric"))
+    try:
+        return float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None
+
+
+def watches_for(advisory_text, place):
+    """Watch/warning types in an NHC public advisory that name `place`."""
+    import re
+    found, current = [], None
+    head = re.compile(r"(Hurricane|Tropical Storm|Storm Surge)\s+(Watch|Warning)", re.I)
+    for raw in advisory_text.splitlines():
+        line = raw.strip()
+        m = head.search(line)
+        if m and ("in effect" in line.lower() or line.lower().startswith("a ")):
+            current = f"{m.group(1).title()} {m.group(2).title()}"
+            continue
+        if not line:
+            continue
+        if current and line.startswith("*") and place.lower() in line.lower():
+            if current not in found:
+                found.append(current)
+        if line.upper().startswith(("DISCUSSION AND OUTLOOK", "HAZARDS AFFECTING LAND")):
+            current = None
+    return found
+
+
+def build_tropical(st, place, lat, lon, warnings=()):
+    pos = storm_position(st)
+    cls = (st.get("classification") or "").upper()
+    name = (st.get("name") or st.get("id") or "?").upper()
+    adv = (st.get("publicAdvisory") or {}).get("advNum") or "?"
+    spd = st.get("movementSpeed")
+    mov = f"mov {compass(st.get('movementDir'))} {spd}mph" if spd not in (None, "") else "stationary"
+    l1 = (f"{cls} {name} adv {adv}: {st.get('latitude', '?')} {st.get('longitude', '?')} "
+          f"{_n(st.get('intensity'))}kt {_n(st.get('pressure'))}mb {mov}")
+    lines = wrap(l1)
+    if pos:
+        km, brg = _distance_bearing(lat, lon, pos[0], pos[1])
+        lines += wrap(f"{TC_CLASS.get(cls, cls)} {name} is {km:.0f}km {compass(brg)} of {place}")
+    for w in warnings:
+        lines += wrap(f"{w.upper()} IN EFFECT FOR {place.upper()}")
+    lines += wrap("Info nhc.noaa.gov. Follow BMS and DEM official advice.")
+    return lines[:MAX_LINES]
+
+
+def tropical_alerts(cfg, storms=None, text_fetch=None):
+    """[(key, lines)] for Atlantic systems within cfg['tc_radius_km'] of the place,
+    or whose advisory puts the place under a watch/warning."""
+    storms = fetch_storms() if storms is None else storms
+    text_fetch = text_fetch or fetch_text
+    lat, lon, place = float(cfg["wx_lat"]), float(cfg["wx_lon"]), cfg["wx_place"]
+    out = []
+    for st in storms:
+        if not str(st.get("id", "")).lower().startswith("al"):
+            continue
+        pos = storm_position(st)
+        km = _distance_bearing(lat, lon, pos[0], pos[1])[0] if pos else 1e9
+        adv = (st.get("publicAdvisory") or {})
+        warns = []
+        try:
+            warns = watches_for(text_fetch(adv.get("url")), place) if adv.get("url") else []
+        except Exception:
+            pass
+        if km <= float(cfg.get("tc_radius_km", 1500)) or warns:
+            key = f"{st.get('id')}#{adv.get('advNum') or st.get('lastUpdate')}"
+            out.append((key, build_tropical(st, place, lat, lon, warns)))
+    return out
 
 
 def parse_times(s):

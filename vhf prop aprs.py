@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Tradewind - Copyright (c) 2026 Brandon St Rose (8P5DG) and Kammie Holder (8P5AB)
+# Released under the MIT License - see LICENSE
 """
 vhf_prop_aprs.py - Caribbean VHF/UHF propagation announcer for APRS
 
@@ -86,6 +88,11 @@ LATAM_DXCC = {
 }
 
 
+# East-Atlantic islands where Caribbean trans-Atlantic duct signals land:
+# Canary Is., Madeira, Azores, Cape Verde - counted as "Europe" paths.
+EU_ATLANTIC_DXCC = {"EA8", "CT3", "CU", "D4"}
+
+
 def grid_to_latlon(grid):
     """Maidenhead locator (4/6/8 chars) -> (lat, lon) of square centre."""
     if not grid or len(grid) < 4:
@@ -162,6 +169,8 @@ def classify(call, grid, dxcc_code):
     pos = grid_to_latlon(grid)
     if code in LATAM_DXCC:
         return "LA"
+    if code in EU_ATLANTIC_DXCC:
+        return "EU"
     if pos:
         r = region_from_latlon(*pos)
         # Don't let a grid box label a non-Caribbean DXCC as Caribbean
@@ -169,6 +178,41 @@ def classify(call, grid, dxcc_code):
             return "NA" if code == "K" else "LA"
         return r
     return None
+
+
+# --------------------------------------------------------------------------
+# Propagation mode classification
+# --------------------------------------------------------------------------
+
+MODES = ("TEP", "TROPO", "ES")
+MODE_NAMES = {"TEP": "TEP", "TROPO": "Tropo duct", "ES": "Sporadic-E"}
+MODE_SHORT = {"TEP": "TEP", "TROPO": "DUCT", "ES": "Es"}
+CARIBBEAN_UTC_OFFSET = -4
+
+
+def classify_mode(s):
+    """Best guess at the propagation mode of one Caribbean spot.
+
+    TEP   - path crosses the geomagnetic equator (far station in South
+            America south of ~5 deg S).
+    TROPO - 70cm (Es is almost never seen there), paths longer than single-hop
+            2m sporadic-E (~2300 km), trans-Atlantic paths, or out of Es season.
+    ES    - 2m, 800-2300 km, during the Caribbean Es season (May-Aug, Dec-Jan)
+            in daytime / evening hours.
+    """
+    car_is_tx = s.tx_region == "CAR"
+    far_grid = s.rx_grid if car_is_tx else s.tx_grid
+    far_region = s.rx_region if car_is_tx else s.tx_region
+    pos = grid_to_latlon(far_grid)
+    if far_region == "LA" and pos and pos[0] < -5:
+        return "TEP"
+    if s.band != "2m" or s.km > 2300 or far_region == "EU":
+        return "TROPO"
+    t = time.gmtime(s.ts or time.time())
+    local_hour = (t.tm_hour + CARIBBEAN_UTC_OFFSET) % 24
+    if t.tm_mon in (5, 6, 7, 8, 12, 1) and 8 <= local_hour <= 22:
+        return "ES"
+    return "TROPO"
 
 
 # --------------------------------------------------------------------------
@@ -189,6 +233,7 @@ class Spot:
     tx_region: str = ""
     rx_region: str = ""
     km: float = 0.0
+    prop_mode: str = ""
 
 
 def fetch_pskreporter(window_s, contact, timeout=60):
@@ -247,6 +292,8 @@ def parse_spots(xml_bytes):
         s.tx_region = classify(s.tx, tx_grid, a.get("senderDXCCCode")) or ""
         s.rx_region = classify(s.rx, rx_grid, a.get("receiverDXCCCode")) or ""
         s.km = haversine_km(p1, p2)
+        if "CAR" in (s.tx_region, s.rx_region):
+            s.prop_mode = classify_mode(s)
         spots.append(s)
     return spots
 
@@ -267,11 +314,18 @@ class Opening:
     def score(self):
         return len(self.paths)
 
+    @property
+    def mode(self):
+        return self.best.prop_mode if self.best else ""
 
-def detect(spots, min_km, min_paths, strong_km):
-    """Group Caribbean<->target-region spots into openings per (band, region)."""
+
+def detect(spots, min_km, min_paths, strong_km, modes=None):
+    """Group Caribbean<->target-region spots into openings per (band, region).
+    modes: optional set of propagation modes to keep (TEP / TROPO / ES)."""
     ops = {}
     for s in spots:
+        if modes is not None and s.prop_mode not in modes:
+            continue
         regions = {s.tx_region, s.rx_region}
         if "CAR" not in regions or s.km < min_km:
             continue
@@ -295,10 +349,12 @@ def detect(spots, min_km, min_paths, strong_km):
 def bulletin_text(op):
     b = op.best
     n = op.score
-    txt = (f"{op.band} OPEN CAR-{op.region} {n} path{'s' if n != 1 else ''} "
+    m = MODE_SHORT.get(op.mode, "")
+    head = f"{op.band} {m} OPEN CAR-{op.region}".replace("  ", " ")
+    txt = (f"{head} {n} path{'s' if n != 1 else ''} "
            f"best {b.tx}>{b.rx} {int(round(b.km))}km {b.mode}")
     if len(txt) > 67:  # APRS message text limit
-        txt = f"{op.band} OPEN CAR-{op.region} {n}p {b.tx}>{b.rx} {int(round(b.km))}km"
+        txt = f"{head} {n}p {b.tx}>{b.rx} {int(round(b.km))}km"
     return txt[:67]
 
 

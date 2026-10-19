@@ -35,6 +35,8 @@ HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 CONF_DIR = os.path.expanduser("~/.tradewind")
 CONF_PATH = os.path.join(CONF_DIR, "config.json")
 STATE_PATH = os.path.join(CONF_DIR, "announce_state.json")
+HISTORY_PATH = os.path.join(CONF_DIR, "opening_history.json")
+HISTORY_KEEP_S = 48 * 3600
 
 IS_ANDROID = "ANDROID_ARGUMENT" in os.environ or hasattr(sys, "getandroidapilevel")
 
@@ -65,6 +67,8 @@ DEFAULTS = {
     "wx_aviation": True, "wx_aviation_times": "06:30, 18:00",
     "wx_lat": 13.10, "wx_lon": -59.60, "wx_marine_lat": 13.10, "wx_marine_lon": -59.30,
     "wx_icao": "TBPB", "wx_fir": "TTZP",
+    # tropical cyclone alerts from the National Hurricane Center
+    "tc_enabled": True, "tc_radius_km": 1500, "tc_rf": True,
 }
 
 # Radio / interface presets. Fields override DEFAULTS when chosen in the UI.
@@ -246,8 +250,13 @@ class Station:
         self.ann_state = eng.load_state(STATE_PATH)
         self.demo_xml = None
         self.last_mode = {}
+        self.history = self._load_history()   # list of opening events
         self.wx_done = set()          # "kind@HH:MM@YYYY-MM-DD" already sent
         self.wx_last = {}             # kind -> (time, lines or error)
+        self.tc_sent = set()          # "stormid#advisory" already announced
+        self.tc_next = 0
+        self.tc_alerts = []           # latest alerts for the face plate
+        self.tc_seq = 0
         self._stop = threading.Event()
         self._wake = threading.Event()
 
@@ -338,8 +347,58 @@ class Station:
                 self.next_beacon = time.time() + max(10, self.cfg["beacon_min"]) * 60
             if self.cfg.get("wx_enabled"):
                 self._wx_schedule(now)
+            if self.cfg.get("tc_enabled") and now >= self.tc_next:
+                self.tc_next = now + 20 * 60
+                threading.Thread(target=self.check_tropical, daemon=True).start()
             self._wake.wait(1.0)
             self._wake.clear()
+
+    # ---- opening history (for "while you were away")
+    def _load_history(self):
+        try:
+            with open(HISTORY_PATH) as f:
+                h = json.load(f)
+            cutoff = time.time() - HISTORY_KEEP_S
+            return [e for e in h if (e.get("end") or e.get("last") or 0) >= cutoff]
+        except (OSError, ValueError):
+            return []
+
+    def _save_history(self):
+        try:
+            os.makedirs(CONF_DIR, exist_ok=True)
+            tmp = HISTORY_PATH + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.history, f)
+            os.replace(tmp, HISTORY_PATH)
+        except OSError:
+            pass
+
+    def _record_history(self, ops):
+        now = time.time()
+        active = {(e["band"], e["region"]): e for e in self.history if not e.get("end")}
+        for (band, region), op in ops.items():
+            b = op.best
+            e = active.get((band, region))
+            if e is None:
+                e = {"id": f"{band}-{region}-{int(now)}", "band": band, "region": region,
+                     "start": now, "end": None, "mode": op.mode, "paths": 0, "km": 0}
+                self.history.append(e)
+            e["last"] = now
+            e["mode"] = op.mode or e.get("mode")
+            if op.score >= e.get("paths", 0):
+                e["paths"] = op.score
+            if b and round(b.km) >= e.get("km", 0):
+                e.update(km=round(b.km), tx=b.tx, rx=b.rx, dmode=b.mode)
+        for key, e in active.items():
+            if key not in ops:
+                e["end"] = e.get("last", now)
+        cutoff = now - HISTORY_KEEP_S
+        self.history = [e for e in self.history if (e.get("end") or now) >= cutoff]
+        self._save_history()
+
+    def recent_history(self, hours=6):
+        cutoff = time.time() - hours * 3600
+        return [e for e in self.history if (e.get("end") or time.time()) >= cutoff]
 
     # ---- scheduled weather bulletins
     def _local(self, now):
@@ -401,6 +460,29 @@ class Station:
             self.transmit(f":{addr}:{line}", rf=bool(c.get("wx_rf")), force_rf=bool(c.get("wx_rf")))
             time.sleep(2)
 
+    def check_tropical(self, force=False):
+        c = self.cfg
+        try:
+            alerts = wx.tropical_alerts(c)
+        except Exception as e:
+            self.add_log("ERR", f"Tropical check failed: {e}")
+            return
+        if not alerts:
+            if force:
+                self.add_log("WX", f"No active Atlantic tropical systems within {c.get('tc_radius_km')} km of {c['wx_place']}")
+            self.tc_alerts = []
+            return
+        self.tc_alerts = [lines for _k, lines in alerts]
+        for key, lines in alerts:
+            if key in self.tc_sent and not force:
+                continue
+            self.tc_sent.add(key)
+            self.tc_seq += 1
+            self.add_log("WX", "TROPICAL ALERT: " + " / ".join(lines[:2]))
+            for i, line in enumerate(lines, start=1):
+                self.transmit(f":{f'BLN{i}TC'.ljust(9)}:{line}", rf=bool(c.get("tc_rf")), force_rf=bool(c.get("tc_rf")))
+                time.sleep(2)
+
     def run_check(self):
         c = self.cfg
         try:
@@ -435,6 +517,7 @@ class Station:
         ops = {k: v for k, v in ops.items() if k[1] in c["regions"]}
         self.openings = ops
         self._update_rf_state()
+        self._record_history(ops)
         self.add_log("PROP", f"{len(spots)} spots, {self.car_count} Caribbean, "
                              f"{len(ops)} opening(s)" + (": " + ", ".join(f"{b} CAR-{r} {eng.MODE_NAMES.get(o.mode, '')}" for (b, r), o in sorted(ops.items())) if ops else ""))
         for k, o in ops.items():
@@ -550,6 +633,7 @@ class Station:
             "next_beacon": self.next_beacon if self.running else 0,
             "spots": self.spot_count, "car_spots": self.car_count, "local": self.local,
             "check_error": self.check_error, "tnc": tst,
+            "tc": {"enabled": bool(c.get("tc_enabled")), "seq": self.tc_seq, "alerts": self.tc_alerts},
             "wx": {"enabled": bool(c.get("wx_enabled")), "next": self.wx_next() if c.get("wx_enabled") else {},
                    "last": {k: {"t": v[0], "lines": v[1]} for k, v in self.wx_last.items()}},
             "rf": ("OFF" if not (self.running and self.rf_possible()) else
@@ -605,6 +689,10 @@ class Handler(BaseHTTPRequestHandler):
             audio, aerr = tncmod.list_audio_devices()
             ports, perr = tncmod.list_serial_ports()
             self._json({"audio": audio, "audio_error": aerr, "serial": ports, "serial_error": perr})
+        elif path == "/api/history":
+            q = self.path.partition("hours=")[2]
+            hours = float(q) if q.replace(".", "", 1).isdigit() else 6
+            self._json({"now": time.time(), "events": STATION.recent_history(min(hours, 48))})
         elif path == "/api/presets":
             self._json(PRESETS)
         else:
@@ -630,6 +718,9 @@ class Handler(BaseHTTPRequestHandler):
             if not STATION.running:
                 return self._json({"ok": False, "errors": ["Turn the station ON first."]})
             kind = self._body().get("kind")
+            if kind == "tropical":
+                threading.Thread(target=STATION.check_tropical, kwargs={"force": True}, daemon=True).start()
+                return self._json({"ok": True})
             if kind not in ("general", "marine", "aviation"):
                 return self._json({"ok": False, "errors": ["Unknown bulletin type."]})
             threading.Thread(target=STATION.send_wx, args=(kind,), daemon=True).start()

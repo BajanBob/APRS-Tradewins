@@ -82,6 +82,10 @@ body{min-height:100vh;padding:24px 16px 48px;
 .meter{display:inline-flex;gap:2px;vertical-align:middle;margin-left:4px}
 .meter i{width:5px;height:10px;background:var(--lcd-ghost)}
 .meter i.on{background:var(--lcd-glow);box-shadow:0 0 4px var(--lcd-glow)}
+.sound-btn{position:relative;z-index:2;margin-top:8px;width:100%;font-family:var(--mono);font-size:14px;letter-spacing:.06em;
+  color:#1a1307;background:var(--lcd-glow);border:none;border-radius:4px;padding:8px 10px;cursor:pointer;animation:blink 1.4s ease-in-out infinite}
+.sound-btn.hide{display:none}
+@keyframes blink{50%{opacity:.55}}
 .lcd-msg{font-size:13px;margin-top:6px;min-height:16px;color:var(--lcd-glow)}
 
 /* ---------- controls ---------- */
@@ -155,6 +159,15 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
 .mon div{white-space:pre-wrap;word-break:break-all;line-height:1.45}
 .mon .t{color:var(--mon-dim)}
 .mon .k-TX{color:#ffd27a}.mon .k-ERR{color:#ff7b70}.mon .k-PROP{color:#7fd8ff}.mon .k-SYS{color:#b9c2cb}.mon .k-IGT{color:#c7a6ff}.mon .k-WX{color:#8ef0e0}
+.missed{margin-top:18px;border-radius:10px;border:1px solid #6b4a12;background:linear-gradient(180deg,#2a1d08,#1c1407);
+  padding:14px 16px;box-shadow:0 0 0 1px rgba(255,181,71,.15) inset}
+.missed.hide{display:none}
+.missed-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}
+.missed-head b{font-family:var(--label);letter-spacing:.2em;color:var(--lcd-glow);font-size:15px}
+.missed-head .btn{padding:7px 12px 6px;font-size:12px}
+#missed-list div{font-family:var(--mono);font-size:13px;color:#f3d29a;padding:4px 0;border-top:1px dashed #4a3510;line-height:1.45}
+#missed-list div:first-child{border-top:none}
+#missed-list .live{color:var(--lcd-glow)}
 .foot{margin-top:16px;font-size:13px;color:#5d656e;text-align:center;letter-spacing:.08em}
 
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(120%);max-width:min(560px,92vw);
@@ -218,6 +231,7 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
             <span id="l-wxwrap" class="hide">WX <b id="l-wx">--:--</b></span>
           </div>
           <div class="lcd-msg" id="l-msg"></div>
+          <button class="sound-btn" id="b-enable-sound" type="button" title="Browsers block sound until you click the page">&#128263; CLICK HERE TO ENABLE SOUND ALERTS</button>
         </div>
       </div>
 
@@ -375,11 +389,15 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
         <input class="inset" data-k="wx_marine_lat" data-num type="number" step="0.01"><input class="inset" data-k="wx_marine_lon" data-num type="number" step="0.01"></div></div>
       <div class="set"><label>Aerodrome (ICAO)</label><input class="inset" data-k="wx_icao" maxlength="4"></div>
       <div class="set"><label>FIR for SIGMETs</label><input class="inset" data-k="wx_fir" maxlength="4"></div>
-      <div class="set wide"><label>Send now</label><div class="btns" style="grid-template-columns:repeat(3,1fr)">
+      <div class="set wide"><label class="chk"><input type="checkbox" data-k="tc_enabled"> Tropical cyclone alerts (National Hurricane Center, checked every 20 min)</label></div>
+      <div class="set"><label>Alert radius (km)</label><input class="inset" data-k="tc_radius_km" data-num type="number" min="200" max="4000" step="100"></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="tc_rf"> Also send storm alerts on RF</label></div>
+      <div class="set wide"><label>Send now</label><div class="btns" style="grid-template-columns:repeat(4,1fr)">
         <button class="btn" type="button" data-wx="general">GENERAL</button>
         <button class="btn" type="button" data-wx="marine">MARINE</button>
-        <button class="btn" type="button" data-wx="aviation">AVIATION</button></div></div>
-      <div class="set wide note">Bulletins go out as <b>BLNnWX</b> (general), <b>BLNnMAR</b> (marine) and <b>BLNnAVN</b> (aviation).
+        <button class="btn" type="button" data-wx="aviation">AVIATION</button>
+        <button class="btn" type="button" data-wx="tropical">STORMS</button></div></div>
+      <div class="set wide note">Bulletins go out as <b>BLNnWX</b> (general), <b>BLNnMAR</b> (marine), <b>BLNnAVN</b> (aviation) and <b>BLNnTC</b> (tropical cyclone, sent with each new NHC advisory while a storm is within the radius or Barbados is under a watch/warning).
         Data: Open-Meteo forecasts and aviationweather.gov METAR/TAF/SIGMET. These are automated, unofficial summaries &ndash;
         for official forecasts and warnings use the Barbados Meteorological Services. Grantley Adams (TBPB) lies in the Piarco FIR (TTZP).</div>
       <div class="set wide note" id="wx-last"></div>
@@ -389,6 +407,12 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
       <button class="btn" id="b-close">CLOSE</button>
       <button class="btn accent" id="b-save">SAVE</button>
     </div>
+  </section>
+
+  <section class="missed hide" id="missed" aria-live="polite">
+    <div class="missed-head"><b id="missed-title">WHILE YOU WERE AWAY</b>
+      <button class="btn" type="button" id="b-missed-ok">DISMISS</button></div>
+    <div id="missed-list"></div>
   </section>
 
   <section class="mon-wrap">
@@ -405,8 +429,8 @@ const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAl
 const REG = {NA:'N.AMER', EU:'EUROPE', LA:'LAT.AM'};
 let cfg = {}, presets = [], logSince = 0, running = false, dirty = false, lastState = null;
 
-function toast(msg, ok){ const t=$('#toast'); t.textContent=msg; t.className='toast show'+(ok?' ok':'');
-  clearTimeout(t._h); t._h=setTimeout(()=>t.className='toast'+(ok?' ok':''), 4200); }
+function toast(msg, ok, ms){ const t=$('#toast'); t.textContent=msg; t.className='toast show'+(ok?' ok':'');
+  clearTimeout(t._h); t._h=setTimeout(()=>t.className='toast'+(ok?' ok':''), ms||4200); }
 async function api(path, body){
   const r = await fetch(path, body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   return r.json();
@@ -533,6 +557,14 @@ async function poll(){
   ['#b-bcn','#b-test','#b-chk'].forEach(b=>$(b).disabled = !running);
   drawMatrix(s.matrix);
   if (running) alertOpenings(s.matrix); else prevOpen = null;
+  if (s.tc){
+    if (prevTc !== null && s.tc.seq > prevTc && s.tc.alerts.length){
+      const first = s.tc.alerts[0];
+      toast('🌀 ' + first.slice(0,3).join(' / '), false, 20000);
+      playAlert('Tropical cyclone alert. ' + (first[1]||first[0]), 'tc');
+    }
+    prevTc = s.tc.seq;
+  }
   const now = Date.now()/1000, t = s.tnc;
   $('#l-tnc').textContent = !running ? 'OFF' : (t ? (t.kind==='Sound modem'?'SOUND':t.kind==='APRS-IS only'?'NONE':t.kind.toUpperCase()) : '---');
   const lvl = t && t.audio_level ? Math.min(8, Math.round(Math.sqrt(t.audio_level)*16)) : 0;
@@ -579,10 +611,21 @@ function androidMode(){
   $('#dev-note').textContent = 'Android: alerts go out over APRS-IS, or to a networked TNC such as Direwolf or UZ7HO via KISS TCP. Radios connected by USB or audio need the Windows/PC version.';
 }
 /* ---------- audio alert ---------- */
-let audioCtx = null, prevOpen = null;
+let audioCtx = null, prevOpen = null, prevTc = null;
+let soundReady = false, pendingAlert = null;
 function unlockAudio(){
   try { if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
         if (audioCtx.state === 'suspended') audioCtx.resume(); } catch(e){}
+  try { if ('speechSynthesis' in window && window.SpeechSynthesisUtterance){      // prime speech with a silent utterance
+          const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } } catch(e){}
+  soundReady = true;
+  const b = document.getElementById('b-enable-sound'); if (b) b.classList.add('hide');
+  if (pendingAlert){ const a = pendingAlert; pendingAlert = null; setTimeout(()=>playAlert(a.msg, a.kind), 300); }
+}
+function playAlert(msg, kind){
+  if (!soundReady){ pendingAlert = {msg, kind}; return; }          // played as soon as sound is enabled
+  if (cfg.alert_sound !== false){ chime(); if (kind==='tc') setTimeout(chime, 700); }
+  if (cfg.alert_voice !== false) setTimeout(()=>say(msg), kind==='tc' ? 1500 : 900);
 }
 function chime(){
   if (!audioCtx) return;
@@ -601,20 +644,55 @@ function say(text){
 }
 function alertOpenings(cells){
   const nowOpen = new Set(cells.filter(c=>c.open).map(c=>c.band+':'+c.region));
-  if (prevOpen === null){ prevOpen = nowOpen; return; }          // don't alert on page load
+  if (prevOpen === null) prevOpen = new Set();      // page just opened: announce what's already open, once
   const fresh = cells.filter(c=>c.open && !prevOpen.has(c.band+':'+c.region))
                      .filter(c=>(cfg.alert_modes||['TEP','TROPO','ES']).includes(c.prop_mode));
   prevOpen = nowOpen;
   if (!fresh.length) return;
-  if (cfg.alert_sound !== false) chime();
   const MODE_SPOKEN = {TEP:'T E P', TROPO:'tropo duct', ES:'sporadic E'};
   const msg = fresh.map(c=>`${c.band==='2m'?'Two metre':'Seventy centimetre'} ${MODE_SPOKEN[c.prop_mode]||''} open to ${SPOKEN[c.region]}`.replace(/  +/g,' ')).join('. ');
-  toast('🔔 ' + msg, true);
-  if (cfg.alert_voice !== false) setTimeout(()=>say(msg), 900);
+  toast('🔔 ' + msg, true, 10000);
+  playAlert(msg, 'open');
   try { if (document.hidden && 'Notification' in window && Notification.permission==='granted')
           new Notification('Tradewind', {body: msg}); } catch(e){}
 }
 document.addEventListener('click', unlockAudio);   // browsers only allow sound after a click
+document.addEventListener('keydown', unlockAudio);
+$('#b-enable-sound').onclick = ()=>{ unlockAudio(); chime(); toast('Sound alerts enabled', true); };
+
+/* ---------- missed openings (last 6 h) ---------- */
+const LS_SEEN = 'tw_last_seen';
+function lsGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+function lsSet(k,v){ try { localStorage.setItem(k, v); } catch(e){} }
+let missedShownFor = null, awaySince = null;
+const fmtLocal = t => { const d = new Date(t*1000); return pad(d.getHours())+':'+pad(d.getMinutes()); };
+async function checkMissed(reason){
+  const lastSeen = parseFloat(lsGet(LS_SEEN) || '0');
+  let h; try { h = await api('/api/history?hours=6'); } catch(e){ return; }
+  const MODE = {TEP:'TEP', TROPO:'DUCT', ES:'Es'};
+  const ev = (h.events||[]).filter(e => !lastSeen || (e.end || h.now) > lastSeen)
+                           .filter(e => !lastSeen || e.start > lastSeen || (e.end && e.end > lastSeen))
+                           .sort((a,b)=>a.start-b.start);
+  if (!ev.length) return;
+  const sig = ev.map(e=>e.id+':'+(e.end||'')).join('|');
+  if (sig === missedShownFor) return;
+  missedShownFor = sig;
+  $('#missed-title').textContent = lastSeen ? `WHILE YOU WERE AWAY – ${ev.length} OPENING${ev.length>1?'S':''} (LAST 6 H)` : `OPENINGS IN THE LAST 6 HOURS (${ev.length})`;
+  $('#missed-list').innerHTML = ev.map(e=>{
+    const when = e.end ? `${fmtLocal(e.start)}–${fmtLocal(e.end)}` : `since ${fmtLocal(e.start)} (STILL OPEN)`;
+    const best = e.tx ? ` · best ${e.tx}&gt;${e.rx} ${e.km}km${e.dmode?' '+e.dmode:''}` : '';
+    return `<div class="${e.end?'':'live'}">${e.band.toUpperCase()} ${MODE[e.mode]||''} CAR–${({NA:'N.AMER',EU:'EUROPE',LA:'LAT.AM'})[e.region]||e.region} · ${when} · ${e.paths} path${e.paths==1?'':'s'}${best}</div>`;
+  }).join('');
+  $('#missed').classList.remove('hide');
+  const ended = ev.filter(e=>e.end).length;
+  if (lastSeen && ended && cfg.alert_voice !== false)
+    playAlert(`You missed ${ended} opening${ended>1?'s':''} in the last six hours.`, 'missed');
+}
+function markSeen(){ if (document.visibilityState === 'visible') lsSet(LS_SEEN, String(Date.now()/1000)); }
+document.addEventListener('visibilitychange', ()=>{
+  if (document.visibilityState === 'visible') checkMissed('return').then(markSeen);
+});
+$('#b-missed-ok').onclick = ()=>{ $('#missed').classList.add('hide'); markSeen(); };
 
 function tick(){ $('#l-clock').textContent = hms(new Date()); }
 
@@ -622,7 +700,7 @@ function tick(){ $('#l-clock').textContent = hms(new Date()); }
 $$('[data-wx]').forEach(b=>b.onclick = async ()=>{
   if (dirty) await save();
   const r = await api('/api/wx', {kind: b.dataset.wx});
-  r.errors && r.errors.length ? toast(r.errors[0]) : toast(b.dataset.wx[0].toUpperCase()+b.dataset.wx.slice(1)+' weather bulletin being prepared...', true);
+  r.errors && r.errors.length ? toast(r.errors[0]) : toast(b.dataset.wx==='tropical' ? 'Checking the National Hurricane Center...' : b.dataset.wx[0].toUpperCase()+b.dataset.wx.slice(1)+' weather bulletin being prepared...', true);
 });
 $('#b-sound').onclick = ()=>{ unlockAudio(); chime();
   setTimeout(()=>say('Two metre T E P open to Latin America'), 900);
@@ -654,6 +732,8 @@ $('#f-grid').addEventListener('blur', e=>{ const v=e.target.value.trim(); e.targ
   $('#f-preset').innerHTML = presets.map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
   await poll(); dirty=false; $('#b-save-top').textContent='SAVE';
   tick(); setInterval(tick, 1000); setInterval(poll, 1500);
+  await checkMissed('load');
+  setInterval(markSeen, 30000);
 })();
 </script>
 </body>

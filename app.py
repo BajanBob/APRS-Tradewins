@@ -32,7 +32,18 @@ APP_NAME = "Tradewind"
 APP_VERSION = "1.0"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-CONF_DIR = os.path.expanduser("~/.tradewind")
+def _conf_dir():
+    # Android (python-for-android) has no normal home folder: use the app's private storage
+    for var in ("TRADEWIND_HOME", "ANDROID_PRIVATE", "ANDROID_APP_PATH"):
+        if os.environ.get(var):
+            return os.path.join(os.environ[var], ".tradewind")
+    home = os.path.expanduser("~")
+    if home in ("~", "/", "") or not os.access(home, os.W_OK):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), ".tradewind")
+    return os.path.join(home, ".tradewind")
+
+
+CONF_DIR = _conf_dir()
 CONF_PATH = os.path.join(CONF_DIR, "config.json")
 STATE_PATH = os.path.join(CONF_DIR, "announce_state.json")
 HISTORY_PATH = os.path.join(CONF_DIR, "opening_history.json")

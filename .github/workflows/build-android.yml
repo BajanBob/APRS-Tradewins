@@ -1,0 +1,75 @@
+# Builds Tradewind.apk for Android phones.
+#  - Every push to main: download the .apk from the run's "Artifacts" section.
+#  - Publish a Release with a new tag (e.g. v1.0): the .apk is attached to it.
+#  - Actions tab -> "Build Android apk" -> "Run workflow" builds on demand.
+# Builds inside the official Kivy Buildozer container (ghcr.io/kivy/buildozer),
+# which already contains the Android SDK/NDK tooling. First build: 20-40 min.
+name: Build Android apk
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage app files
+        run: |
+          mkdir -p android_build/src
+          cp buildozer.spec android_build/
+          cp app.py afsk.py tnc.py vhf_prop_aprs.py wx.py faceplate.html icon.png android_build/src/
+          cp android_main.py android_build/src/main.py
+          # the container runs as a different user; let it write here
+          chmod -R a+rwX android_build
+
+      - name: Build APK in the official Buildozer container
+        run: |
+          set -o pipefail
+          docker run --rm \
+            --volume "$PWD/android_build":/home/user/hostcwd \
+            ghcr.io/kivy/buildozer:latest android debug 2>&1 | tee build.log
+
+      # If the build fails, publish the important log lines as public
+      # annotations (visible on the run page without signing in).
+      - name: Show build errors
+        if: failure()
+        run: |
+          [ -f build.log ] || { echo "::error title=No build log::The build step produced no log"; exit 0; }
+          enc() { sed -e 's/%/%25/g' -e 's/\r//g' | awk '{printf "%s%%0A", $0}'; }
+          ERR=$(grep -inE "error|exception|failed|not found|no such|denied|traceback" build.log | grep -viE "warning|werror|-error" | tail -n 30 | cut -c1-300 | enc)
+          TAIL=$(tail -n 40 build.log | cut -c1-300 | enc)
+          echo "::error title=Build errors (matching lines)::${ERR}"
+          echo "::error title=Build log (last 40 lines)::${TAIL}"
+
+      - name: Keep the full build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-log
+          path: build.log
+          if-no-files-found: ignore
+
+      - name: Collect APK
+        run: |
+          APK=$(ls android_build/bin/*.apk | head -n 1)
+          echo "Built: $APK"
+          cp "$APK" Tradewind.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tradewind-android
+          path: Tradewind.apk
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Tradewind.apk

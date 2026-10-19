@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Tradewind - Copyright (c) 2026 Brandon St Rose (8P5DG) and Kammie Holder (8P5AB)
+# Released under the MIT License - see LICENSE
 """
 Tradewind - Caribbean VHF/UHF propagation beacon, APRS client and soundcard TNC.
 
@@ -48,10 +50,12 @@ DEFAULTS = {
     "cat_baud": 9600, "civ_addr": "7C",
     "txdelay": 300, "txtail": 50, "tx_level": 0.5,
     "kiss_addr": "127.0.0.1:8001", "kiss_serial": "", "kiss_baud": 9600,
-    "rf_announce": True, "rf_path": "WIDE2-1",
+    "rf_announce": True, "rf_path": "WIDE2-1", "rf_when": "always", "rf_modes": ["TEP"],
     "aprsis": True, "server": "rotate.aprs2.net", "igate": False,
     "window": 60, "interval": 10, "min_km": 800, "min_paths": 2,
     "strong_km": 1500, "repeat": 30, "announce_close": False, "group": "VHF",
+    "alert_sound": True, "alert_voice": True, "alert_modes": ["TEP", "TROPO", "ES"],
+    "watch_modes": ["TEP", "TROPO", "ES"],
     "bands": ["2m", "70cm"], "regions": ["NA", "EU", "LA"], "local_km": 300,
 }
 
@@ -127,6 +131,35 @@ def latlon_to_aprs(lat, lon):
     return lat_s, lon_s
 
 
+ALL_MODES = list(eng.MODES)
+_REGION_TO_MODES = {"LA": ["TEP"], "NA": ["TROPO", "ES"], "EU": ["TROPO"]}
+
+
+def _modes_from_regions(regions):
+    out = []
+    for r in regions or []:
+        for m in _REGION_TO_MODES.get(r, []):
+            if m not in out:
+                out.append(m)
+    return out
+
+
+def _migrate(cfg):
+    """Convert settings saved by earlier versions (path-based -> mode-based)."""
+    if cfg.get("rf_when") == "tep":
+        cfg["rf_when"], cfg["rf_modes"] = "selected", ["TEP"]
+    elif cfg.get("rf_when") == "openings":
+        cfg["rf_when"], cfg["rf_modes"] = "selected", list(ALL_MODES)
+    if "rf_regions" in cfg:
+        cfg["rf_modes"] = _modes_from_regions(cfg.pop("rf_regions")) or ["TEP"]
+    if cfg.pop("alert_tep_only", False):
+        cfg["alert_modes"] = ["TEP"]
+    if "alert_regions" in cfg:
+        regs = cfg.pop("alert_regions")
+        cfg["alert_modes"] = list(ALL_MODES) if set(regs) >= {"NA", "EU", "LA"} else _modes_from_regions(regs)
+    return cfg
+
+
 def load_config():
     cfg = dict(DEFAULTS)
     if IS_ANDROID:
@@ -136,7 +169,7 @@ def load_config():
             cfg.update(json.load(f))
     except (OSError, ValueError):
         pass
-    return cfg
+    return _migrate(cfg)
 
 
 def save_config(cfg):
@@ -189,6 +222,7 @@ class Station:
         self.check_error = ""
         self.ann_state = eng.load_state(STATE_PATH)
         self.demo_xml = None
+        self.last_mode = {}
         self._stop = threading.Event()
         self._wake = threading.Event()
 
@@ -221,6 +255,8 @@ class Station:
                                                software=APP_NAME, version=APP_VERSION)
                 self.isc.start()
             self.running = True
+            self.openings = {}
+            self._rf_was_live = self.rf_live()
             self.next_check = time.time() + 3
             self.next_beacon = time.time() + 10 if c.get("beacon") else 0
             threading.Thread(target=self._loop, daemon=True).start()
@@ -256,6 +292,7 @@ class Station:
             for k, v in new.items():
                 if k in DEFAULTS:
                     self.cfg[k] = v
+            _migrate(self.cfg)
             self.cfg["call"] = self.cfg.get("call", "").upper().strip()
             self.cfg["group"] = (self.cfg.get("group") or "VHF").upper()[:5]
             save_config(self.cfg)
@@ -306,26 +343,57 @@ class Station:
                                            "km": round(s.km), "mode": s.mode, "snr": s.snr})
                         break
             self.local = sorted(self.local, key=lambda x: -x["km"])[:8]
-        ops = eng.detect(spots, c["min_km"], c["min_paths"], c["strong_km"])
+        ops = eng.detect(spots, c["min_km"], c["min_paths"], c["strong_km"],
+                         modes=set(c.get("watch_modes") or ALL_MODES))
         ops = {k: v for k, v in ops.items() if k[1] in c["regions"]}
         self.openings = ops
+        self._update_rf_state()
         self.add_log("PROP", f"{len(spots)} spots, {self.car_count} Caribbean, "
-                             f"{len(ops)} opening(s)" + (": " + ", ".join(f"{b} CAR-{r}" for b, r in sorted(ops)) if ops else ""))
+                             f"{len(ops)} opening(s)" + (": " + ", ".join(f"{b} CAR-{r} {eng.MODE_NAMES.get(o.mode, '')}" for (b, r), o in sorted(ops.items())) if ops else ""))
+        for k, o in ops.items():
+            self.last_mode[k] = o.mode
         msgs = eng.plan_announcements(ops, self.ann_state, int(time.time()),
                                       c["repeat"] * 60, c["announce_close"], c["group"])
+        slot_key = {slot: key for key, slot in eng.BLN_SLOT.items()}
         for addr, text in msgs:
-            self.transmit(eng.info_field(addr, text))
+            mode = self.last_mode.get(slot_key.get(addr[3:4]))
+            self.transmit(eng.info_field(addr, text), mode=mode)
         try:
             eng.save_state(STATE_PATH, self.ann_state)
         except OSError:
             pass
 
+    # ---- RF mode: always, or only while selected propagation modes are open
+    def rf_possible(self):
+        c = self.cfg
+        return bool(c.get("rf_announce") and self.tnc and c.get("tnc") != "none")
+
+    def rf_live(self, mode=None):
+        """Is RF transmission switched on right now (for this message's mode)?"""
+        if not self.rf_possible():
+            return False
+        if self.cfg.get("rf_when", "always") == "always":
+            return True
+        chosen = set(self.cfg.get("rf_modes") or [])
+        if mode is not None:                   # an alert about one opening
+            return mode in chosen
+        return bool(chosen & {o.mode for o in self.openings.values()})   # beacons etc.
+
+    def _update_rf_state(self):
+        live = self.rf_live()
+        prev = getattr(self, "_rf_was_live", None)
+        if prev is not None and live != prev and self.cfg.get("rf_when", "always") != "always":
+            chosen = set(self.cfg.get("rf_modes") or [])
+            names = ", ".join(f"{b} {eng.MODE_NAMES.get(o.mode, '')} CAR-{r}" for (b, r), o in sorted(self.openings.items()) if o.mode in chosen)
+            self.add_log("SYS", f"RF now ON - {names}" if live else "Opening faded - RF back to standby (APRS-IS only)")
+        self._rf_was_live = live
+
     # ---- TX paths
-    def transmit(self, info, rf=True, net=True):
+    def transmit(self, info, rf=True, net=True, mode=None, force_rf=False):
         c = self.cfg
         call = c["call"]
         sent = []
-        if rf and c.get("rf_announce") and self.tnc and c.get("tnc") != "none":
+        if rf and (self.rf_live(mode) or (force_rf and self.rf_possible())):
             path = [p.strip() for p in (c.get("rf_path") or "").split(",") if p.strip()]
             try:
                 self.tnc.send(call, eng.TOCALL, path, info)
@@ -350,7 +418,8 @@ class Station:
         self.transmit(f"!{lat}{sym[0]}{lon}{sym[1]}{c.get('beacon_comment', '')[:43]}")
 
     def send_test(self):
-        self.transmit(f":{eng.bln_addressee('9', self.cfg['group'])}:{APP_NAME} test - no propagation alert")
+        self.transmit(f":{eng.bln_addressee('9', self.cfg['group'])}:{APP_NAME} test - no propagation alert",
+                      force_rf=True)
 
     # ---- RX
     def on_rf_packet(self, line):
@@ -381,7 +450,7 @@ class Station:
                         "enabled": band in c["bands"] and region in c["regions"], "open": bool(op)}
                 if op:
                     b = op.best
-                    cell.update(paths=op.score, km=round(b.km), tx=b.tx, rx=b.rx,
+                    cell.update(paths=op.score, km=round(b.km), tx=b.tx, rx=b.rx, prop_mode=op.mode, mode_name=eng.MODE_NAMES.get(op.mode, ""),
                                 tx_grid=b.tx_grid, rx_grid=b.rx_grid, mode=b.mode, snr=b.snr,
                                 modes=sorted(op.modes))
                 matrix.append(cell)
@@ -394,6 +463,8 @@ class Station:
             "next_beacon": self.next_beacon if self.running else 0,
             "spots": self.spot_count, "car_spots": self.car_count, "local": self.local,
             "check_error": self.check_error, "tnc": tst,
+            "rf": ("OFF" if not (self.running and self.rf_possible()) else
+                   "ON" if self.rf_live() else "STBY"),
             "aprsis": None if not self.isc else {"connected": self.isc.connected,
                                                   "verified": self.isc.verified, "error": self.isc.error},
             "log": [e for e in list(self.log) if e["id"] > since],
@@ -485,6 +556,20 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
 
+def open_browser(url):
+    """Open the face plate in the user's browser (more reliable on Windows .exe builds)."""
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(url)  # uses the default browser
+            return
+    except OSError:
+        pass
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser(description=f"{APP_NAME} face plate")
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to allow other devices on your LAN")
@@ -496,7 +581,13 @@ def main():
     STATION.demo_xml = a.demo
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     url = f"http://{'127.0.0.1' if a.host in ('0.0.0.0', '') else a.host}:{a.port}/"
-    print(f"{APP_NAME} {APP_VERSION} face plate at {url}")
+    print(f"{APP_NAME} {APP_VERSION} - by Brandon St Rose (8P5DG) & Kammie Holder (8P5AB) - MIT License")
+    print()
+    print("  Tradewind is running. KEEP THIS WINDOW OPEN - closing it stops Tradewind.")
+    print()
+    print(f"  If the face plate doesn't open by itself, open Chrome or Edge")
+    print(f"  and go to:   {url}")
+    print()
     if a.host not in ("127.0.0.1", "localhost"):
         print("WARNING: anyone who can reach this port can key your transmitter. Use only on a trusted LAN.")
     if a.autostart:
@@ -504,7 +595,7 @@ def main():
         if errs:
             print("Autostart failed:", "; ".join(errs))
     if not a.no_browser:
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+        threading.Timer(1.0, open_browser, args=(url,)).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

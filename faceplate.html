@@ -210,6 +210,7 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
           <div class="matrix" id="matrix" aria-live="polite"></div>
           <div class="lcd-status">
             <span>TNC <b id="l-tnc">---</b><span class="meter" id="meter"></span></span>
+            <span>RF <b id="l-rf">OFF</b></span>
             <span>NET <b id="l-net">OFF</b></span>
             <span>SPOTS <b id="l-spots">--</b></span>
             <span>CHK <b id="l-chk">--:--</b></span>
@@ -296,6 +297,15 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
         <select class="inset" data-k="kiss_baud" data-num><option>9600</option><option>19200</option><option>38400</option><option>57600</option><option>115200</option></select></div>
       <div class="set m-rf"><label>RF path</label><input class="inset" data-k="rf_path" placeholder="WIDE2-1"></div>
       <div class="set m-rf"><label class="chk"><input type="checkbox" data-k="rf_announce"> Transmit alerts on RF</label></div>
+      <div class="set m-rf"><label>Use RF</label>
+        <select class="inset" data-k="rf_when" id="f-rfwhen">
+          <option value="always">Always (RF + APRS-IS)</option>
+          <option value="selected">Only while these modes are open</option>
+        </select></div>
+      <div class="set m-rf m-rfsel"><label>Switch RF on for</label><div class="chips">
+        <label class="chk"><input type="checkbox" data-list="rf_modes" value="TEP"> TEP</label>
+        <label class="chk"><input type="checkbox" data-list="rf_modes" value="TROPO"> Tropo duct</label>
+        <label class="chk"><input type="checkbox" data-list="rf_modes" value="ES"> Sporadic-E</label></div></div>
       <div class="set wide note" id="dev-note"></div>
     </div>
 
@@ -315,6 +325,11 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
         <label class="chk"><input type="checkbox" data-list="regions" value="NA"> N. America</label>
         <label class="chk"><input type="checkbox" data-list="regions" value="EU"> Europe</label>
         <label class="chk"><input type="checkbox" data-list="regions" value="LA"> Latin America</label></div></div>
+      <div class="set"><label>Watch modes</label><div class="chips">
+        <label class="chk"><input type="checkbox" data-list="watch_modes" value="TEP"> TEP</label>
+        <label class="chk"><input type="checkbox" data-list="watch_modes" value="TROPO"> Tropo duct</label>
+        <label class="chk"><input type="checkbox" data-list="watch_modes" value="ES"> Sporadic-E</label></div></div>
+      <div class="set wide note">Modes are best guesses from each path: <b>TEP</b> = to South America across the equator (evenings); <b>Tropo duct</b> = 70cm, paths over 2,300 km, trans-Atlantic, or outside Es season; <b>Sporadic-E</b> = 2m, 800&ndash;2,300 km, May&ndash;Aug and Dec&ndash;Jan, daytime/evening.</div>
       <div class="set"><label>Look back (minutes)</label><input class="inset" data-k="window" data-num type="number" min="15" max="240"></div>
       <div class="set"><label>Check every (minutes, min 5)</label><input class="inset" data-k="interval" data-num type="number" min="5" max="60"></div>
       <div class="set"><label>Min path length (km)</label><input class="inset" data-k="min_km" data-num type="number" min="200" max="5000" step="50"></div>
@@ -324,6 +339,13 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
       <div class="set"><label>Bulletin group (BLNn + group)</label><input class="inset" data-k="group" maxlength="5"></div>
       <div class="set"><label>"Near me" radius (km)</label><input class="inset" data-k="local_km" data-num type="number" min="50" max="1000" step="25"></div>
       <div class="set"><label class="chk"><input type="checkbox" data-k="announce_close"> Announce when an opening closes</label></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="alert_sound"> Sound alert when a band opens</label></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="alert_voice"> Speak the opening (e.g. "Two metre TEP open")</label></div>
+      <div class="set"><label>Sound alerts for</label><div class="chips">
+        <label class="chk"><input type="checkbox" data-list="alert_modes" value="TEP"> TEP</label>
+        <label class="chk"><input type="checkbox" data-list="alert_modes" value="TROPO"> Tropo duct</label>
+        <label class="chk"><input type="checkbox" data-list="alert_modes" value="ES"> Sporadic-E</label></div></div>
+      <div class="set"><button class="btn" id="b-sound" type="button" style="width:100%">TEST SOUND</button></div>
     </div>
 
     <div class="pane" id="p-net">
@@ -344,7 +366,7 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
     <div class="mon-head"><span>PACKET MONITOR</span><span id="near"></span></div>
     <div class="mon" id="mon" role="log" aria-live="polite"></div>
   </section>
-  <div class="foot" id="foot">Tradewind &middot; spot data from PSKReporter</div>
+  <div class="foot" id="foot">Tradewind &middot; by Brandon St Rose (8P5DG) &amp; Kammie Holder (8P5AB) &middot; MIT License &middot; spot data from PSKReporter</div>
 </div>
 <datalist id="serial-list"></datalist>
 <div class="toast" id="toast" role="status"></div>
@@ -373,8 +395,9 @@ function drawMatrix(cells){
       const c = (cells||[]).find(x=>x.band===band && x.region===reg) || {enabled:true};
       const cls = c.open ? 'cell open' : (c.enabled===false ? 'cell off' : 'cell');
       const st = c.open ? 'OPEN' : (c.enabled===false ? 'OFF' : (running ? 'QUIET' : '----'));
-      const det = c.open ? `${c.paths}p ${c.km}km ${c.mode}<br>${c.tx}&gt;${c.rx}` : '<span class="ghost">888 8888km</span>';
-      h += `<div class="${cls}" title="${c.open?`${c.tx} (${c.tx_grid}) -> ${c.rx} (${c.rx_grid}) ${c.km} km ${c.mode} ${c.snr} dB`:''}"><div class="st"><i class="dot"></i>${st}</div><div class="det">${det}</div></div>`;
+      const MODE_SHORT = {TEP:'TEP', TROPO:'DUCT', ES:'Es'};
+      const det = c.open ? `${MODE_SHORT[c.prop_mode]||''} ${c.km}km ${c.paths}p<br>${c.tx}&gt;${c.rx}` : '<span class="ghost">888 8888km</span>';
+      h += `<div class="${cls}" title="${c.open?`${c.mode_name}: ${c.tx} (${c.tx_grid}) -> ${c.rx} (${c.rx_grid}) ${c.km} km ${c.mode} ${c.snr} dB`:''}"><div class="st"><i class="dot"></i>${st}</div><div class="det">${det}</div></div>`;
     }
   }
   m.innerHTML = h;
@@ -402,7 +425,7 @@ function readForm(){
     if (el.hasAttribute('data-num') && v!=='') v = Number(v);
     o[el.dataset.k] = v;
   });
-  for (const k of ['bands','regions']) o[k] = $$(`[data-list="${k}"]`).filter(e=>e.checked).map(e=>e.value);
+  for (const k of ['bands','regions','rf_modes','alert_modes','watch_modes']) o[k] = $$(`[data-list="${k}"]`).filter(e=>e.checked).map(e=>e.value);
   o.call = (o.call||'').toUpperCase();
   return o;
 }
@@ -412,6 +435,7 @@ function updateVisibility(){
   $$('.m-kiss_tcp').forEach(e=>e.classList.toggle('hide', t!=='kiss_tcp'));
   $$('.m-kiss_serial').forEach(e=>e.classList.toggle('hide', t!=='kiss_serial'));
   $$('.m-rf').forEach(e=>e.classList.toggle('hide', t==='none'));
+  if (t!=='none') $$('.m-rfsel').forEach(e=>e.classList.toggle('hide', $('#f-rfwhen').value!=='selected'));
   if (t==='sound'){
     $$('.m-ptt').forEach(e=>e.classList.toggle('hide', p==='VOX'));
     $$('.m-cm108').forEach(e=>e.classList.toggle('hide', p!=='CM108'));
@@ -472,18 +496,20 @@ async function poll(){
   if (!Object.keys(cfg).length){ cfg = s.config; fillForm(cfg); }
   cfg = s.config;
   document.title = s.app; $('#appname').textContent = s.app.toUpperCase();
-  $('#foot').textContent = `${s.app} ${s.version} · spot data from PSKReporter`;
+  $('#foot').textContent = `${s.app} ${s.version} · by Brandon St Rose (8P5DG) & Kammie Holder (8P5AB) · MIT License · spot data from PSKReporter`;
   $('#l-call').textContent = cfg.call || 'NOCALL';
   $('#l-grid').textContent = cfg.grid || '----';
   $('#power').classList.toggle('on', running);
   $('#power-txt').textContent = running ? 'ON' : 'OFF';
   ['#b-bcn','#b-test','#b-chk'].forEach(b=>$(b).disabled = !running);
   drawMatrix(s.matrix);
+  if (running) alertOpenings(s.matrix); else prevOpen = null;
   const now = Date.now()/1000, t = s.tnc;
   $('#l-tnc').textContent = !running ? 'OFF' : (t ? (t.kind==='Sound modem'?'SOUND':t.kind==='APRS-IS only'?'NONE':t.kind.toUpperCase()) : '---');
   const lvl = t && t.audio_level ? Math.min(8, Math.round(Math.sqrt(t.audio_level)*16)) : 0;
   $('#meter').innerHTML = (t && t.kind==='Sound modem') ? Array.from({length:8},(_,i)=>`<i class="${i<lvl?'on':''}"></i>`).join('') : '';
   const is = s.aprsis;
+  $('#l-rf').textContent = s.rf || 'OFF';
   $('#l-net').textContent = !is ? 'OFF' : is.verified ? 'IS OK' : is.connected ? 'UNVER' : 'CONN..';
   $('#l-spots').textContent = s.last_check ? `${s.car_spots}/${s.spots}` : '--';
   $('#l-chk').textContent = s.next_check ? mmss(s.next_check-now) : '--:--';
@@ -517,9 +543,50 @@ function androidMode(){
   [...$('#f-preset').options].forEach(o=>{ if(!keep.has(o.value)){ o.disabled=true; } });
   $('#dev-note').textContent = 'Android: alerts go out over APRS-IS, or to a networked TNC such as Direwolf or UZ7HO via KISS TCP. Radios connected by USB or audio need the Windows/PC version.';
 }
+/* ---------- audio alert ---------- */
+let audioCtx = null, prevOpen = null;
+function unlockAudio(){
+  try { if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume(); } catch(e){}
+}
+function chime(){
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  [[880,0],[1175,0.18],[1568,0.36]].forEach(([f,dt])=>{       // rising three-note chime
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type='sine'; o.frequency.value=f; o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(0.0001,t0+dt); g.gain.exponentialRampToValueAtTime(0.35,t0+dt+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t0+dt+0.5); o.start(t0+dt); o.stop(t0+dt+0.55);
+  });
+}
+const SPOKEN = {NA:'North America', EU:'Europe', LA:'Latin America'};
+function say(text){
+  try { if (!('speechSynthesis' in window)) return;
+        const u = new SpeechSynthesisUtterance(text); u.rate = 0.95; speechSynthesis.speak(u); } catch(e){}
+}
+function alertOpenings(cells){
+  const nowOpen = new Set(cells.filter(c=>c.open).map(c=>c.band+':'+c.region));
+  if (prevOpen === null){ prevOpen = nowOpen; return; }          // don't alert on page load
+  const fresh = cells.filter(c=>c.open && !prevOpen.has(c.band+':'+c.region))
+                     .filter(c=>(cfg.alert_modes||['TEP','TROPO','ES']).includes(c.prop_mode));
+  prevOpen = nowOpen;
+  if (!fresh.length) return;
+  if (cfg.alert_sound !== false) chime();
+  const MODE_SPOKEN = {TEP:'T E P', TROPO:'tropo duct', ES:'sporadic E'};
+  const msg = fresh.map(c=>`${c.band==='2m'?'Two metre':'Seventy centimetre'} ${MODE_SPOKEN[c.prop_mode]||''} open to ${SPOKEN[c.region]}`.replace(/  +/g,' ')).join('. ');
+  toast('🔔 ' + msg, true);
+  if (cfg.alert_voice !== false) setTimeout(()=>say(msg), 900);
+  try { if (document.hidden && 'Notification' in window && Notification.permission==='granted')
+          new Notification('Tradewind', {body: msg}); } catch(e){}
+}
+document.addEventListener('click', unlockAudio);   // browsers only allow sound after a click
+
 function tick(){ $('#l-clock').textContent = hms(new Date()); }
 
 /* ---------- wiring ---------- */
+$('#b-sound').onclick = ()=>{ unlockAudio(); chime();
+  setTimeout(()=>say('Two metre T E P open to Latin America'), 900);
+  try { if ('Notification' in window && Notification.permission==='default') Notification.requestPermission(); } catch(e){} };
 $('#power').onclick = async ()=>{
   if (dirty) await save();
   const r = await api(running ? '/api/stop' : '/api/start', {});
@@ -535,7 +602,7 @@ $('#b-close').onclick = ()=>{ $('#drawer').classList.remove('open'); $('#b-menu'
 $('#b-save').onclick = save; $('#b-save-top').onclick = save;
 $$('.tab').forEach(t=>t.onclick=()=>{ $$('.tab').forEach(x=>x.classList.toggle('on',x===t)); $$('.pane').forEach(p=>p.classList.toggle('on',p.id===t.dataset.p)); });
 $('#f-preset').onchange = e=>applyPreset(e.target.value);
-$('#f-tnc').onchange = updateVisibility; $('#f-ptt').onchange = updateVisibility;
+$('#f-tnc').onchange = updateVisibility; $('#f-rfwhen').onchange = updateVisibility; $('#f-ptt').onchange = updateVisibility;
 document.addEventListener('input', e=>{ if (e.target.matches('[data-k],[data-list]')) markDirty(); });
 document.addEventListener('change', e=>{ if (e.target.matches('[data-k],[data-list]')) markDirty(); });
 $('#f-call').addEventListener('input', e=>{ const p=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); e.target.setSelectionRange(p,p); });

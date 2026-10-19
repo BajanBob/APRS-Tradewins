@@ -1,1 +1,64 @@
+# Builds Tradewind.exe on a Windows machine at GitHub.
+#  - Every push to main: download the .exe from the run's "Artifacts" section.
+#  - Push a tag like v1.0 (or create a Release with a new tag): the .exe is
+#    attached to that Release for anyone to download.
+#  - Actions tab -> "Build Windows exe" -> "Run workflow" builds on demand.
+name: Build Windows exe
 
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Self-test modem
+        run: python test_modem.py
+
+      - name: Build Tradewind.exe
+        run: >
+          pyinstaller --noconfirm --onefile --name Tradewind --icon icon.ico
+          --add-data "faceplate.html;."
+          --collect-all sounddevice
+          app.py
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item dist/Tradewind.exe release/
+          Copy-Item README.md release/
+          Copy-Item LICENSE release/LICENSE.txt
+          Compress-Archive -Path release/* -DestinationPath Tradewind-windows.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tradewind-windows
+          path: |
+            dist/Tradewind.exe
+            Tradewind-windows.zip
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Tradewind.exe
+            Tradewind-windows.zip

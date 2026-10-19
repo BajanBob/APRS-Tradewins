@@ -1,10 +1,9 @@
 # Builds Tradewind.apk for Android phones.
 #  - Every push to main: download the .apk from the run's "Artifacts" section.
-#  - Push a tag like v1.0 (or publish a Release with a new tag): the .apk is
-#    attached to that Release next to Tradewind.exe.
+#  - Publish a Release with a new tag (e.g. v1.0): the .apk is attached to it.
 #  - Actions tab -> "Build Android apk" -> "Run workflow" builds on demand.
-# The first build takes 20-40 minutes (it downloads the Android SDK/NDK);
-# later builds reuse the cache and are much faster.
+# Builds inside a ready-made Buildozer container, so no Android tools need
+# installing by hand. The first build takes 20-40 minutes.
 name: Build Android apk
 
 on:
@@ -18,27 +17,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: System packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git zip unzip autoconf automake libtool pkg-config \
-            zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev
-
-      - name: Install buildozer
-        run: pip install --upgrade pip buildozer cython setuptools
 
       - name: Stage app files
         run: |
@@ -47,20 +28,19 @@ jobs:
           cp app.py afsk.py tnc.py vhf_prop_aprs.py faceplate.html icon.png android_build/src/
           cp android_main.py android_build/src/main.py
 
-      - name: Cache Android SDK / NDK
-        uses: actions/cache@v4
+      - name: Build APK with Buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
         with:
-          path: |
-            ~/.buildozer
-            android_build/.buildozer
-          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
-
-      - name: Build APK
-        working-directory: android_build
-        run: yes | buildozer android debug
+          workdir: android_build
+          buildozer_version: stable
+          command: buildozer android debug
 
       - name: Collect APK
-        run: cp android_build/bin/*.apk Tradewind.apk
+        run: |
+          APK=$(ls android_build/bin/*.apk 2>/dev/null | head -n 1)
+          [ -n "$APK" ] || APK="${{ steps.buildozer.outputs.filename }}"
+          cp "$APK" Tradewind.apk
 
       - uses: actions/upload-artifact@v4
         with:

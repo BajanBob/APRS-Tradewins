@@ -29,7 +29,7 @@ import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "1.0"
+APP_VERSION = "1.5"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -62,11 +62,13 @@ DEFAULTS = {
     "tnc": "sound", "audio_in": "", "audio_out": "", "sample_rate": 48000,
     "ptt": "VOX", "ptt_port": "", "ptt_invert": False, "cm108_gpio": 3,
     "cat_baud": 9600, "civ_addr": "7C",
+    # CAT tuning: put the radio on the APRS frequency in FM data mode at power-on
+    "cat_tune": False, "aprs_freq": "144.390", "aprs_freq_custom": "", "cat_restore": True,
     "txdelay": 300, "txtail": 50, "tx_level": 0.5,
     "kiss_addr": "127.0.0.1:8001", "kiss_serial": "", "kiss_baud": 9600,
     "rf_announce": True, "rf_path": "WIDE2-1", "rf_when": "always", "rf_modes": ["TEP"],
     "aprsis": True, "server": "rotate.aprs2.net", "igate": False,
-    "window": 60, "interval": 10, "min_km": 800, "min_paths": 2,
+    "window": 60, "interval": 5, "min_km": 800, "min_paths": 2,
     "strong_km": 1500, "repeat": 30, "announce_close": False, "group": "VHF",
     "alert_sound": True, "alert_voice": True, "alert_modes": ["TEP", "TROPO", "ES"],
     "watch_modes": ["TEP", "TROPO", "ES"],
@@ -80,6 +82,7 @@ DEFAULTS = {
     "wx_icao": "TBPB", "wx_fir": "TTZP",
     # tropical cyclone alerts from the National Hurricane Center
     "tc_enabled": True, "tc_radius_km": 1500, "tc_rf": True,
+    "cfg_ver": 2,
 }
 
 # Radio / interface presets. Fields override DEFAULTS when chosen in the UI.
@@ -107,19 +110,19 @@ PRESETS = [
      "note": "Linux only: PTT port is /dev/hidrawN (give your user access via a udev rule)."},
     {"id": "ic705", "label": "Icom IC-705 (built-in USB sound card)",
      "tnc": "sound", "ptt": "RTS",
-     "note": "Audio: 'USB Audio CODEC'. PTT port: the IC-705 USB serial port. On the radio set USB SEND to RTS, DATA MOD to USB, and use FM-D (data) mode."},
+     "note": "Audio: 'USB Audio CODEC'. PTT port: the IC-705 USB serial port. On the radio set USB SEND to RTS, DATA MOD to USB, and use FM-D (data) mode. For automatic tuning, set PTT to 'Icom CI-V' with address A4 and tick 'Tune the radio'."},
     {"id": "ic9700", "label": "Icom IC-9700 (built-in USB sound card)",
      "tnc": "sound", "ptt": "RTS",
-     "note": "Audio: 'USB Audio CODEC'. PTT port: first IC-9700 USB serial port. Set USB SEND to RTS, DATA MOD to USB, use FM-D."},
+     "note": "Audio: 'USB Audio CODEC'. PTT port: first IC-9700 USB serial port. Set USB SEND to RTS, DATA MOD to USB, use FM-D. For automatic tuning, set PTT to 'Icom CI-V' with address A2 and tick 'Tune the radio'."},
     {"id": "ic7100", "label": "Icom IC-7100 (built-in USB sound card)",
      "tnc": "sound", "ptt": "RTS",
-     "note": "Audio: 'USB Audio CODEC'. Set USB SEND to RTS and DATA MOD to USB; use FM-D."},
+     "note": "Audio: 'USB Audio CODEC'. Set USB SEND to RTS and DATA MOD to USB; use FM-D. For automatic tuning, set PTT to 'Icom CI-V' with address 88 and tick 'Tune the radio'."},
     {"id": "ic9100", "label": "Icom IC-9100 (built-in USB sound card, CI-V PTT)",
-     "tnc": "sound", "ptt": "CIV", "civ_addr": "7C", "cat_baud": 9600,
-     "note": "One USB cable carries audio and CI-V. Audio: 'USB Audio CODEC'. PTT port: the IC-9100's USB serial port. On the radio set DATA MOD to USB, USB MOD Level about 25-50%, CI-V address 7C and CI-V baud 9600, and use FM data mode. Close other CAT software (logger, WSJT-X) first - only one program can use the port."},
+     "tnc": "sound", "ptt": "CIV", "civ_addr": "7C", "cat_baud": 9600, "cat_tune": True,
+     "note": "One USB cable carries audio and CI-V. Audio: 'USB Audio CODEC'. PTT port: the IC-9100's USB serial port. On the radio set DATA MOD to USB, USB MOD Level about 25-50%, CI-V address 7C and CI-V baud 9600. With 'Tune the radio' on, Tradewind sets the APRS frequency and FM data mode for you at power-on (2m on the main band) and puts the radio back when you switch off. Close other CAT software (logger, WSJT-X) first - only one program can use the port."},
     {"id": "ft991a", "label": "Yaesu FT-991A (built-in USB sound card)",
      "tnc": "sound", "ptt": "RTS",
-     "note": "Audio: 'USB Audio CODEC'. PTT port: the 'Enhanced' COM port. Set the radio's PC keying / data PTT option to RTS and use DATA-FM. Alternative: choose PTT 'Yaesu CAT' on the 'Standard' COM port at the radio's CAT baud rate."},
+     "note": "Audio: 'USB Audio CODEC'. PTT port: the 'Enhanced' COM port. Set the radio's PC keying / data PTT option to RTS and use DATA-FM. For automatic tuning to the APRS frequency, choose PTT 'Yaesu CAT' on the 'Standard' COM port at the radio's CAT baud rate (menu 031) and tick 'Tune the radio'."},
     {"id": "ft2980", "label": "Yaesu FT-2980R (mic + speaker jacks, via interface)",
      "tnc": "sound", "ptt": "VOX", "txdelay": 350, "tx_level": 0.3,
      "note": "The FT-2980R has no data jack or CAT port. Use a soundcard interface with a cable for Yaesu's 8-pin modular mic jack and the 3.5 mm external speaker jack: SignaLink USB (VOX), or a Digirig with Yaesu mic cable (set PTT to Serial RTS). Check the cable's mic-jack pinout against the radio manual. Set squelch just closed, keep TX audio low (mic audio is pre-emphasised), and use Low or Mid power for long sessions."},
@@ -131,7 +134,7 @@ PRESETS = [
      "note": "These radios' built-in APRS has no KISS mode, so connect a soundcard interface to the rear DATA jack (cable for your model). Set the data jack speed to 1200 bps and turn the radio's own APRS off on that band. PTT: VOX or Serial RTS (Digirig)."},
     {"id": "rigctld", "label": "Any radio via Hamlib rigctld (CAT PTT)",
      "tnc": "sound", "ptt": "RIGCTLD", "ptt_port": "127.0.0.1:4532",
-     "note": "Start rigctld for your radio first. Pick the radio's USB audio device for in/out."},
+     "note": "Start rigctld for your radio first. Pick the radio's USB audio device for in/out. Tick 'Tune the radio' to have Tradewind set the APRS frequency and FM data mode through Hamlib."},
     {"id": "thd75", "label": "Kenwood TH-D75 (built-in TNC, KISS)",
      "tnc": "kiss_serial", "kiss_baud": 9600,
      "note": "Enable KISS mode on the radio, then choose its USB or Bluetooth serial port."},
@@ -198,7 +201,10 @@ def load_config():
         cfg.update(tnc="none", preset="aprsis_only", rf_announce=False)
     try:
         with open(CONF_PATH) as f:
-            cfg.update(json.load(f))
+            saved = json.load(f)
+        if saved.get("cfg_ver", 1) < 2 and saved.get("interval") == 10:
+            saved["interval"] = 5     # v1.5: map and checks every 5 minutes by default
+        cfg.update(saved)
     except (OSError, ValueError):
         pass
     return _migrate(cfg)
@@ -228,6 +234,8 @@ def validate(cfg):
             int(str(cfg.get("civ_addr") or "7C"), 16)
         except ValueError:
             errs.append("CI-V address must be hex, e.g. 7C for the IC-9100.")
+    if cfg.get("cat_tune") and cfg.get("tnc") == "sound" and not tncmod.aprs_freq_hz(cfg):
+        errs.append("APRS frequency must be in MHz within the 2m or 70cm band, e.g. 144.390.")
     if cfg.get("wx_enabled"):
         for k in ("wx_general_times", "wx_marine_times", "wx_aviation_times"):
             try:
@@ -257,6 +265,7 @@ class Station:
         self.spot_count = 0
         self.car_count = 0
         self.local = []
+        self.map_paths = []           # Caribbean paths for the live map
         self.check_error = ""
         self.ann_state = eng.load_state(STATE_PATH)
         self.demo_xml = None
@@ -306,6 +315,9 @@ class Station:
             self.next_beacon = time.time() + 10 if c.get("beacon") else 0
             threading.Thread(target=self._loop, daemon=True).start()
             self.add_log("SYS", f"Station ON as {c['call']} @ {c['grid']} - TNC: {self.tnc.kind}")
+            cat = getattr(self.tnc, "cat_status", "")
+            if cat:
+                self.add_log("ERR" if "failed" in cat else "SYS", f"Radio: {cat}")
             return []
 
     def stop(self):
@@ -523,6 +535,7 @@ class Station:
                                            "km": round(s.km), "mode": s.mode, "snr": s.snr})
                         break
             self.local = sorted(self.local, key=lambda x: -x["km"])[:8]
+        self.map_paths = self._map_paths(spots)
         ops = eng.detect(spots, c["min_km"], c["min_paths"], c["strong_km"],
                          modes=set(c.get("watch_modes") or ALL_MODES))
         ops = {k: v for k, v in ops.items() if k[1] in c["regions"]}
@@ -543,6 +556,37 @@ class Station:
             eng.save_state(STATE_PATH, self.ann_state)
         except OSError:
             pass
+
+    # ---- live map
+    def _map_paths(self, spots, min_km=300, limit=400):
+        """Caribbean paths (one line per station pair and band) for the map."""
+        best = {}
+        for s in spots:
+            if "CAR" not in (s.tx_region, s.rx_region) or s.km < min_km:
+                continue
+            a, b = eng.grid_to_latlon(s.tx_grid), eng.grid_to_latlon(s.rx_grid)
+            if not (a and b):
+                continue
+            key = (s.tx, s.rx, s.band)
+            if key in best and best[key]["ts"] >= (s.ts or 0):
+                continue
+            best[key] = {"band": s.band, "pm": s.prop_mode or eng.classify_mode(s),
+                         "tx": s.tx, "rx": s.rx, "tg": s.tx_grid, "rg": s.rx_grid,
+                         "a": [round(a[0], 3), round(a[1], 3)], "b": [round(b[0], 3), round(b[1], 3)],
+                         "km": round(s.km), "mode": s.mode, "snr": s.snr, "ts": s.ts or 0,
+                         "far": s.rx_region if s.tx_region == "CAR" else s.tx_region}
+        return sorted(best.values(), key=lambda p: -p["km"])[:limit]
+
+    def map_data(self):
+        c = self.cfg
+        me = eng.grid_to_latlon(c.get("grid", ""))
+        return {"now": time.time(), "last_check": self.last_check,
+                "next_check": self.next_check if self.running else 0, "running": self.running,
+                "me": {"call": c.get("call", ""), "grid": c.get("grid", ""),
+                       "pos": [round(me[0], 3), round(me[1], 3)] if me else None},
+                "paths": self.map_paths,
+                "open": [{"band": b, "region": r, "mode": o.mode} for (b, r), o in sorted(self.openings.items())],
+                "names": eng.MODE_NAMES}
 
     # ---- RF mode: always, or only while selected propagation modes are open
     def rf_possible(self):
@@ -706,6 +750,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"now": time.time(), "events": STATION.recent_history(min(hours, 48))})
         elif path == "/api/presets":
             self._json(PRESETS)
+        elif path == "/api/map":
+            self._json(STATION.map_data())
+        elif path == "/api/freqs":
+            self._json([{"value": v, "label": l} for v, l in tncmod.APRS_FREQS])
         else:
             self._json({"error": "not found"}, 404)
 

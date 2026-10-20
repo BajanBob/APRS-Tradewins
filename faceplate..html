@@ -1,0 +1,879 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tradewind</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%23202428%22/%3E%3Cpath d=%22M5 13c4-4 7-4 11 0s7 4 11 0M5 21c4-4 7-4 11 0s7 4 11 0%22 stroke=%22%2320c7b4%22 stroke-width=%222.6%22 fill=%22none%22 stroke-linecap=%22round%22/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+:root{
+  --desk:#0b0d0f; --panel:#202428; --panel2:#15181b; --edge:#33393f; --engrave:#8d96a0; --engrave-hi:#c9d1d9;
+  --lcd-bg:#1a1307; --lcd-glow:#ffb547; --lcd-dim:#5c4317; --lcd-ghost:#2a1f0c;
+  --mon-bg:#06110b; --mon:#6ff0a0; --mon-dim:#2f6b48;
+  --led-off:#2a2e33; --red:#ff4b3e; --green:#45f08a; --amber:#ffb547; --blue:#4fb6ff; --sea:#20c7b4;
+  --btn:#2b3036; --btn-hi:#3a4148; --btn-text:#d6dde4;
+  --mono:'Share Tech Mono', ui-monospace, Menlo, Consolas, monospace;
+  --label:'Barlow Condensed', 'Arial Narrow', system-ui, sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--desk);color:var(--engrave-hi);font-family:var(--label)}
+body{min-height:100vh;padding:24px 16px 48px;
+  background:radial-gradient(1200px 600px at 50% -10%, #1b2026 0%, var(--desk) 60%)}
+.wrap{max-width:1040px;margin:0 auto}
+
+/* ---------- face plate ---------- */
+.plate{position:relative;border-radius:18px;padding:22px 26px 24px;
+  background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,.012) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg,#2a2f34 0%,var(--panel) 18%,var(--panel2) 100%);
+  border:1px solid #0a0b0c;
+  box-shadow:0 1px 0 rgba(255,255,255,.08) inset, 0 -2px 0 rgba(0,0,0,.6) inset, 0 30px 60px -20px rgba(0,0,0,.8), 0 0 0 6px #0f1113, 0 0 0 7px #2a2f35}
+.screw{position:absolute;width:12px;height:12px;border-radius:50%;
+  background:radial-gradient(circle at 35% 35%,#9aa3ad,#3b4148 60%,#1c1f22);
+  box-shadow:0 1px 1px rgba(0,0,0,.8)}
+.screw::after{content:"";position:absolute;left:2px;right:2px;top:5px;height:2px;background:#1a1d20;transform:rotate(35deg)}
+.s1{top:10px;left:10px}.s2{top:10px;right:10px}.s3{bottom:10px;left:10px}.s4{bottom:10px;right:10px}
+
+.top{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px}
+.brand svg{width:34px;height:20px}
+.brand h1{margin:0;font-weight:700;font-size:28px;letter-spacing:.32em;color:#d9e0e7;
+  text-shadow:0 1px 0 #000, 0 -1px 0 rgba(255,255,255,.08)}
+.model{font-size:13px;letter-spacing:.18em;color:var(--engrave);text-transform:uppercase;text-align:right}
+.model b{color:var(--sea);font-weight:600}
+
+.main{display:grid;grid-template-columns:1fr 220px;gap:22px;align-items:stretch}
+
+/* ---------- LCD ---------- */
+.lcd-bezel{border-radius:10px;padding:10px;background:linear-gradient(180deg,#0c0e10,#191c20);
+  box-shadow:0 2px 0 rgba(255,255,255,.05), 0 0 0 1px #000 inset, 0 6px 18px rgba(0,0,0,.7) inset}
+.lcd{position:relative;border-radius:6px;padding:12px 14px 10px;background:
+  radial-gradient(120% 140% at 50% 0%, #241a09 0%, var(--lcd-bg) 60%);
+  color:var(--lcd-glow);font-family:var(--mono);overflow:hidden;min-height:250px}
+.lcd::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0 1px, transparent 1px 3px);mix-blend-mode:multiply}
+.glow{text-shadow:0 0 6px rgba(255,181,71,.55)}
+.lcd-row1{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+.lcd-call{font-size:34px;letter-spacing:.06em;line-height:1}
+.lcd-grid{font-size:20px;color:var(--lcd-glow);opacity:.85}
+.lcd-clock{font-size:20px}
+.lcd-clock small,.lcd small{font-size:12px;color:var(--lcd-dim);letter-spacing:.1em}
+.ghost{color:var(--lcd-ghost);text-shadow:none}
+
+.matrix{display:grid;grid-template-columns:54px repeat(3,1fr);gap:6px;margin:12px 0 10px}
+.mh{font-size:12px;color:#a87a2c;letter-spacing:.14em;text-align:center;padding-bottom:2px}
+.mb{font-size:18px;align-self:center}
+.cell{border:1px solid var(--lcd-ghost);border-radius:4px;padding:6px 7px;min-height:62px;
+  display:flex;flex-direction:column;justify-content:space-between;background:rgba(0,0,0,.18)}
+.cell .st{font-size:15px;letter-spacing:.08em;display:flex;align-items:center;gap:6px}
+.cell .dot{width:8px;height:8px;border-radius:50%;background:var(--lcd-ghost)}
+.cell .det{font-size:12px;color:var(--lcd-dim);line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cell.open{border-color:var(--lcd-glow);background:rgba(255,181,71,.10);animation:pulse 2.4s ease-in-out infinite}
+.cell.open .dot{background:var(--lcd-glow);box-shadow:0 0 8px var(--lcd-glow)}
+.cell.open .det{color:var(--lcd-glow)}
+.cell.off{opacity:.35}
+@keyframes pulse{50%{background:rgba(255,181,71,.18)}}
+
+.lcd-status{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;border-top:1px dashed var(--lcd-ghost);padding-top:7px}
+.lcd-status span b{font-weight:normal;color:var(--lcd-glow)}
+.lcd-status span{color:var(--lcd-dim)}
+.meter{display:inline-flex;gap:2px;vertical-align:middle;margin-left:4px}
+.meter i{width:5px;height:10px;background:var(--lcd-ghost)}
+.meter i.on{background:var(--lcd-glow);box-shadow:0 0 4px var(--lcd-glow)}
+.sound-btn{position:relative;z-index:2;margin-top:8px;width:100%;font-family:var(--mono);font-size:14px;letter-spacing:.06em;
+  color:#1a1307;background:var(--lcd-glow);border:none;border-radius:4px;padding:8px 10px;cursor:pointer;animation:blink 1.4s ease-in-out infinite}
+.sound-btn.hide{display:none}
+@keyframes blink{50%{opacity:.55}}
+.lcd-msg{font-size:13px;margin-top:6px;min-height:16px;color:var(--lcd-glow)}
+
+/* ---------- controls ---------- */
+.ctrl{display:flex;flex-direction:column;gap:14px;justify-content:space-between}
+.leds{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;text-align:center}
+.led{display:flex;flex-direction:column;align-items:center;gap:5px;font-size:11px;letter-spacing:.14em;color:var(--engrave)}
+.led i{width:12px;height:12px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#4a5057,var(--led-off));
+  box-shadow:0 0 0 2px #0d0f11, 0 1px 0 3px rgba(255,255,255,.04)}
+.led.on i{background:radial-gradient(circle at 35% 35%,#fff 0 8%,var(--c) 45%);box-shadow:0 0 0 2px #0d0f11,0 0 10px var(--c),0 0 18px var(--c)}
+.led.r{--c:var(--red)}.led.g{--c:var(--green)}.led.a{--c:var(--amber)}.led.b{--c:var(--blue)}.led.s{--c:var(--sea)}
+
+.power-wrap{display:flex;align-items:center;gap:14px}
+.power{width:78px;height:78px;border-radius:50%;border:none;cursor:pointer;flex:none;
+  background:radial-gradient(circle at 40% 30%,#4a525b,#262b30 60%,#14171a);
+  box-shadow:0 0 0 4px #0c0e10, 0 0 0 5px #3a4148, 0 6px 14px rgba(0,0,0,.7), 0 1px 0 rgba(255,255,255,.1) inset;
+  display:grid;place-items:center;transition:transform .08s}
+.power:active{transform:translateY(1px) scale(.98)}
+.power svg{width:30px;height:30px;stroke:#6b747d;stroke-width:2.4;fill:none;stroke-linecap:round;transition:stroke .2s,filter .2s}
+.power.on svg{stroke:var(--green);filter:drop-shadow(0 0 6px var(--green))}
+.power-lbl{font-size:13px;letter-spacing:.2em;color:var(--engrave);line-height:1.4}
+.power-lbl b{display:block;font-size:20px;color:var(--engrave-hi);letter-spacing:.12em}
+
+.btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.btn{font-family:var(--label);font-weight:600;font-size:14px;letter-spacing:.18em;color:var(--btn-text);
+  padding:11px 6px 9px;border-radius:6px;border:1px solid #0b0c0e;cursor:pointer;
+  background:linear-gradient(180deg,var(--btn-hi),var(--btn));
+  box-shadow:0 1px 0 rgba(255,255,255,.12) inset, 0 3px 0 #0d0f11, 0 5px 8px rgba(0,0,0,.5)}
+.btn:active{transform:translateY(2px);box-shadow:0 1px 0 rgba(255,255,255,.08) inset,0 1px 0 #0d0f11}
+.btn:disabled{opacity:.4;cursor:default}
+.btn.accent{color:#08221f;background:linear-gradient(180deg,#38dcc8,#18a897)}
+.btn:focus-visible,.power:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--sea);outline-offset:2px}
+
+/* ---------- station strip (callsign / grid / radio) ---------- */
+.strip{display:grid;grid-template-columns:1.1fr .8fr 2fr auto;gap:12px;margin-top:20px;align-items:end}
+.field label,.set label{display:block;font-size:12px;letter-spacing:.2em;color:var(--engrave);text-transform:uppercase;margin-bottom:5px}
+.inset{width:100%;font-family:var(--mono);font-size:18px;color:var(--lcd-glow);background:#0d0f11;
+  border:1px solid #000;border-radius:6px;padding:9px 10px;
+  box-shadow:0 2px 6px rgba(0,0,0,.8) inset, 0 1px 0 rgba(255,255,255,.06)}
+select.inset{font-size:15px;appearance:none;padding-right:30px;
+  background-image:linear-gradient(45deg,transparent 50%,var(--engrave) 50%),linear-gradient(135deg,var(--engrave) 50%,transparent 50%);
+  background-position:calc(100% - 16px) 55%,calc(100% - 11px) 55%;background-size:5px 5px;background-repeat:no-repeat}
+.inset.bad{border-color:var(--red)}
+.note{font-size:14px;color:var(--engrave);margin-top:8px;line-height:1.35;font-family:system-ui,sans-serif}
+.note b{color:var(--sea);font-weight:600}
+
+/* ---------- menu drawer ---------- */
+.drawer{margin-top:18px;border-radius:12px;background:linear-gradient(180deg,#181b1f,#121417);border:1px solid #2a2f35;
+  box-shadow:0 10px 30px rgba(0,0,0,.5);overflow:hidden;display:none}
+.drawer.open{display:block}
+.tabs{display:flex;border-bottom:1px solid #2a2f35;overflow-x:auto}
+.tab{flex:1 0 auto;white-space:nowrap;background:none;border:none;color:var(--engrave);font-family:var(--label);font-weight:600;
+  font-size:14px;letter-spacing:.2em;padding:13px 10px;cursor:pointer;border-bottom:2px solid transparent}
+.tab.on{color:var(--engrave-hi);border-bottom-color:var(--sea)}
+.pane{display:none;padding:18px 20px 6px}
+.pane.on{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px 18px}
+.set .inset{font-size:15px}
+.set.wide{grid-column:1/-1}
+.chk{display:flex;align-items:center;gap:9px;font-family:system-ui,sans-serif;font-size:14px;color:var(--engrave-hi);cursor:pointer;padding:8px 0}
+.chk input{width:18px;height:18px;accent-color:var(--sea)}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.drawer-foot{display:flex;justify-content:flex-end;gap:10px;padding:14px 20px 18px;flex-wrap:wrap;align-items:center}
+.drawer-foot .note{margin:0 auto 0 0}
+.hide{display:none!important}
+
+/* ---------- monitor ---------- */
+.mon-wrap{margin-top:18px}
+.mon-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.mon-head span{font-size:12px;letter-spacing:.2em;color:var(--engrave)}
+.mon{height:230px;overflow:auto;border-radius:8px;background:var(--mon-bg);color:var(--mon);font-family:var(--mono);
+  font-size:13px;padding:10px 12px;border:1px solid #000;box-shadow:0 2px 10px rgba(0,0,0,.8) inset}
+.mon div{white-space:pre-wrap;word-break:break-all;line-height:1.45}
+.mon .t{color:var(--mon-dim)}
+.mon .k-TX{color:#ffd27a}.mon .k-ERR{color:#ff7b70}.mon .k-PROP{color:#7fd8ff}.mon .k-SYS{color:#b9c2cb}.mon .k-IGT{color:#c7a6ff}.mon .k-WX{color:#8ef0e0}
+.missed{margin-top:18px;border-radius:10px;border:1px solid #6b4a12;background:linear-gradient(180deg,#2a1d08,#1c1407);
+  padding:14px 16px;box-shadow:0 0 0 1px rgba(255,181,71,.15) inset}
+.missed.hide{display:none}
+.missed-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}
+.missed-head b{font-family:var(--label);letter-spacing:.2em;color:var(--lcd-glow);font-size:15px}
+.missed-head .btn{padding:7px 12px 6px;font-size:12px}
+#missed-list div{font-family:var(--mono);font-size:13px;color:#f3d29a;padding:4px 0;border-top:1px dashed #4a3510;line-height:1.45}
+#missed-list div:first-child{border-top:none}
+#missed-list .live{color:var(--lcd-glow)}
+/* ---------- live map ---------- */
+.map-wrap{margin-top:18px}
+.map-wrap #map-when{font-family:var(--mono);font-size:12px;letter-spacing:.05em}
+.map-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.map-bar .chips{display:flex;flex-wrap:wrap;gap:6px 14px}
+.map-bar .chk{font-size:13px;color:var(--engrave-hi)}
+.map-count{font-family:var(--mono);font-size:12px;color:var(--engrave)}
+.sw{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
+.sw.tep{background:#ffb547}.sw.duct{background:#20c7b4}.sw.es{background:#ff6bd6}
+.map-box{position:relative;height:440px;border-radius:8px;overflow:hidden;border:1px solid #000;background:#0e1114;
+  box-shadow:0 2px 10px rgba(0,0,0,.8) inset}
+#map{position:absolute;inset:0}
+.map-msg{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:500;pointer-events:none;
+  background:rgba(14,17,20,.85);color:var(--engrave-hi);border:1px solid var(--edge);border-radius:6px;
+  padding:6px 12px;font-size:13px;max-width:90%;text-align:center}
+.map-msg:empty{display:none}
+.map-legend{margin-top:6px;font-size:12px;color:#6c757e;line-height:1.5}
+.leaflet-container{background:#0e1114;font-family:system-ui,sans-serif}
+.leaflet-tooltip.tw-tip{background:#15181b;color:#e6edf3;border:1px solid #33393f;font-family:var(--mono);font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.6)}
+.leaflet-tooltip.tw-tip:before{display:none}
+@media (max-width:480px){ .map-box{height:340px} }
+.foot{margin-top:16px;font-size:13px;color:#5d656e;text-align:center;letter-spacing:.08em}
+
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(120%);max-width:min(560px,92vw);
+  background:#2a1512;color:#ffd9d4;border:1px solid #6a2a22;border-radius:8px;padding:11px 16px;font-family:system-ui,sans-serif;
+  font-size:14px;transition:transform .25s,opacity .25s;opacity:0;visibility:hidden;z-index:5;box-shadow:0 10px 30px rgba(0,0,0,.6)}
+.toast.ok{background:#0f2420;color:#c8fff4;border-color:#1f6a5f}
+.toast.show{transform:translateX(-50%) translateY(0);opacity:1;visibility:visible}
+
+@media (max-width:820px){
+  .main{grid-template-columns:1fr}
+  .ctrl{flex-direction:row;flex-wrap:wrap;align-items:center}
+  .leds{flex:1 1 100%}
+  .btns{flex:1}
+  .strip{grid-template-columns:1fr 1fr}
+  .strip .radio{grid-column:1/-1}
+  .strip .save{grid-column:1/-1}
+}
+@media (max-width:480px){
+  .tab{font-size:12px;letter-spacing:.1em;padding:12px 12px}
+  body{padding:14px 10px 40px}
+  .plate{padding:18px 14px 18px;border-radius:14px}
+  .brand h1{font-size:22px}
+  .model{text-align:left}
+  .lcd-call{font-size:26px}
+  .matrix{grid-template-columns:38px repeat(3,1fr);gap:4px}
+  .mb{font-size:14px}
+  .cell{padding:5px;min-height:56px}
+  .cell .st{font-size:13px}
+  .cell .det{font-size:11px;white-space:normal}
+  .power{width:64px;height:64px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="plate" aria-label="Tradewind face plate">
+    <i class="screw s1"></i><i class="screw s2"></i><i class="screw s3"></i><i class="screw s4"></i>
+    <div class="top">
+      <div class="brand">
+        <svg viewBox="0 0 34 20" aria-hidden="true"><path d="M1 7c4-4 8-4 12 0s8 4 12 0 6-3 8-2" stroke="#20c7b4" stroke-width="2.2" fill="none" stroke-linecap="round"/><path d="M1 14c4-4 8-4 12 0s8 4 12 0 6-3 8-2" stroke="#5d666f" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>
+        <h1 id="appname">TRADEWIND</h1>
+      </div>
+      <div class="model">TW-1 &middot; <b>2m / 70cm</b> propagation beacon &middot; AFSK1200 TNC</div>
+    </div>
+
+    <div class="main">
+      <div class="lcd-bezel">
+        <div class="lcd glow" id="lcd">
+          <div class="lcd-row1">
+            <div><span class="lcd-call" id="l-call">NOCALL</span> <span class="lcd-grid" id="l-grid">----</span></div>
+            <div class="lcd-clock"><small>UTC </small><span id="l-clock">--:--:--</span></div>
+          </div>
+          <div class="matrix" id="matrix" aria-live="polite"></div>
+          <div class="lcd-status">
+            <span>TNC <b id="l-tnc">---</b><span class="meter" id="meter"></span></span>
+            <span>RF <b id="l-rf">OFF</b></span>
+            <span>NET <b id="l-net">OFF</b></span>
+            <span>SPOTS <b id="l-spots">--</b></span>
+            <span>CHK <b id="l-chk">--:--</b></span>
+            <span>BCN <b id="l-bcn">--:--</b></span>
+            <span id="l-wxwrap" class="hide">WX <b id="l-wx">--:--</b></span>
+            <span id="l-qrgwrap" class="hide">QRG <b id="l-qrg">---</b></span>
+          </div>
+          <div class="lcd-msg" id="l-msg"></div>
+          <button class="sound-btn" id="b-enable-sound" type="button" title="Browsers block sound until you click the page">&#128263; CLICK HERE TO ENABLE SOUND ALERTS</button>
+        </div>
+      </div>
+
+      <div class="ctrl">
+        <div class="leds" role="group" aria-label="Status lights">
+          <div class="led g" id="led-pwr"><i></i>PWR</div>
+          <div class="led g" id="led-rx"><i></i>RX</div>
+          <div class="led r" id="led-tx"><i></i>TX</div>
+          <div class="led b" id="led-net"><i></i>NET</div>
+          <div class="led a" id="led-open"><i></i>OPEN</div>
+        </div>
+        <div class="power-wrap">
+          <button class="power" id="power" aria-label="Station power" title="Station ON / OFF">
+            <svg viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
+          </button>
+          <div class="power-lbl">STATION<b id="power-txt">OFF</b></div>
+        </div>
+        <div class="btns">
+          <button class="btn" id="b-bcn" title="Send position beacon now">BCN</button>
+          <button class="btn" id="b-test" title="Send a test bulletin">TEST</button>
+          <button class="btn" id="b-chk" title="Check PSKReporter now">CHECK</button>
+          <button class="btn accent" id="b-menu" aria-expanded="false" title="Settings">MENU</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="strip">
+      <div class="field"><label for="f-call">Callsign-SSID</label><input class="inset" id="f-call" data-k="call" placeholder="8P6XX-10" autocomplete="off" spellcheck="false"></div>
+      <div class="field"><label for="f-grid">Grid square</label><input class="inset" id="f-grid" data-k="grid" placeholder="GK03fd" autocomplete="off" spellcheck="false"></div>
+      <div class="field radio"><label for="f-preset">Radio / interface</label><select class="inset" id="f-preset" data-k="preset"></select></div>
+      <div class="field save"><button class="btn accent" id="b-save-top" style="width:100%">SAVE</button></div>
+    </div>
+    <div class="note" id="preset-note"></div>
+  </section>
+
+  <section class="drawer" id="drawer" aria-label="Settings">
+    <div class="tabs" role="tablist">
+      <button class="tab on" data-p="p-radio" role="tab">RADIO / TNC</button>
+      <button class="tab" data-p="p-station" role="tab">STATION</button>
+      <button class="tab" data-p="p-prop" role="tab">PROPAGATION</button>
+      <button class="tab" data-p="p-net" role="tab">APRS-IS</button>
+      <button class="tab" data-p="p-wx" role="tab">WEATHER</button>
+    </div>
+
+    <div class="pane on" id="p-radio">
+      <div class="set"><label>TNC type</label>
+        <select class="inset" data-k="tnc" id="f-tnc">
+          <option value="sound">Built-in sound modem (AFSK 1200)</option>
+          <option value="kiss_tcp">KISS over TCP (Direwolf, UZ7HO)</option>
+          <option value="kiss_serial">KISS serial (radio TNC, Mobilinkd)</option>
+          <option value="none">None - APRS-IS only</option>
+        </select></div>
+      <div class="set m-sound"><label>Audio input (from radio)</label><select class="inset" data-k="audio_in" id="f-ain"></select></div>
+      <div class="set m-sound"><label>Audio output (to radio)</label><select class="inset" data-k="audio_out" id="f-aout"></select></div>
+      <div class="set m-sound"><label>Sample rate</label>
+        <select class="inset" data-k="sample_rate" data-num><option>48000</option><option>44100</option></select></div>
+      <div class="set m-sound"><label>PTT method</label>
+        <select class="inset" data-k="ptt" id="f-ptt">
+          <option value="VOX">VOX / interface keys itself</option>
+          <option value="RTS">Serial RTS</option>
+          <option value="DTR">Serial DTR</option>
+          <option value="CIV">Icom CI-V command (CAT)</option>
+          <option value="YAESU_CAT">Yaesu CAT command (TX1;)</option>
+          <option value="CM108">CM108 GPIO (Linux)</option>
+          <option value="RIGCTLD">Hamlib rigctld (CAT)</option>
+        </select></div>
+      <div class="set m-sound m-ptt"><label id="ptt-port-lbl">PTT port</label><input class="inset" data-k="ptt_port" list="serial-list" placeholder="COM3 or /dev/ttyUSB0"></div>
+      <div class="set m-sound m-cat"><label>CAT baud rate</label>
+        <select class="inset" data-k="cat_baud" data-num><option>4800</option><option>9600</option><option>19200</option><option>38400</option><option>115200</option></select></div>
+      <div class="set m-sound m-civ"><label>CI-V address (hex)</label><input class="inset" data-k="civ_addr" maxlength="2" placeholder="7C"></div>
+      <div class="set m-sound"><label class="chk"><input type="checkbox" data-k="cat_tune" id="f-cattune"> Tune the radio to the APRS frequency (CAT)</label></div>
+      <div class="set m-sound m-tune"><label>APRS frequency (MHz)</label>
+        <select class="inset" data-k="aprs_freq" id="f-freq"><option value="144.390">144.390</option></select></div>
+      <div class="set m-sound m-tune m-custom"><label>Custom frequency (MHz)</label><input class="inset" data-k="aprs_freq_custom" placeholder="144.390" inputmode="decimal"></div>
+      <div class="set m-sound m-tune"><label class="chk"><input type="checkbox" data-k="cat_restore"> Put the radio back on its old frequency when the station turns off</label></div>
+      <div class="set wide note m-sound m-tune" id="tune-note"></div>
+      <div class="set m-sound m-cm108"><label>CM108 GPIO pin</label><input class="inset" data-k="cm108_gpio" data-num type="number" min="1" max="8"></div>
+      <div class="set m-sound m-ptt m-line"><label class="chk"><input type="checkbox" data-k="ptt_invert"> Invert PTT line</label></div>
+      <div class="set m-sound"><label>TX delay (ms)</label><input class="inset" data-k="txdelay" data-num type="number" min="50" max="1000" step="10"></div>
+      <div class="set m-sound"><label>TX tail (ms)</label><input class="inset" data-k="txtail" data-num type="number" min="10" max="500" step="10"></div>
+      <div class="set m-sound"><label>TX audio level (0.05 - 1.0)</label><input class="inset" data-k="tx_level" data-num type="number" min="0.05" max="1" step="0.05"></div>
+      <div class="set m-kiss_tcp"><label>KISS TCP host:port</label><input class="inset" data-k="kiss_addr" placeholder="127.0.0.1:8001"></div>
+      <div class="set m-kiss_serial"><label>Serial port</label><input class="inset" data-k="kiss_serial" list="serial-list" placeholder="COM5 or /dev/ttyACM0"></div>
+      <div class="set m-kiss_serial"><label>Baud rate</label>
+        <select class="inset" data-k="kiss_baud" data-num><option>9600</option><option>19200</option><option>38400</option><option>57600</option><option>115200</option></select></div>
+      <div class="set m-rf"><label>RF path</label><input class="inset" data-k="rf_path" placeholder="WIDE2-1"></div>
+      <div class="set m-rf"><label class="chk"><input type="checkbox" data-k="rf_announce"> Transmit alerts on RF</label></div>
+      <div class="set m-rf"><label>Use RF</label>
+        <select class="inset" data-k="rf_when" id="f-rfwhen">
+          <option value="always">Always (RF + APRS-IS)</option>
+          <option value="selected">Only while these modes are open</option>
+        </select></div>
+      <div class="set m-rf m-rfsel"><label>Switch RF on for</label><div class="chips">
+        <label class="chk"><input type="checkbox" data-list="rf_modes" value="TEP"> TEP</label>
+        <label class="chk"><input type="checkbox" data-list="rf_modes" value="TROPO"> Tropo duct</label>
+        <label class="chk"><input type="checkbox" data-list="rf_modes" value="ES"> Sporadic-E</label></div></div>
+      <div class="set wide note" id="dev-note"></div>
+    </div>
+
+    <div class="pane" id="p-station">
+      <div class="set"><label>APRS symbol (table + code)</label><input class="inset" data-k="symbol" maxlength="2" placeholder="/-"></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="beacon"> Send position beacon</label></div>
+      <div class="set"><label>Beacon every (minutes)</label><input class="inset" data-k="beacon_min" data-num type="number" min="10" max="120"></div>
+      <div class="set wide"><label>Beacon comment</label><input class="inset" data-k="beacon_comment" maxlength="43"></div>
+      <div class="set wide note">Your position is the centre of your grid square, so a 6-character grid places you within about 5 km. Use a 4-character grid for a rougher position.</div>
+    </div>
+
+    <div class="pane" id="p-prop">
+      <div class="set"><label>Bands</label><div class="chips">
+        <label class="chk"><input type="checkbox" data-list="bands" value="2m"> 2m</label>
+        <label class="chk"><input type="checkbox" data-list="bands" value="70cm"> 70cm</label></div></div>
+      <div class="set"><label>Watch paths to</label><div class="chips">
+        <label class="chk"><input type="checkbox" data-list="regions" value="NA"> N. America</label>
+        <label class="chk"><input type="checkbox" data-list="regions" value="EU"> Europe</label>
+        <label class="chk"><input type="checkbox" data-list="regions" value="LA"> Latin America</label></div></div>
+      <div class="set"><label>Watch modes</label><div class="chips">
+        <label class="chk"><input type="checkbox" data-list="watch_modes" value="TEP"> TEP</label>
+        <label class="chk"><input type="checkbox" data-list="watch_modes" value="TROPO"> Tropo duct</label>
+        <label class="chk"><input type="checkbox" data-list="watch_modes" value="ES"> Sporadic-E</label></div></div>
+      <div class="set wide note">Modes are best guesses from each path: <b>TEP</b> = to South America across the equator (evenings); <b>Tropo duct</b> = 70cm, paths over 2,300 km, trans-Atlantic, or outside Es season; <b>Sporadic-E</b> = 2m, 800&ndash;2,300 km, May&ndash;Aug and Dec&ndash;Jan, daytime/evening.</div>
+      <div class="set"><label>Look back (minutes)</label><input class="inset" data-k="window" data-num type="number" min="15" max="240"></div>
+      <div class="set"><label>Check every (minutes, min 5)</label><input class="inset" data-k="interval" data-num type="number" min="5" max="60"></div>
+      <div class="set"><label>Min path length (km)</label><input class="inset" data-k="min_km" data-num type="number" min="200" max="5000" step="50"></div>
+      <div class="set"><label>Paths needed to call it open</label><input class="inset" data-k="min_paths" data-num type="number" min="1" max="20"></div>
+      <div class="set"><label>Single path that counts alone (km)</label><input class="inset" data-k="strong_km" data-num type="number" min="500" max="8000" step="50"></div>
+      <div class="set"><label>Repeat bulletin while open (min)</label><input class="inset" data-k="repeat" data-num type="number" min="10" max="240"></div>
+      <div class="set"><label>Bulletin group (BLNn + group)</label><input class="inset" data-k="group" maxlength="5"></div>
+      <div class="set"><label>"Near me" radius (km)</label><input class="inset" data-k="local_km" data-num type="number" min="50" max="1000" step="25"></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="announce_close"> Announce when an opening closes</label></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="alert_sound"> Sound alert when a band opens</label></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="alert_voice"> Speak the opening (e.g. "Two metre TEP open")</label></div>
+      <div class="set"><label>Sound alerts for</label><div class="chips">
+        <label class="chk"><input type="checkbox" data-list="alert_modes" value="TEP"> TEP</label>
+        <label class="chk"><input type="checkbox" data-list="alert_modes" value="TROPO"> Tropo duct</label>
+        <label class="chk"><input type="checkbox" data-list="alert_modes" value="ES"> Sporadic-E</label></div></div>
+      <div class="set"><button class="btn" id="b-sound" type="button" style="width:100%">TEST SOUND</button></div>
+    </div>
+
+    <div class="pane" id="p-net">
+      <div class="set"><label class="chk"><input type="checkbox" data-k="aprsis"> Connect to APRS-IS</label></div>
+      <div class="set"><label>Server</label><input class="inset" data-k="server" placeholder="rotate.aprs2.net"></div>
+      <div class="set"><label>Passcode (blank = auto)</label><input class="inset" data-k="passcode" placeholder="auto" inputmode="numeric"></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="igate"> RX iGate (gate heard RF packets to APRS-IS)</label></div>
+    </div>
+
+
+    <div class="pane" id="p-wx">
+      <div class="set wide"><label class="chk"><input type="checkbox" data-k="wx_enabled"> Send scheduled weather bulletins</label></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="wx_general"> General forecast</label>
+        <input class="inset" data-k="wx_general_times" placeholder="08:00"></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="wx_marine"> Marine forecast</label>
+        <input class="inset" data-k="wx_marine_times" placeholder="05:30, 12:00"></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="wx_aviation"> Aviation (METAR / TAF / SIGMET)</label>
+        <input class="inset" data-k="wx_aviation_times" placeholder="06:30, 18:00"></div>
+      <div class="set"><label>Place name</label><input class="inset" data-k="wx_place" maxlength="16"></div>
+      <div class="set"><label>Local time = UTC +/-</label><input class="inset" data-k="wx_utc_offset" data-num type="number" min="-12" max="14" step="0.5"></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="wx_rf"> Also send on RF</label></div>
+      <div class="set"><label>Forecast lat / lon</label><div style="display:flex;gap:6px">
+        <input class="inset" data-k="wx_lat" data-num type="number" step="0.01"><input class="inset" data-k="wx_lon" data-num type="number" step="0.01"></div></div>
+      <div class="set"><label>Marine point lat / lon</label><div style="display:flex;gap:6px">
+        <input class="inset" data-k="wx_marine_lat" data-num type="number" step="0.01"><input class="inset" data-k="wx_marine_lon" data-num type="number" step="0.01"></div></div>
+      <div class="set"><label>Aerodrome (ICAO)</label><input class="inset" data-k="wx_icao" maxlength="4"></div>
+      <div class="set"><label>FIR for SIGMETs</label><input class="inset" data-k="wx_fir" maxlength="4"></div>
+      <div class="set wide"><label class="chk"><input type="checkbox" data-k="tc_enabled"> Tropical cyclone alerts (National Hurricane Center, checked every 20 min)</label></div>
+      <div class="set"><label>Alert radius (km)</label><input class="inset" data-k="tc_radius_km" data-num type="number" min="200" max="4000" step="100"></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="tc_rf"> Also send storm alerts on RF</label></div>
+      <div class="set wide"><label>Send now</label><div class="btns" style="grid-template-columns:repeat(4,1fr)">
+        <button class="btn" type="button" data-wx="general">GENERAL</button>
+        <button class="btn" type="button" data-wx="marine">MARINE</button>
+        <button class="btn" type="button" data-wx="aviation">AVIATION</button>
+        <button class="btn" type="button" data-wx="tropical">STORMS</button></div></div>
+      <div class="set wide note">Bulletins go out as <b>BLNnWX</b> (general), <b>BLNnMAR</b> (marine), <b>BLNnAVN</b> (aviation) and <b>BLNnTC</b> (tropical cyclone, sent with each new NHC advisory while a storm is within the radius or Barbados is under a watch/warning).
+        Data: Open-Meteo forecasts and aviationweather.gov METAR/TAF/SIGMET. These are automated, unofficial summaries &ndash;
+        for official forecasts and warnings use the Barbados Meteorological Services. Grantley Adams (TBPB) lies in the Piarco FIR (TTZP).</div>
+      <div class="set wide note" id="wx-last"></div>
+    </div>
+    <div class="drawer-foot">
+      <div class="note" id="save-note">Saving restarts the station if it's on.</div>
+      <button class="btn" id="b-close">CLOSE</button>
+      <button class="btn accent" id="b-save">SAVE</button>
+    </div>
+  </section>
+
+  <section class="missed hide" id="missed" aria-live="polite">
+    <div class="missed-head"><b id="missed-title">WHILE YOU WERE AWAY</b>
+      <button class="btn" type="button" id="b-missed-ok">DISMISS</button></div>
+    <div id="missed-list"></div>
+  </section>
+
+  <section class="map-wrap" aria-label="Live propagation map">
+    <div class="mon-head"><span>LIVE PROPAGATION MAP</span><span id="map-when">--</span></div>
+    <div class="map-bar">
+      <div class="chips" role="group" aria-label="Map filters">
+        <label class="chk"><input type="checkbox" data-mf="2m" checked> 2m</label>
+        <label class="chk"><input type="checkbox" data-mf="70cm" checked> 70cm</label>
+        <label class="chk"><input type="checkbox" data-mf="TEP" checked> <i class="sw tep"></i>TEP</label>
+        <label class="chk"><input type="checkbox" data-mf="TROPO" checked> <i class="sw duct"></i>Duct</label>
+        <label class="chk"><input type="checkbox" data-mf="ES" checked> <i class="sw es"></i>Es</label>
+      </div>
+      <span class="map-count" id="map-count"></span>
+    </div>
+    <div class="map-box"><div id="map"></div><div class="map-msg" id="map-msg">Loading map...</div></div>
+    <div class="map-legend">Lines join Caribbean stations to the stations that heard them (or that they heard) on PSKReporter during the look-back window. Solid = 2m, dashed = 70cm. Updated after every check (every 5 minutes by default).</div>
+  </section>
+
+  <section class="mon-wrap">
+    <div class="mon-head"><span>PACKET MONITOR</span><span id="near"></span></div>
+    <div class="mon" id="mon" role="log" aria-live="polite"></div>
+  </section>
+  <div class="foot" id="foot">Tradewind &middot; by Brandon St Rose (8P5DG) &amp; Kammie Holder (8P5AB) &middot; MIT License &middot; spot data from PSKReporter</div>
+</div>
+<datalist id="serial-list"></datalist>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const REG = {NA:'N.AMER', EU:'EUROPE', LA:'LAT.AM'};
+let cfg = {}, presets = [], logSince = 0, running = false, dirty = false, lastState = null;
+
+function toast(msg, ok, ms){ const t=$('#toast'); t.textContent=msg; t.className='toast show'+(ok?' ok':'');
+  clearTimeout(t._h); t._h=setTimeout(()=>t.className='toast'+(ok?' ok':''), ms||4200); }
+async function api(path, body){
+  const r = await fetch(path, body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  return r.json();
+}
+const pad = n => String(n).padStart(2,'0');
+const hms = d => `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+const mmss = s => s<=0 ? '00:00' : `${pad(Math.floor(s/60))}:${pad(Math.floor(s%60))}`;
+
+/* ---------- matrix ---------- */
+function drawMatrix(cells){
+  const m = $('#matrix'); let h = '<div></div>' + Object.values(REG).map(r=>`<div class="mh">${r}</div>`).join('');
+  for (const band of ['2m','70cm']){
+    h += `<div class="mb">${band.toUpperCase()}</div>`;
+    for (const reg of ['NA','EU','LA']){
+      const c = (cells||[]).find(x=>x.band===band && x.region===reg) || {enabled:true};
+      const cls = c.open ? 'cell open' : (c.enabled===false ? 'cell off' : 'cell');
+      const st = c.open ? 'OPEN' : (c.enabled===false ? 'OFF' : (running ? 'QUIET' : '----'));
+      const MODE_SHORT = {TEP:'TEP', TROPO:'DUCT', ES:'Es'};
+      const det = c.open ? `${MODE_SHORT[c.prop_mode]||''} ${c.km}km ${c.paths}p<br>${c.tx}&gt;${c.rx}` : '<span class="ghost">888 8888km</span>';
+      h += `<div class="${cls}" title="${c.open?`${c.mode_name}: ${c.tx} (${c.tx_grid}) -> ${c.rx} (${c.rx_grid}) ${c.km} km ${c.mode} ${c.snr} dB`:''}"><div class="st"><i class="dot"></i>${st}</div><div class="det">${det}</div></div>`;
+    }
+  }
+  m.innerHTML = h;
+}
+
+/* ---------- form <-> config ---------- */
+function fillForm(c){
+  $$('[data-k]').forEach(el=>{
+    const v = c[el.dataset.k];
+    if (el.type==='checkbox') el.checked = !!v;
+    else if (v!==undefined && v!==null){
+      if (el.tagName==='SELECT' && ![...el.options].some(o=>o.value==String(v)) && v!==''){
+        el.add(new Option(String(v)+' (saved)', v));
+      }
+      el.value = v;
+    }
+  });
+  $$('[data-list]').forEach(el=> el.checked = (c[el.dataset.list]||[]).includes(el.value));
+  updateVisibility(); showPresetNote();
+}
+function readForm(){
+  const o = {};
+  $$('[data-k]').forEach(el=>{
+    let v = el.type==='checkbox' ? el.checked : el.value.trim();
+    if (el.hasAttribute('data-num') && v!=='') v = Number(v);
+    o[el.dataset.k] = v;
+  });
+  for (const k of ['bands','regions','rf_modes','alert_modes','watch_modes']) o[k] = $$(`[data-list="${k}"]`).filter(e=>e.checked).map(e=>e.value);
+  o.call = (o.call||'').toUpperCase();
+  return o;
+}
+function updateVisibility(){
+  const t = $('#f-tnc').value, p = $('#f-ptt').value;
+  $$('.m-sound').forEach(e=>e.classList.toggle('hide', t!=='sound'));
+  $$('.m-kiss_tcp').forEach(e=>e.classList.toggle('hide', t!=='kiss_tcp'));
+  $$('.m-kiss_serial').forEach(e=>e.classList.toggle('hide', t!=='kiss_serial'));
+  $$('.m-rf').forEach(e=>e.classList.toggle('hide', t==='none'));
+  if (t!=='none') $$('.m-rfsel').forEach(e=>e.classList.toggle('hide', $('#f-rfwhen').value!=='selected'));
+  if (t==='sound'){
+    $$('.m-ptt').forEach(e=>e.classList.toggle('hide', p==='VOX'));
+    $$('.m-cm108').forEach(e=>e.classList.toggle('hide', p!=='CM108'));
+    $$('.m-cat').forEach(e=>e.classList.toggle('hide', !['CIV','YAESU_CAT'].includes(p)));
+    $$('.m-civ').forEach(e=>e.classList.toggle('hide', p!=='CIV'));
+    $$('.m-line').forEach(e=>e.classList.toggle('hide', !['RTS','DTR'].includes(p)));
+    const tune = $('#f-cattune').checked, f = $('#f-freq').value;
+    $$('.m-tune').forEach(e=>e.classList.toggle('hide', !tune));
+    $$('.m-custom').forEach(e=>e.classList.toggle('hide', !tune || f!=='custom'));
+    const canTune = ['CIV','YAESU_CAT','RIGCTLD'].includes(p);
+    $('#tune-note').innerHTML = !canTune
+      ? '<b>Automatic tuning needs a CAT link.</b> Set PTT method to Icom CI-V, Yaesu CAT or Hamlib rigctld - or set the frequency on the radio by hand. The FT-2980 and other radios without a CAT port must be tuned by hand.'
+      : 'At power-on Tradewind sets the radio to this frequency in FM data mode (FM-D / DATA-FM).' +
+        (f==='145.825' ? ' <b>ISS:</b> set RF path to <b>ARISS</b>, and only transmit while the ISS is overhead.' : '');
+    $('#ptt-port-lbl').textContent = p==='CM108' ? 'HID device' : p==='RIGCTLD' ? 'rigctld host:port' :
+      p==='CIV' ? 'CI-V / CAT serial port' : p==='YAESU_CAT' ? 'CAT serial port' : 'PTT serial port';
+  }
+}
+function showPresetNote(){
+  const p = presets.find(x=>x.id===$('#f-preset').value);
+  $('#preset-note').innerHTML = p ? `<b>${p.label}:</b> ${p.note}` : '';
+}
+function applyPreset(id){
+  const p = presets.find(x=>x.id===id); if(!p) return;
+  for (const [k,v] of Object.entries(p)){
+    if (['id','label','note'].includes(k)) continue;
+    const el = $(`[data-k="${k}"]`); if(!el) continue;
+    if (el.type==='checkbox') el.checked=!!v; else el.value=v;
+  }
+  if (p.tnc!=='none' && p.rf_announce===undefined) $('[data-k="rf_announce"]').checked = true;
+  updateVisibility(); showPresetNote(); markDirty();
+}
+function markDirty(){ dirty = true; $('#b-save-top').textContent='SAVE *'; $('#b-save').textContent='SAVE *'; }
+
+async function loadDevices(){
+  if (document.body.dataset.android) return;
+  const d = await api('/api/devices');
+  const fill = (sel, list, cur) => {
+    sel.innerHTML = '<option value="">System default</option>' +
+      list.map(a=>`<option value="${a.index}">${a.index}: ${a.name}</option>`).join('');
+    if (cur!==undefined && cur!=='') { if(![...sel.options].some(o=>o.value==String(cur))) sel.add(new Option(cur+' (saved)',cur)); sel.value=cur; }
+  };
+  fill($('#f-ain'), d.audio.filter(a=>a.inputs>0), cfg.audio_in);
+  fill($('#f-aout'), d.audio.filter(a=>a.outputs>0), cfg.audio_out);
+  $('#serial-list').innerHTML = d.serial.map(p=>`<option value="${p.device}">${p.desc||''}</option>`).join('');
+  const notes = [d.audio_error, d.serial_error].filter(Boolean);
+  $('#dev-note').textContent = notes.length ? notes.join(' · ') + '. Install with: pip install sounddevice pyserial numpy' :
+    `${d.audio.length} audio device(s), ${d.serial.length} serial port(s) found.`;
+}
+
+async function save(){
+  const o = readForm();
+  const r = await api('/api/config', o);
+  dirty = false; $('#b-save-top').textContent='SAVE'; $('#b-save').textContent='SAVE';
+  if (r.errors && r.errors.length) toast(r.errors[0]); else toast('Settings saved', true);
+  $('#f-call').classList.toggle('bad', (r.errors||[]).some(e=>e.includes('callsign')));
+  $('#f-grid').classList.toggle('bad', (r.errors||[]).some(e=>e.includes('grid')));
+}
+
+/* ---------- state poll ---------- */
+function led(id, on){ $(id).classList.toggle('on', !!on); }
+async function poll(){
+  let s; try { s = await api('/api/state?since='+logSince); } catch(e){ $('#l-msg').textContent='NO LINK TO APP'; return; }
+  lastState = s; running = s.running;
+  if (s.platform==='android' && !document.body.dataset.android) androidMode();
+  if (!Object.keys(cfg).length){ cfg = s.config; fillForm(cfg); }
+  cfg = s.config;
+  document.title = s.app; $('#appname').textContent = s.app.toUpperCase();
+  $('#foot').textContent = `${s.app} ${s.version} · by Brandon St Rose (8P5DG) & Kammie Holder (8P5AB) · MIT License · spot data from PSKReporter`;
+  $('#l-call').textContent = cfg.call || 'NOCALL';
+  $('#l-grid').textContent = cfg.grid || '----';
+  $('#power').classList.toggle('on', running);
+  $('#power-txt').textContent = running ? 'ON' : 'OFF';
+  ['#b-bcn','#b-test','#b-chk'].forEach(b=>$(b).disabled = !running);
+  drawMatrix(s.matrix);
+  if (running) alertOpenings(s.matrix); else prevOpen = null;
+  if (s.tc){
+    if (prevTc !== null && s.tc.seq > prevTc && s.tc.alerts.length){
+      const first = s.tc.alerts[0];
+      toast('🌀 ' + first.slice(0,3).join(' / '), false, 20000);
+      playAlert('Tropical cyclone alert. ' + (first[1]||first[0]), 'tc');
+    }
+    prevTc = s.tc.seq;
+  }
+  const now = Date.now()/1000, t = s.tnc;
+  $('#l-tnc').textContent = !running ? 'OFF' : (t ? (t.kind==='Sound modem'?'SOUND':t.kind==='APRS-IS only'?'NONE':t.kind.toUpperCase()) : '---');
+  const lvl = t && t.audio_level ? Math.min(8, Math.round(Math.sqrt(t.audio_level)*16)) : 0;
+  $('#meter').innerHTML = (t && t.kind==='Sound modem') ? Array.from({length:8},(_,i)=>`<i class="${i<lvl?'on':''}"></i>`).join('') : '';
+  const is = s.aprsis;
+  $('#l-rf').textContent = s.rf || 'OFF';
+  const wxn = s.wx && s.wx.enabled ? Object.entries(s.wx.next||{}) : [];
+  $('#l-wxwrap').classList.toggle('hide', !wxn.length);
+  if (wxn.length){ wxn.sort((a,b)=>a[1].localeCompare(b[1])); $('#l-wx').textContent = wxn[0][1] + ' ' + ({general:'GEN',marine:'MAR',aviation:'AVN'})[wxn[0][0]]; }
+  const last = s.wx ? s.wx.last || {} : {};
+  $('#wx-last').innerHTML = Object.entries(last).map(([k,v])=>`<b>Last ${k}</b> (${hms(new Date(v.t*1000))} UTC): ${
+      Array.isArray(v.lines) ? v.lines.map(l=>l.replace(/</g,'&lt;')).join(' / ') : String(v.lines).replace(/</g,'&lt;')}`).join('<br>');
+  $('#l-net').textContent = !is ? 'OFF' : is.verified ? 'IS OK' : is.connected ? 'UNVER' : 'CONN..';
+  $('#l-spots').textContent = s.last_check ? `${s.car_spots}/${s.spots}` : '--';
+  $('#l-chk').textContent = s.next_check ? mmss(s.next_check-now) : '--:--';
+  $('#l-bcn').textContent = s.next_beacon ? mmss(s.next_beacon-now) : '--:--';
+  $('#l-qrgwrap').classList.toggle('hide', !(running && t && t.freq));
+  if (running && t && t.freq) $('#l-qrg').textContent = (t.freq/1e6).toFixed(3) + (t.cat && t.cat.startsWith('tuned') ? '' : '?');
+  const msg = s.check_error || (t && t.error) || (t && t.cat && t.cat.includes('failed') ? t.cat : '') || (is && is.error) || (!running && s.errors.length ? s.errors[0] : '') ||
+    (running && !s.last_check ? 'WAITING FOR FIRST CHECK...' : '') ||
+    (s.last_check ? `LAST CHECK ${hms(new Date(s.last_check*1000))} UTC` : 'PRESS POWER TO START');
+  $('#l-msg').textContent = msg.toUpperCase();
+  led('#led-pwr', running);
+  led('#led-rx', t && now - t.last_rx < 2);
+  led('#led-tx', t && t.tx_active);
+  led('#led-net', is && is.verified);
+  led('#led-open', s.matrix.some(c=>c.open));
+  $('#near').textContent = s.local && s.local.length ? `NEAR YOU: ${s.local[0].band} ${s.local[0].tx}>${s.local[0].rx} ${s.local[0].km}km` : '';
+  if (s.log.length){
+    const mon = $('#mon'), stick = mon.scrollTop + mon.clientHeight >= mon.scrollHeight - 30;
+    for (const e of s.log){
+      const d = document.createElement('div'); d.className = 'k-'+e.kind;
+      const tt = document.createElement('span'); tt.className='t'; tt.textContent = hms(new Date(e.t*1000))+' '+e.kind.padEnd(4)+' ';
+      d.append(tt, document.createTextNode(e.text)); mon.append(d);
+      logSince = Math.max(logSince, e.id);
+    }
+    while (mon.children.length > 400) mon.firstChild.remove();
+    if (stick) mon.scrollTop = mon.scrollHeight;
+  }
+}
+function androidMode(){
+  document.body.dataset.android = '1';
+  for (const v of ['sound','kiss_serial']){ const o=$(`#f-tnc option[value="${v}"]`); if(o){o.disabled=true; o.textContent+=' - PC only';} }
+  const keep = new Set(['aprsis_only','direwolf','uz7ho']);
+  [...$('#f-preset').options].forEach(o=>{ if(!keep.has(o.value)){ o.disabled=true; } });
+  $('#dev-note').textContent = 'Android: alerts go out over APRS-IS, or to a networked TNC such as Direwolf or UZ7HO via KISS TCP. Radios connected by USB or audio need the Windows/PC version.';
+}
+/* ---------- audio alert ---------- */
+let audioCtx = null, prevOpen = null, prevTc = null;
+let soundReady = false, pendingAlert = null;
+function unlockAudio(){
+  try { if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume(); } catch(e){}
+  try { if ('speechSynthesis' in window && window.SpeechSynthesisUtterance){      // prime speech with a silent utterance
+          const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } } catch(e){}
+  soundReady = true;
+  const b = document.getElementById('b-enable-sound'); if (b) b.classList.add('hide');
+  if (pendingAlert){ const a = pendingAlert; pendingAlert = null; setTimeout(()=>playAlert(a.msg, a.kind), 300); }
+}
+function playAlert(msg, kind){
+  if (!soundReady){ pendingAlert = {msg, kind}; return; }          // played as soon as sound is enabled
+  if (cfg.alert_sound !== false){ chime(); if (kind==='tc') setTimeout(chime, 700); }
+  if (cfg.alert_voice !== false) setTimeout(()=>say(msg), kind==='tc' ? 1500 : 900);
+}
+function chime(){
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  [[880,0],[1175,0.18],[1568,0.36]].forEach(([f,dt])=>{       // rising three-note chime
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type='sine'; o.frequency.value=f; o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(0.0001,t0+dt); g.gain.exponentialRampToValueAtTime(0.35,t0+dt+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t0+dt+0.5); o.start(t0+dt); o.stop(t0+dt+0.55);
+  });
+}
+const SPOKEN = {NA:'North America', EU:'Europe', LA:'Latin America'};
+function say(text){
+  try { if (!('speechSynthesis' in window)) return;
+        const u = new SpeechSynthesisUtterance(text); u.rate = 0.95; speechSynthesis.speak(u); } catch(e){}
+}
+function alertOpenings(cells){
+  const nowOpen = new Set(cells.filter(c=>c.open).map(c=>c.band+':'+c.region));
+  if (prevOpen === null) prevOpen = new Set();      // page just opened: announce what's already open, once
+  const fresh = cells.filter(c=>c.open && !prevOpen.has(c.band+':'+c.region))
+                     .filter(c=>(cfg.alert_modes||['TEP','TROPO','ES']).includes(c.prop_mode));
+  prevOpen = nowOpen;
+  if (!fresh.length) return;
+  const MODE_SPOKEN = {TEP:'T E P', TROPO:'tropo duct', ES:'sporadic E'};
+  const msg = fresh.map(c=>`${c.band==='2m'?'Two metre':'Seventy centimetre'} ${MODE_SPOKEN[c.prop_mode]||''} open to ${SPOKEN[c.region]}`.replace(/  +/g,' ')).join('. ');
+  toast('🔔 ' + msg, true, 10000);
+  playAlert(msg, 'open');
+  try { if (document.hidden && 'Notification' in window && Notification.permission==='granted')
+          new Notification('Tradewind', {body: msg}); } catch(e){}
+}
+document.addEventListener('click', unlockAudio);   // browsers only allow sound after a click
+document.addEventListener('keydown', unlockAudio);
+$('#b-enable-sound').onclick = ()=>{ unlockAudio(); chime(); toast('Sound alerts enabled', true); };
+
+/* ---------- missed openings (last 6 h) ---------- */
+const LS_SEEN = 'tw_last_seen';
+function lsGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+function lsSet(k,v){ try { localStorage.setItem(k, v); } catch(e){} }
+let missedShownFor = null, awaySince = null;
+const fmtLocal = t => { const d = new Date(t*1000); return pad(d.getHours())+':'+pad(d.getMinutes()); };
+async function checkMissed(reason){
+  const lastSeen = parseFloat(lsGet(LS_SEEN) || '0');
+  let h; try { h = await api('/api/history?hours=6'); } catch(e){ return; }
+  const MODE = {TEP:'TEP', TROPO:'DUCT', ES:'Es'};
+  const ev = (h.events||[]).filter(e => !lastSeen || (e.end || h.now) > lastSeen)
+                           .filter(e => !lastSeen || e.start > lastSeen || (e.end && e.end > lastSeen))
+                           .sort((a,b)=>a.start-b.start);
+  if (!ev.length) return;
+  const sig = ev.map(e=>e.id+':'+(e.end||'')).join('|');
+  if (sig === missedShownFor) return;
+  missedShownFor = sig;
+  $('#missed-title').textContent = lastSeen ? `WHILE YOU WERE AWAY – ${ev.length} OPENING${ev.length>1?'S':''} (LAST 6 H)` : `OPENINGS IN THE LAST 6 HOURS (${ev.length})`;
+  $('#missed-list').innerHTML = ev.map(e=>{
+    const when = e.end ? `${fmtLocal(e.start)}–${fmtLocal(e.end)}` : `since ${fmtLocal(e.start)} (STILL OPEN)`;
+    const best = e.tx ? ` · best ${e.tx}&gt;${e.rx} ${e.km}km${e.dmode?' '+e.dmode:''}` : '';
+    return `<div class="${e.end?'':'live'}">${e.band.toUpperCase()} ${MODE[e.mode]||''} CAR–${({NA:'N.AMER',EU:'EUROPE',LA:'LAT.AM'})[e.region]||e.region} · ${when} · ${e.paths} path${e.paths==1?'':'s'}${best}</div>`;
+  }).join('');
+  $('#missed').classList.remove('hide');
+  const ended = ev.filter(e=>e.end).length;
+  if (lastSeen && ended && cfg.alert_voice !== false)
+    playAlert(`You missed ${ended} opening${ended>1?'s':''} in the last six hours.`, 'missed');
+}
+function markSeen(){ if (document.visibilityState === 'visible') lsSet(LS_SEEN, String(Date.now()/1000)); }
+document.addEventListener('visibilitychange', ()=>{
+  if (document.visibilityState === 'visible') checkMissed('return').then(markSeen);
+});
+$('#b-missed-ok').onclick = ()=>{ $('#missed').classList.add('hide'); markSeen(); };
+
+function tick(){ $('#l-clock').textContent = hms(new Date()); }
+
+/* ---------- live map ---------- */
+const MAP_COL = {TEP:'#ffb547', TROPO:'#20c7b4', ES:'#ff6bd6'};
+const MAP_NAME = {TEP:'TEP', TROPO:'Tropo duct', ES:'Sporadic-E'};
+let mapOffline = false, map = null, mapLayer = null, meMarker = null, mapLast = -1, mapFitted = false, mapData = null;
+const mapFilter = (()=>{ try { return JSON.parse(lsGet('tw_map_filter')||'null') || {}; } catch(e){ return {}; } })();
+function loadLeaflet(){
+  return new Promise((ok, bad)=>{
+    if (window.L) return ok();
+    const css = document.createElement('link'); css.rel='stylesheet';
+    css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    css.integrity='sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY='; css.crossOrigin='';
+    document.head.append(css);
+    const js = document.createElement('script');
+    js.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    js.integrity='sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo='; js.crossOrigin='';
+    js.onload = ok; js.onerror = bad; document.head.append(js);
+  });
+}
+async function initMap(){
+  $$('[data-mf]').forEach(el=>{ if (mapFilter[el.dataset.mf]===false) el.checked = false;
+    el.onchange = ()=>{ mapFilter[el.dataset.mf] = el.checked; lsSet('tw_map_filter', JSON.stringify(mapFilter)); drawMap(); }; });
+  try { await loadLeaflet(); }
+  catch(e){ mapOffline = true; $('#map-msg').textContent = 'Map needs an internet connection (could not load the map library).';
+             await refreshMap(); setInterval(refreshMap, 30000); setInterval(mapClock, 1000); return; }
+  map = L.map('map', {worldCopyJump:true, zoomSnap:0.5, attributionControl:true}).setView([16,-62], 3);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 10, minZoom: 2, subdomains:'abcd',
+    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a> &middot; spots: PSKReporter'
+  }).addTo(map);
+  mapLayer = L.layerGroup().addTo(map);
+  await refreshMap(); setInterval(refreshMap, 30000);
+  setInterval(mapClock, 1000);
+}
+async function refreshMap(){
+  let d; try { d = await api('/api/map'); } catch(e){ return; }
+  mapData = d;
+  if (d.last_check !== mapLast){ mapLast = d.last_check; drawMap(); }
+  mapClock();
+}
+function mapClock(){
+  const d = mapData; if (!d) return;
+  const now = Date.now()/1000;
+  $('#map-when').textContent = !d.last_check ? (d.running ? 'waiting for first check...' : 'station off') :
+    `updated ${hms(new Date(d.last_check*1000)).slice(0,5)} UTC` + (d.next_check ? ` · next ${mmss(d.next_check-now)}` : '');
+}
+const esc = v => String(v==null?'':v).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+function drawMap(){
+  if (!mapData) return;
+  const d = mapData;
+  const on = k => mapFilter[k] !== false;
+  const paths = (d.paths||[]).filter(p=>on(p.band) && on(p.pm));
+  const openTxt = (d.open||[]).map(o=>`${o.band} ${MAP_NAME[o.mode]||''} CAR-${({NA:'N.AMER',EU:'EUROPE',LA:'LAT.AM'})[o.region]||o.region}`);
+  $('#map-count').textContent = `${paths.length} path${paths.length===1?'':'s'}` + (openTxt.length ? ` · OPEN: ${openTxt.join(', ')}` : '');
+  if (!map) return;
+  mapLayer.clearLayers();
+  const now = d.now || Date.now()/1000, ends = {};
+  for (const p of paths.slice().reverse()){                   // longest drawn last (on top)
+    const age = p.ts ? Math.max(0, now - p.ts) : 0, fresh = Math.max(0.35, 1 - age/3600);
+    L.polyline([p.a, p.b], {color: MAP_COL[p.pm]||'#9aa4ae', weight: p.km>2300?3:2.2, opacity: 0.25+0.6*fresh,
+      dashArray: p.band==='70cm' ? '6 6' : null})
+     .bindTooltip(`<b>${esc(p.tx)} &rarr; ${esc(p.rx)}</b><br>${p.km.toLocaleString()} km &middot; ${esc(p.band)} ${esc(p.mode)} ${esc(p.snr)} dB<br>${MAP_NAME[p.pm]||''}${p.ts?` &middot; ${hms(new Date(p.ts*1000)).slice(0,5)} UTC`:''}`, {className:'tw-tip', sticky:true})
+     .addTo(mapLayer);
+    for (const [pos, call, grid] of [[p.a, p.tx, p.tg], [p.b, p.rx, p.rg]]){
+      const k = call+'@'+pos; if (ends[k]) continue; ends[k] = 1;
+      L.circleMarker(pos, {radius:3.5, color:'#0b0d0f', weight:1, fillColor: MAP_COL[p.pm]||'#9aa4ae', fillOpacity:0.95})
+       .bindTooltip(`${esc(call)} &middot; ${esc(grid)}`, {className:'tw-tip'}).addTo(mapLayer);
+    }
+  }
+  if (d.me && d.me.pos){
+    L.circleMarker(d.me.pos, {radius:7, color:'#fff', weight:2, fillColor:'#ffd27a', fillOpacity:1})
+     .bindTooltip(`<b>${esc(d.me.call||'You')}</b> &middot; ${esc(d.me.grid)}`, {className:'tw-tip', permanent:false}).addTo(mapLayer);
+  }
+  $('#map-msg').textContent = !d.last_check ? (d.running ? 'Waiting for the first PSKReporter check...' : 'Turn the station on to fill the map.') :
+    (!paths.length ? 'No Caribbean 2m / 70cm paths in the look-back window.' : '');
+  if (!mapFitted && paths.length){
+    const b = L.latLngBounds(paths.flatMap(p=>[p.a, p.b])); if (d.me && d.me.pos) b.extend(d.me.pos);
+    map.fitBounds(b.pad(0.15), {maxZoom:6}); mapFitted = true;
+  }
+}
+
+/* ---------- wiring ---------- */
+$$('[data-wx]').forEach(b=>b.onclick = async ()=>{
+  if (dirty) await save();
+  const r = await api('/api/wx', {kind: b.dataset.wx});
+  r.errors && r.errors.length ? toast(r.errors[0]) : toast(b.dataset.wx==='tropical' ? 'Checking the National Hurricane Center...' : b.dataset.wx[0].toUpperCase()+b.dataset.wx.slice(1)+' weather bulletin being prepared...', true);
+});
+$('#b-sound').onclick = ()=>{ unlockAudio(); chime();
+  setTimeout(()=>say('Two metre T E P open to Latin America'), 900);
+  try { if ('Notification' in window && Notification.permission==='default') Notification.requestPermission(); } catch(e){} };
+$('#power').onclick = async ()=>{
+  if (dirty) await save();
+  const r = await api(running ? '/api/stop' : '/api/start', {});
+  if (r.errors && r.errors.length) toast(r.errors[0]);
+  poll();
+};
+for (const [id, path, okmsg] of [['#b-bcn','/api/beacon','Beacon queued'],['#b-test','/api/test','Test bulletin queued'],['#b-chk','/api/check','Checking PSKReporter...']]){
+  $(id).onclick = async ()=>{ const r = await api(path, {}); r.errors && r.errors.length ? toast(r.errors[0]) : toast(okmsg, true); };
+}
+$('#b-menu').onclick = ()=>{ const d=$('#drawer'); d.classList.toggle('open'); $('#b-menu').setAttribute('aria-expanded', d.classList.contains('open'));
+  if (d.classList.contains('open')) { loadDevices(); d.scrollIntoView({behavior:'smooth',block:'nearest'}); } };
+$('#b-close').onclick = ()=>{ $('#drawer').classList.remove('open'); $('#b-menu').setAttribute('aria-expanded','false'); };
+$('#b-save').onclick = save; $('#b-save-top').onclick = save;
+$$('.tab').forEach(t=>t.onclick=()=>{ $$('.tab').forEach(x=>x.classList.toggle('on',x===t)); $$('.pane').forEach(p=>p.classList.toggle('on',p.id===t.dataset.p)); });
+$('#f-preset').onchange = e=>applyPreset(e.target.value);
+$('#f-tnc').onchange = updateVisibility; $('#f-rfwhen').onchange = updateVisibility; $('#f-ptt').onchange = updateVisibility;
+$('#f-cattune').onchange = updateVisibility; $('#f-freq').onchange = updateVisibility;
+document.addEventListener('input', e=>{ if (e.target.matches('[data-k],[data-list]')) markDirty(); });
+document.addEventListener('change', e=>{ if (e.target.matches('[data-k],[data-list]')) markDirty(); });
+$('#f-call').addEventListener('input', e=>{ const p=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); e.target.setSelectionRange(p,p); });
+$('#f-grid').addEventListener('blur', e=>{ const v=e.target.value.trim(); e.target.value = v.slice(0,4).toUpperCase()+v.slice(4).toLowerCase(); });
+
+(async ()=>{
+  drawMatrix([]);
+  presets = await api('/api/presets');
+  $('#f-preset').innerHTML = presets.map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
+  try { const fr = await api('/api/freqs');
+        $('#f-freq').innerHTML = fr.map(f=>`<option value="${f.value}">${f.label}</option>`).join('') + '<option value="custom">Other (type below)</option>';
+  } catch(e){}
+  await poll(); dirty=false; $('#b-save-top').textContent='SAVE';
+  tick(); setInterval(tick, 1000); setInterval(poll, 1500);
+  await checkMissed('load');
+  initMap();
+  setInterval(markSeen, 30000);
+})();
+</script>
+</body>
+</html>

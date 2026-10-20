@@ -1,3 +1,5 @@
+# Tradewind - Copyright (c) 2026 Brandon St Rose (8P5DG) and Kammie Holder (8P5AB)
+# Released under the MIT License - see LICENSE
 """
 tnc.py - TNC back-ends and PTT drivers.
 
@@ -61,6 +63,7 @@ def _strip_fcs(frame_with_fcs: bytes) -> bytes:
 
 class PTT:
     name = "VOX"
+    can_tune = False      # True when the PTT link can also set frequency / mode (CAT)
 
     def open(self): pass
     def key(self, on: bool): pass
@@ -127,22 +130,77 @@ class CM108PTT(PTT):
 
 
 class RigctldPTT(PTT):
-    """CAT PTT through Hamlib's rigctld (any radio Hamlib supports)."""
+    """CAT PTT (and frequency / mode) through Hamlib's rigctld."""
+    can_tune = True
 
     def __init__(self, host="127.0.0.1", port=4532):
         self.host, self.port = host, int(port)
         self.name = f"rigctld {host}:{port}"
 
-    def key(self, on):
+    def _ask(self, cmd):
         with socket.create_connection((self.host, self.port), timeout=5) as s:
-            s.sendall(b"T 1\n" if on else b"T 0\n")
-            s.recv(64)
+            s.sendall(cmd.encode() + b"\n")
+            time.sleep(0.15)
+            return s.recv(256).decode(errors="replace")
+
+    def key(self, on):
+        self._ask("T 1" if on else "T 0")
+
+    def read_state(self):
+        f = self._ask("f").split()
+        m = self._ask("m").split()
+        return {"hz": int(f[0]) if f and f[0].isdigit() else None,
+                "mode": m[0] if m and not m[0].startswith("RPRT") else None,
+                "pb": m[1] if len(m) > 1 and m[1].lstrip("-").isdigit() else "0"}
+
+    def tune(self, hz):
+        r = self._ask(f"F {int(hz)}")
+        if "RPRT -" in r:
+            raise IOError(f"rigctld refused frequency ({r.strip()})")
+        if "RPRT -" in self._ask("M PKTFM 0"):      # FM data mode if the radio has one
+            self._ask("M FM 0")
+
+    def restore(self, st):
+        if st.get("hz"):
+            self._ask(f"F {st['hz']}")
+        if st.get("mode"):
+            self._ask(f"M {st['mode']} {st.get('pb', '0')}")
+
+
+def _civ_addr(addr):
+    return int(str(addr), 16) if isinstance(addr, str) else int(addr)
+
+
+def civ_frame(addr, payload):
+    """FE FE <radio> E0 <payload> FD"""
+    return bytes([0xFE, 0xFE, _civ_addr(addr) & 0xFF, 0xE0]) + bytes(payload) + b"\xFD"
 
 
 def civ_ptt_command(addr, on):
     """Icom CI-V 'transmit on/off' (command 1C 00): FE FE <radio> E0 1C 00 <01|00> FD"""
-    a = int(str(addr), 16) if isinstance(addr, str) else int(addr)
-    return bytes([0xFE, 0xFE, a & 0xFF, 0xE0, 0x1C, 0x00, 0x01 if on else 0x00, 0xFD])
+    return civ_frame(addr, [0x1C, 0x00, 0x01 if on else 0x00])
+
+
+def hz_to_civ_bcd(hz):
+    """Frequency in Hz -> 5 CI-V BCD bytes, least significant pair first.
+    144.390 MHz -> 00 00 39 44 01"""
+    s = f"{int(hz):010d}"
+    return bytes((int(s[i]) << 4) | int(s[i + 1]) for i in range(8, -1, -2))
+
+
+def civ_bcd_to_hz(b):
+    return int("".join(f"{x:02x}" for x in reversed(bytes(b[:5]))))
+
+
+def civ_replies(data, addr):
+    """Payloads of frames the radio sent to the PC (skips our own echo)."""
+    a = _civ_addr(addr)
+    out = []
+    for part in bytes(data).split(b"\xFE\xFE")[1:]:
+        end = part.find(b"\xFD")
+        if end >= 2 and part[0] == 0xE0 and part[1] == a:
+            out.append(part[2:end])
+    return out
 
 
 class _CatSerialPTT(PTT):
@@ -180,7 +238,9 @@ class _CatSerialPTT(PTT):
 
 
 class CivPTT(_CatSerialPTT):
-    """Icom CI-V PTT over USB or a CI-V cable (IC-9100, IC-7100, IC-705, IC-9700...)."""
+    """Icom CI-V PTT, frequency and mode over USB or a CI-V cable
+    (IC-9100, IC-7100, IC-705, IC-9700...)."""
+    can_tune = True
 
     def __init__(self, port, baud=9600, addr="7C"):
         super().__init__(port, baud)
@@ -190,9 +250,54 @@ class CivPTT(_CatSerialPTT):
     def _cmd(self, on):
         return civ_ptt_command(self.addr, on)
 
+    def _ask(self, payload):
+        """Send one CI-V command; return the radio's reply payload (or None)."""
+        self.ser.reset_input_buffer()
+        self.ser.write(civ_frame(self.addr, payload))
+        self.ser.flush()
+        data, t0 = b"", time.time()
+        while time.time() - t0 < 0.6:
+            data += self.ser.read(64)
+            r = civ_replies(data, self.addr)
+            if r:
+                return r[0]
+        return None
+
+    def read_state(self):
+        st = {}
+        r = self._ask([0x03])                         # read operating frequency
+        if r and r[0] == 0x03 and len(r) >= 6:
+            st["hz"] = civ_bcd_to_hz(r[1:6])
+        r = self._ask([0x04])                         # read mode + filter
+        if r and r[0] == 0x04 and len(r) >= 3:
+            st["mode"] = [r[1], r[2]]
+        r = self._ask([0x1A, 0x06])                   # read DATA mode
+        if r and r[:2] == b"\x1A\x06" and len(r) >= 3:
+            st["data"] = list(r[2:])
+        return st
+
+    def tune(self, hz):
+        r = self._ask([0x05] + list(hz_to_civ_bcd(hz)))
+        if r != b"\xFB":
+            raise IOError("radio did not accept the frequency (check CI-V address and baud rate)"
+                          if r is None else "radio refused the frequency - is it in this radio's range?")
+        self._ask([0x06, 0x05, 0x01])                 # FM, filter 1
+        if self._ask([0x1A, 0x06, 0x01, 0x01]) != b"\xFB":   # DATA mode on (FM-D)
+            self._ask([0x1A, 0x06, 0x01])             # radios that take a single data byte
+
+    def restore(self, st):
+        if st.get("hz"):
+            self._ask([0x05] + list(hz_to_civ_bcd(st["hz"])))
+        if st.get("mode"):
+            self._ask([0x06] + st["mode"])
+        if st.get("data"):
+            self._ask([0x1A, 0x06] + st["data"])
+
 
 class YaesuCatPTT(_CatSerialPTT):
-    """Yaesu text CAT PTT (TX1; / TX0;) - FT-991A, FTDX10/101, FT-710 and other newer radios."""
+    """Yaesu text CAT: PTT (TX1; / TX0;), frequency (FA) and mode (MD) -
+    FT-991A, FTDX10/101, FT-710 and other newer radios."""
+    can_tune = True
 
     def __init__(self, port, baud=38400):
         super().__init__(port, baud)
@@ -200,6 +305,67 @@ class YaesuCatPTT(_CatSerialPTT):
 
     def _cmd(self, on):
         return b"TX1;" if on else b"TX0;"
+
+    def _ask(self, cmd, reply=False):
+        self.ser.reset_input_buffer()
+        self.ser.write(cmd.encode())
+        self.ser.flush()
+        if not reply:
+            time.sleep(0.1)
+            return ""
+        data, t0 = b"", time.time()
+        while time.time() - t0 < 0.6 and not data.endswith(b";"):
+            data += self.ser.read(32)
+        return data.decode(errors="replace").strip()
+
+    def read_state(self):
+        st = {}
+        f = self._ask("FA;", True)
+        if f.startswith("FA") and f[2:-1].isdigit():
+            st["hz"] = int(f[2:-1])
+        m = self._ask("MD0;", True)
+        if m.startswith("MD0") and len(m) >= 5:
+            st["mode"] = m[3]
+        return st
+
+    def tune(self, hz):
+        self._ask(f"FA{int(hz):09d};")
+        self._ask("MD0A;")                            # DATA-FM
+        f = self._ask("FA;", True)
+        if f and f.startswith("FA") and f[2:-1].isdigit() and int(f[2:-1]) != int(hz):
+            raise IOError(f"radio is on {int(f[2:-1]) / 1e6:.4f} MHz, not {hz / 1e6:.4f} MHz")
+        if not f:
+            raise IOError("no reply from the radio (check CAT port and baud rate)")
+
+    def restore(self, st):
+        if st.get("hz"):
+            self._ask(f"FA{int(st['hz']):09d};")
+        if st.get("mode"):
+            self._ask(f"MD0{st['mode']};")
+
+
+# APRS frequencies offered on the face plate (MHz, label)
+APRS_FREQS = [
+    ("144.390", "144.390 (N. America / Caribbean)"),
+    ("144.800", "144.800 (Europe / Africa)"),
+    ("144.930", "144.930"),
+    ("145.570", "145.570"),
+    ("145.825", "145.825 (ISS digipeater)"),
+]
+
+
+def aprs_freq_hz(cfg):
+    """The chosen APRS frequency in Hz (custom value allowed), or None if invalid."""
+    v = str(cfg.get("aprs_freq") or "144.390")
+    if v == "custom":
+        v = str(cfg.get("aprs_freq_custom") or "")
+    try:
+        mhz = float(v.replace(",", "."))
+    except ValueError:
+        return None
+    if not (144.0 <= mhz <= 148.0 or 420.0 <= mhz <= 450.0):
+        return None
+    return int(round(mhz * 1e6))
 
 
 def make_ptt(cfg):
@@ -265,7 +431,8 @@ class SoundModemTNC(BaseTNC):
     kind = "Sound modem"
 
     def __init__(self, in_dev=None, out_dev=None, rate=48000, ptt=None,
-                 txdelay=300, txtail=50, level=0.5, busy_hold=1.5):
+                 txdelay=300, txtail=50, level=0.5, busy_hold=1.5,
+                 tune_hz=None, cat_restore=True):
         super().__init__()
         self.in_dev, self.out_dev, self.rate = in_dev, out_dev, int(rate)
         self.ptt = ptt or PTT()
@@ -274,13 +441,47 @@ class SoundModemTNC(BaseTNC):
         self.audio_level = 0.0
         self.txq = queue.Queue()
         self.demod = afsk.Demodulator(self.rate)
+        self.tune_hz, self.cat_restore = tune_hz, cat_restore
+        self.cat_saved = None
+        self.cat_status = ""       # shown on the face plate
+        self.cat_lock = threading.Lock()
 
     def start(self, on_packet):
         super().start(on_packet)
         import sounddevice as sd  # noqa: F401 (fail early with a clear error)
         self.ptt.open()
+        if self.tune_hz:
+            self.tune(self.tune_hz)
         threading.Thread(target=self._rx_loop, daemon=True).start()
         threading.Thread(target=self._tx_loop, daemon=True).start()
+
+    def tune(self, hz):
+        """Put the radio on the APRS frequency in FM data mode (CAT radios only).
+        A CAT problem is reported but never stops the station."""
+        if not self.ptt.can_tune:
+            self.cat_status = "set the frequency on the radio (this PTT method has no CAT tuning)"
+            return False
+        with self.cat_lock:
+            try:
+                if self.cat_saved is None and self.cat_restore:
+                    try:
+                        self.cat_saved = self.ptt.read_state() or None
+                    except Exception:
+                        self.cat_saved = None
+                self.ptt.tune(hz)
+                self.cat_status = f"tuned {hz / 1e6:.3f} MHz FM data"
+                return True
+            except Exception as e:
+                self.cat_status = f"CAT tuning failed: {e}"
+                return False
+
+    def _restore_radio(self):
+        if self.cat_saved and self.cat_restore and self.ptt.can_tune:
+            with self.cat_lock:
+                try:
+                    self.ptt.restore(self.cat_saved)
+                except Exception:
+                    pass
 
     def _rx_loop(self):
         import sounddevice as sd
@@ -336,6 +537,7 @@ class SoundModemTNC(BaseTNC):
     def stop(self):
         super().stop()
         try:
+            self._restore_radio()
             self.ptt.close()
         except Exception:
             pass
@@ -343,7 +545,8 @@ class SoundModemTNC(BaseTNC):
     @property
     def status(self):
         d = super().status
-        d.update(audio_level=round(self.audio_level, 4), ptt=self.ptt.name)
+        d.update(audio_level=round(self.audio_level, 4), ptt=self.ptt.name,
+                 cat=self.cat_status, freq=self.tune_hz)
         return d
 
 
@@ -460,7 +663,9 @@ def make_tnc(cfg):
         return SoundModemTNC(dev(cfg.get("audio_in")), dev(cfg.get("audio_out")),
                              cfg.get("sample_rate", 48000), make_ptt(cfg),
                              cfg.get("txdelay", 300), cfg.get("txtail", 50),
-                             cfg.get("tx_level", 0.5))
+                             cfg.get("tx_level", 0.5),
+                             tune_hz=aprs_freq_hz(cfg) if cfg.get("cat_tune") else None,
+                             cat_restore=cfg.get("cat_restore", True))
     if mode == "kiss_tcp":
         host, _, port = (cfg.get("kiss_addr") or "127.0.0.1:8001").partition(":")
         return KissTcpTNC(host, port or 8001)

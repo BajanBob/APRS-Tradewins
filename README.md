@@ -97,9 +97,32 @@ These PTT methods are supported:
 
 ### Radio notes
 
-- **Icom IC-9100.** Uses one USB cable for audio and control. Pick "USB Audio CODEC" for audio, set PTT to Icom CI-V, address `7C`, 9600 baud. On the radio, set DATA MOD to USB and use FM data mode. Close loggers and WSJT-X first, because only one program can use the CI-V port.
+- **Icom IC-9100.** Uses one USB cable for audio and control. Pick "USB Audio CODEC" for audio, set PTT to Icom CI-V, address `7C`, 9600 baud. On the radio, set DATA MOD to USB. Tradewind tunes the radio to the APRS frequency in FM data mode for you. Close loggers and WSJT-X first, because only one program can use the CI-V port.
 - **Yaesu FT-2980R.** Has no data jack and no CAT port. Connect through the mic jack and the external speaker jack with a SignaLink (VOX) or a Digirig with a Yaesu mic cable (Serial RTS). Check the cable's mic-jack pinout against the radio manual. Keep TX audio low, and use Low or Mid power for long sessions.
 - **Yaesu FT-7900R / FT-8800R / FT-8900R / FTM-400 / FTM-300 / FTM-200.** Use the rear DATA jack at 1200 bps with a soundcard interface cable for that model.
+
+### Automatic tuning (CAT)
+
+Tick **Tune the radio to the APRS frequency** (MENU → RADIO / TNC) and pick a frequency:
+144.390, 144.800, 144.930, 145.570, 145.825 (ISS digipeater) or your own.
+When the station turns on, Tradewind sets the radio to that frequency in FM data mode (FM-D / DATA-FM).
+When it turns off, it puts the radio back on the frequency and mode it was using before.
+
+Tuning works when the PTT method is a CAT link:
+- **Icom CI-V**: IC-9100 (address 7C), IC-705 (A4), IC-9700 (A2), IC-7100 (88)
+- **Yaesu CAT**: FT-991A and newer Yaesu radios
+- **Hamlib rigctld**: any radio Hamlib supports
+
+Radios without a CAT port, such as the FT-2980R, have to be set by hand.
+If you choose 145.825 for the ISS, set the RF path to `ARISS`, and only transmit while the ISS is overhead.
+
+## Live propagation map
+
+Below the face plate, a map draws every Caribbean 2m/70cm path that PSKReporter saw during the look-back window.
+Lines are coloured by mode (TEP orange, tropo duct teal, Sporadic-E pink); 2m lines are solid and 70cm lines dashed.
+Hover over or tap a line to see the stations, distance, digital mode and signal report.
+The map refreshes after every check, which is every 5 minutes by default (PSKReporter's limit).
+It needs an internet connection for the map tiles.
 
 ## Setting TX audio
 
@@ -135,8 +158,16 @@ Tradewind can send scheduled APRS weather bulletins (MENU → WEATHER). Defaults
 | Marine (seas, swell, wind, small-craft caution) | 05:30, 12:00 | `BLN1MAR`… | Open-Meteo Marine |
 | Aviation: TBPB METAR + TAF, Piarco FIR (TTZP) SIGMETs | 06:30, 18:00 | `BLN1AVN`… | aviationweather.gov |
 
+**Tropical cyclone alerts** (on by default): every 20 minutes Tradewind checks the National Hurricane
+Center. When an Atlantic system is within 1,500 km of Barbados (adjustable), or an NHC advisory puts
+Barbados under a hurricane or tropical storm watch/warning, it sends `BLN1TC`… bulletins with each new
+advisory, e.g. `HU BERYL adv 010: 12.1N 57.6W 115kt 961mb mov WNW 20mph` /
+`Hurricane BERYL is 244km ESE of Barbados` / `HURRICANE WARNING IN EFFECT FOR BARBADOS`.
+The face plate chimes and speaks the alert.
+
 These are automated, unofficial summaries. For official forecasts and warnings use the
-Barbados Meteorological Services. Grantley Adams (TBPB) lies within the Piarco FIR (TTZP).
+Barbados Meteorological Services and the Department of Emergency Management.
+Grantley Adams (TBPB) lies within the Piarco FIR (TTZP).
 
 ## Tuning
 

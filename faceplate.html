@@ -186,6 +186,7 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
 .map-msg:empty{display:none}
 .map-legend{margin-top:6px;font-size:12px;color:#6c757e;line-height:1.5}
 .leaflet-container{background:#0e1114;font-family:system-ui,sans-serif}
+.tw-dim{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
 .leaflet-tooltip.tw-tip{background:#15181b;color:#e6edf3;border:1px solid #33393f;font-family:var(--mono);font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.6)}
 .leaflet-tooltip.tw-tip:before{display:none}
 @media (max-width:480px){ .map-box{height:340px} }
@@ -775,10 +776,18 @@ async function initMap(){
   catch(e){ mapOffline = true; $('#map-msg').textContent = 'Map needs an internet connection (could not load the map library).';
              await refreshMap(); setInterval(refreshMap, 30000); setInterval(mapClock, 1000); return; }
   map = L.map('map', {worldCopyJump:true, zoomSnap:0.5, attributionControl:true}).setView([16,-62], 3);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    maxZoom: 10, minZoom: 2, subdomains:'abcd',
-    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a> &middot; spots: PSKReporter'
-  }).addTo(map);
+  // Free basemaps that need no API key: Esri dark grey canvas, falling back to OpenStreetMap
+  const esri = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 10, minZoom: 2,
+    attribution:'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ &middot; spots: PSKReporter'
+  });
+  const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 10, minZoom: 2, className:'tw-dim',
+    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &middot; spots: PSKReporter'
+  });
+  let tileErrs = 0;
+  esri.on('tileerror', ()=>{ if (++tileErrs === 4){ map.removeLayer(esri); osm.addTo(map); } });
+  esri.addTo(map);
   mapLayer = L.layerGroup().addTo(map);
   await refreshMap(); setInterval(refreshMap, 30000);
   setInterval(mapClock, 1000);

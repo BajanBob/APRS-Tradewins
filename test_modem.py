@@ -43,7 +43,77 @@ def main():
     assert tnc.civ_ptt_command("7C", True) == bytes.fromhex("FEFE7CE01C0001FD"), "CI-V TX on"
     assert tnc.civ_ptt_command("7C", False) == bytes.fromhex("FEFE7CE01C0000FD"), "CI-V TX off"
     test_cat()
+    test_chat()
     print("All self-tests passed")
+
+
+def test_chat():
+    chat = tnc
+    m = chat.parse_message("8P6XX-9>APDR16,WIDE2-1::8P5AB-10 :hello there{12")
+    assert m["src"] == "8P6XX-9" and m["to"] == "8P5AB-10" and m["text"] == "hello there" and m["msgno"] == "12"
+    assert chat.parse_message("8P6XX-9>APDR16::8P5AB-10 :ack12")["ack"] == "12"
+    assert chat.parse_message("8P6XX-9>APDR16::8P5AB-10 :hi{3}AB")["msgno"] == "3"
+    assert chat.format_message("8P6XX-9", "hi", "7") == ":8P6XX-9  :hi{7"
+    assert all(len(x) <= 67 for x in chat.split_text("word " * 60))
+    clock = [1000.0]
+    now = lambda: clock[0]  # noqa: E731
+    air = []                 # packets "on the air": (from, info, route)
+    a = chat.ChatManager("8P5AB-10", lambda to, info, r: air.append(("8P5AB-10", info, r)), now)
+    b = chat.ChatManager("8P6XX-9", lambda to, info, r: air.append(("8P6XX-9", info, r)), now)
+
+    def deliver(drop=False):
+        while air:
+            src, info, _ = air.pop(0)
+            if drop:
+                continue
+            for st in (a, b):
+                st.on_packet(f"{src}>APZPRP,WIDE2-1:{info}", "RF")
+
+    a.hail("8P6XX-9", "rf")
+    deliver()
+    assert b._peer("8P5AB-10")["status"] == chat.INCOMING
+    assert any(e["kind"] == "request" for e in b.events)
+    try:
+        a.send("8P6XX-9", "too soon")
+        raise AssertionError("chat must wait for the handshake")
+    except ValueError:
+        pass
+    b.accept("8P5AB-10")
+    deliver()
+    assert b._peer("8P5AB-10")["status"] == chat.ACCEPTED
+    assert a._peer("8P6XX-9")["status"] == chat.AWAIT_CONFIRM, "hailer must be asked to confirm"
+    a.accept("8P6XX-9")
+    deliver()
+    assert a._peer("8P6XX-9")["status"] == chat.OPEN and b._peer("8P5AB-10")["status"] == chat.OPEN
+    a.send("8P6XX-9", "Hearing you 5x9 via TEP")
+    deliver()
+    msgs = b._peer("8P5AB-10")["messages"]
+    assert msgs[-1]["dir"] == "in" and msgs[-1]["text"] == "Hearing you 5x9 via TEP"
+    out = [x for x in a._peer("8P6XX-9")["messages"] if x["dir"] == "out"]
+    assert all(x["state"] == "delivered" for x in out), "every message acked"
+    # a lost packet is retried, and the duplicate is not shown twice
+    b.send("8P5AB-10", "QSL 73")
+    deliver(drop=True)
+    clock[0] += 31
+    b.tick()
+    deliver()
+    assert [x["text"] for x in a._peer("8P6XX-9")["messages"] if x["dir"] == "in"] == ["QSL 73"]
+    assert not b.pending, "retry acked"
+    a.end("8P6XX-9")
+    deliver()
+    assert b._peer("8P5AB-10")["status"] == chat.ENDED
+    # a non-Tradewind station can answer a hail by typing ACCEPT
+    c = chat.ChatManager("8P5AB-10", lambda to, info, r: air.append(("8P5AB-10", info, r)), now)
+    c.hail("KP4ZZ", "rf_is")
+    air.clear()
+    c.on_packet("KP4ZZ>APDR16::8P5AB-10 :accept{5", "IS")
+    assert c._peer("KP4ZZ")["status"] == chat.AWAIT_CONFIRM
+    # unanswered hails expire
+    d = chat.ChatManager("8P5AB-10", lambda *x: None, now)
+    d.hail("J68AB", "rf")
+    clock[0] += chat.LINK_TIMEOUT_S + 200
+    d.tick()
+    assert d._peer("J68AB")["status"] == chat.EXPIRED
 
 
 class FakeIcom:

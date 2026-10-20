@@ -19,6 +19,7 @@ Back-ends
 
 import os
 import queue
+import re
 import socket
 import sys
 import threading
@@ -780,3 +781,323 @@ def list_serial_ports():
             except OSError:
                 pass
         return ports, f"pyserial unavailable: {e}"
+
+
+# --------------------------------------------------------------------------
+# Two-way APRS chat with a link handshake
+# --------------------------------------------------------------------------
+# Everything is a standard APRS message (":ADDRESSEE:text{NN"), acknowledged
+# with "ackNN", so it works over 2m/70cm RF and APRS-IS and with any APRS
+# station (plain messages from APRSdroid, a TH-D75 etc. show up too).
+#
+#   hailer                               called station
+#   TW-LINK? ...         ------------->  "incoming request" -> Accept / Decline
+#                        <-------------  TW-LINK OK ... (or a typed ACCEPT)
+#   "accepted - confirm" -> Accept
+#   TW-LINK CONFIRMED    ------------->  chat open on both sides
+#   TW-LINK END          <------------>  either side closes the link
+#
+# Each step is a numbered message retried until acked, so a completed
+# handshake proves a two-way path - over RF only, if chosen.
+
+
+MAX_TEXT = 67                        # APRS message text limit
+RETRY_S = (30, 60, 120)              # resend delays until acked
+LINK_TIMEOUT_S = 15 * 60             # unanswered hail / confirmation expires
+CHAT_CALL_RE = re.compile(r"^[A-Z0-9]{1,6}(-([0-9]|1[0-5]))?$")
+
+T_REQ, T_OK, T_CONF, T_NO, T_END = "TW-LINK?", "TW-LINK OK", "TW-LINK CONFIRMED", "TW-LINK NO", "TW-LINK END"
+
+# link states
+IDLE, HAILING, AWAIT_CONFIRM, INCOMING, ACCEPTED, OPEN, DECLINED, ENDED, EXPIRED = (
+    "idle", "hailing", "await_confirm", "incoming", "accepted", "open", "declined", "ended", "expired")
+STATUS_TEXT = {
+    IDLE: "No link", HAILING: "Calling - waiting for an answer",
+    AWAIT_CONFIRM: "They accepted - press Accept to confirm",
+    INCOMING: "Wants to chat - Accept or Decline",
+    ACCEPTED: "You accepted - waiting for their confirmation",
+    OPEN: "Link open - chat", DECLINED: "Declined", ENDED: "Link ended", EXPIRED: "No answer - expired",
+}
+
+
+def norm_call(c):
+    return (c or "").strip().upper()
+
+
+def valid_call(c):
+    return bool(CHAT_CALL_RE.match(norm_call(c)))
+
+
+def format_message(addressee, text, msgno=None):
+    """APRS message info field: ':ADDRESSEE:text{NN'"""
+    t = text.replace("|", "/").replace("~", "-").replace("{", "(")[:MAX_TEXT]
+    return f":{norm_call(addressee):<9}:{t}" + (f"{{{msgno}" if msgno else "")
+
+
+def parse_message(line):
+    """'SRC>DST,PATH:info' -> dict(src, to, text, msgno, ack, rej) or None."""
+    head, sep, info = line.partition(":")
+    if not sep or ">" not in head or len(info) < 11 or info[0] != ":" or info[10] != ":":
+        return None
+    src = head.split(">", 1)[0].rstrip("*").upper()
+    path = head.split(">", 1)[1].upper()
+    to = info[1:10].strip().upper()
+    body = info[11:].rstrip("\r\n")
+    m = re.fullmatch(r"(ack|rej)([A-Za-z0-9]{1,5})(\}.*)?", body)
+    if m:
+        return {"src": src, "to": to, "text": "", "msgno": None, "path": path,
+                "ack": m.group(2) if m.group(1) == "ack" else None,
+                "rej": m.group(2) if m.group(1) == "rej" else None}
+    msgno = None
+    if "{" in body:
+        body, _, tail = body.rpartition("{")
+        msgno = tail.split("}")[0][:5] or None
+    return {"src": src, "to": to, "text": body, "msgno": msgno, "ack": None, "rej": None, "path": path}
+
+
+def split_text(text):
+    text = " ".join(text.split())
+    out = []
+    while text:
+        if len(text) <= MAX_TEXT:
+            out.append(text)
+            break
+        cut = text.rfind(" ", 0, MAX_TEXT)
+        cut = cut if cut > 20 else MAX_TEXT
+        out.append(text[:cut])
+        text = text[cut:].strip()
+    return out
+
+
+class ChatManager:
+    """send_fn(addressee, info_field, route) transmits one APRS message.
+    route: 'rf' (RF only), 'rf_is' (RF and APRS-IS) or 'is' (APRS-IS only)."""
+
+    def __init__(self, mycall, send_fn, now=time.time):
+        self.mycall = norm_call(mycall)
+        self.send_fn = send_fn
+        self.now = now
+        self.lock = threading.RLock()
+        self.peers = {}          # call -> dict(status, route, since, messages)
+        self.pending = {}        # msgno -> outgoing message awaiting ack
+        self.seen = {}           # (src, msgno) -> time, for duplicate suppression
+        self.counter = 0
+        self.seq = 0             # bumps on every change (face plate polling)
+        self.events = []         # recent events for alerts: dict(seq, kind, call, text)
+
+    # ---- helpers
+    def _peer(self, call):
+        call = norm_call(call)
+        p = self.peers.get(call)
+        if not p:
+            p = self.peers[call] = {"call": call, "status": IDLE, "route": "rf",
+                                    "since": self.now(), "messages": [], "via": "", "unread": 0}
+        return p
+
+    def _event(self, kind, call, text):
+        self.seq += 1
+        self.events.append({"seq": self.seq, "kind": kind, "call": call, "text": text, "t": self.now()})
+        del self.events[:-30]
+
+    def _set(self, p, status, note=None):
+        p["status"], p["since"] = status, self.now()
+        if note:
+            self._log(p, "sys", note)
+        self.seq += 1
+
+    def _log(self, p, direction, text, **kw):
+        m = {"dir": direction, "text": text, "t": self.now()}
+        m.update(kw)
+        p["messages"].append(m)
+        del p["messages"][:-200]
+        self.seq += 1
+        return m
+
+    def _next_no(self):
+        self.counter = self.counter % 999 + 1
+        return str(self.counter)
+
+    def _send(self, p, text, show=True, kind="chat"):
+        """Send one numbered message (retried until acked)."""
+        no = self._next_no()
+        entry = self._log(p, "out", text, state="sending", no=no, kind=kind, route=p["route"]) if show else \
+            {"state": "sending", "no": no, "text": text}
+        self.pending[no] = {"call": p["call"], "text": text, "route": p["route"], "tries": 0,
+                            "next": 0, "entry": entry}
+        self._transmit(no)
+        return entry
+
+    def _transmit(self, no):
+        o = self.pending.get(no)
+        if not o:
+            return
+        try:
+            self.send_fn(o["call"], format_message(o["call"], o["text"], no), o["route"])
+            o["entry"]["error"] = ""
+        except Exception as e:
+            o["entry"]["error"] = str(e)
+        o["tries"] += 1
+        delay = RETRY_S[o["tries"] - 1] if o["tries"] <= len(RETRY_S) else None
+        if delay is None:
+            o["entry"]["state"] = "failed"
+            self.pending.pop(no, None)
+            self.seq += 1
+        else:
+            o["next"] = self.now() + delay
+
+    def _ack(self, src, msgno, route):
+        try:
+            self.send_fn(src, format_message(src, f"ack{msgno}"), route)
+        except Exception:
+            pass
+
+    # ---- user actions
+    def hail(self, call, route="rf"):
+        call = norm_call(call)
+        if not valid_call(call) or call == self.mycall:
+            raise ValueError("Enter the other station's callsign, e.g. 8P6XX-9")
+        with self.lock:
+            p = self._peer(call)
+            p["route"] = route if route in ("rf", "rf_is", "is") else "rf"
+            self._set(p, HAILING, f"Calling {call} via {self.route_name(p['route'])}...")
+            self._send(p, f"{T_REQ} {self.mycall} asks to chat. Reply ACCEPT or DECLINE", kind="hs")
+
+    def accept(self, call):
+        with self.lock:
+            p = self._peer(call)
+            if p["status"] == INCOMING:
+                self._set(p, ACCEPTED, "You accepted - waiting for their confirmation")
+                self._send(p, f"{T_OK} {self.mycall} accepted. Press Accept to confirm", kind="hs")
+            elif p["status"] == AWAIT_CONFIRM:
+                self._set(p, OPEN, "Link confirmed - chat open")
+                self._send(p, f"{T_CONF} chat open de {self.mycall}", kind="hs")
+                self._event("open", p["call"], f"Link open with {p['call']}")
+            else:
+                raise ValueError("There is no request to accept from this station.")
+
+    def decline(self, call):
+        with self.lock:
+            p = self._peer(call)
+            self._set(p, DECLINED, "You declined")
+            self._send(p, f"{T_NO} {self.mycall} can't chat now. 73", kind="hs")
+
+    def end(self, call):
+        with self.lock:
+            p = self._peer(call)
+            if p["status"] in (OPEN, HAILING, ACCEPTED, AWAIT_CONFIRM):
+                self._send(p, f"{T_END} 73 de {self.mycall}", kind="hs")
+            self._set(p, ENDED, "Link ended")
+
+    def send(self, call, text):
+        with self.lock:
+            p = self._peer(call)
+            if p["status"] != OPEN and not p.get("direct"):
+                raise ValueError("Open a link first: hail the station and wait for both sides to accept.")
+            parts = split_text(text)
+            if not parts:
+                raise ValueError("Type a message first.")
+            for part in parts:
+                self._send(p, part)
+            p["unread"] = 0
+
+    def mark_read(self, call):
+        with self.lock:
+            p = self.peers.get(norm_call(call))
+            if p:
+                p["unread"] = 0
+
+    # ---- incoming packets (from RF or APRS-IS)
+    def on_packet(self, line, via="RF"):
+        m = parse_message(line)
+        if not m or m["to"] != self.mycall or m["src"] == self.mycall:
+            return False
+        with self.lock:
+            if m["ack"] or m["rej"]:
+                no = m["ack"] or m["rej"]
+                o = self.pending.pop(no, None)
+                if o and o["call"] == m["src"]:
+                    o["entry"]["state"] = "delivered" if m["ack"] else "rejected"
+                    o["entry"]["via"] = via
+                    self._peer(m["src"])["via"] = via
+                    self._on_delivered(o)
+                    self.seq += 1
+                return True
+            p = self._peer(m["src"])
+            p["via"] = via
+            if m["msgno"]:      # ack the way it arrived, so the ack can get back
+                self._ack(m["src"], m["msgno"], "rf" if via == "RF" else "is")
+                key = (m["src"], m["msgno"])
+                now = self.now()
+                for k in [k for k, t in self.seen.items() if now - t > 1800]:
+                    del self.seen[k]
+                if key in self.seen:
+                    return True        # a retry we already have
+                self.seen[key] = now
+            self._handle_text(p, m["text"].strip(), via)
+            return True
+
+    def _on_delivered(self, o):
+        p = self.peers.get(o["call"])
+        if p and p["status"] == HAILING and o["text"].startswith(T_REQ):
+            self._log(p, "sys", f"{p['call']} received the call - waiting for them to accept")
+
+    def _handle_text(self, p, text, via):
+        up = text.upper()
+        word = up.strip(" .!").split(" ")[0] if up else ""
+        if up.startswith(T_REQ):
+            if p["status"] != OPEN:
+                p["route"] = "rf" if via == "RF" else "is"
+                self._set(p, INCOMING, f"{p['call']} wants to chat (heard via {via})")
+                self._event("request", p["call"], f"{p['call']} wants to chat - Accept or Decline")
+            return
+        if up.startswith(T_CONF):
+            if p["status"] in (ACCEPTED, AWAIT_CONFIRM, OPEN):
+                self._set(p, OPEN, "Link confirmed - chat open")
+                self._event("open", p["call"], f"Link open with {p['call']}")
+            return
+        if up.startswith(T_OK) or (p["status"] == HAILING and word in ("ACCEPT", "ACCEPTED", "YES", "OK", "QSL")):
+            if p["status"] == HAILING:
+                self._set(p, AWAIT_CONFIRM, f"{p['call']} accepted - press Accept to confirm")
+                self._event("accepted", p["call"], f"{p['call']} accepted your request - press Accept")
+            return
+        if up.startswith(T_NO) or (p["status"] == HAILING and word in ("DECLINE", "DECLINED", "NO")):
+            self._set(p, DECLINED, f"{p['call']} declined")
+            self._event("declined", p["call"], f"{p['call']} declined")
+            return
+        if up.startswith(T_END):
+            self._set(p, ENDED, f"{p['call']} ended the link")
+            self._event("ended", p["call"], f"{p['call']} ended the link")
+            return
+        self._log(p, "in", text, via=via)
+        if p["status"] != OPEN:
+            p["direct"] = True      # a plain APRS message (e.g. from APRSdroid): allow replies
+            if p["status"] == IDLE:
+                p["route"] = "rf" if via == "RF" else "is"
+        p["unread"] += 1
+        self._event("message", p["call"], f"{p['call']}: {text}")
+
+    # ---- timers (call about once a second)
+    def tick(self):
+        now = self.now()
+        with self.lock:
+            for no, o in list(self.pending.items()):
+                if now >= o["next"]:
+                    self._transmit(no)
+            for p in self.peers.values():
+                if p["status"] in (HAILING, AWAIT_CONFIRM, INCOMING, ACCEPTED) and now - p["since"] > LINK_TIMEOUT_S:
+                    self._set(p, EXPIRED, "No answer - link request expired")
+
+    # ---- face plate
+    @staticmethod
+    def route_name(r):
+        return {"rf": "RF only", "rf_is": "RF + APRS-IS", "is": "APRS-IS only"}.get(r, r)
+
+    def state(self):
+        with self.lock:
+            peers = sorted(self.peers.values(), key=lambda p: -max([p["since"]] + [m["t"] for m in p["messages"]]))
+            return {"seq": self.seq, "mycall": self.mycall, "events": list(self.events),
+                    "peers": [{"call": p["call"], "status": p["status"], "status_text": STATUS_TEXT[p["status"]],
+                               "route": p["route"], "via": p["via"], "unread": p["unread"],
+                               "can_send": p["status"] == OPEN or bool(p.get("direct")),
+                               "messages": [{k: v for k, v in m.items() if k != "kind"} for m in p["messages"][-100:]]}
+                              for p in peers]}

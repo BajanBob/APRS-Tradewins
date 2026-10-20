@@ -124,6 +124,29 @@ Hover over or tap a line to see the stations, distance, digital mode and signal 
 The map refreshes after every check, which is every 5 minutes by default (PSKReporter's limit).
 It needs an internet connection for the map tiles.
 
+## Face plates
+
+Use the **FACE PLATE** buttons at the top of the page to switch looks at any time. Each device remembers its own choice.
+- **Classic:** the original radio-style panel.
+- **Ops Console:** a desktop dashboard with a side menu, status chips, opening cards, the live map, an alert center, chat and the packet log.
+- **Field:** a light, high-contrast phone layout with a big power button, an "open now" card and large Beacon / Menu / Check buttons.
+
+All settings stay under **MENU** (or **Settings** in the Ops Console).
+
+## Two-way chat (2m / 70cm)
+
+You can chat station to station using standard APRS messages, with a handshake so both operators agree first:
+
+1. Type the other station's callsign under **TWO-WAY CHAT**, choose how to send, and press **HAIL**.
+   **RF only** is a real test of the propagation path.
+2. Their Tradewind plays a call-out tone and shows **Accept / Decline**.
+3. When they accept, you get **"accepted - press Accept to confirm"**. Press **Accept**.
+4. The link opens on both sides and you can chat. **End link** closes it.
+
+Every message is numbered and resent (after 30, 60 and 120 s) until the other station acknowledges it, and each one shows *sending*, *delivered* or *not delivered*.
+A completed handshake over RF proves the path works both ways.
+Operators using APRSdroid, a TH-D74/D75 or another APRS radio can take part too: they see the request as a message and reply **ACCEPT** or **DECLINE**. Plain APRS messages they send you appear in the chat, and you can reply.
+
 ## Setting TX audio
 
 Use **MENU → STATION → BCN** to send a beacon while you adjust the TX audio level. Aim for about 3 kHz deviation, which is clean, unclipped audio on a monitor receiver. Keep RX audio at roughly 30–50% on the face plate meter.

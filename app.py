@@ -29,7 +29,7 @@ import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "1.5"
+APP_VERSION = "1.8"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -277,6 +277,7 @@ class Station:
         self.tc_next = 0
         self.tc_alerts = []           # latest alerts for the face plate
         self.tc_seq = 0
+        self.chat = None              # two-way APRS chat (created when the station starts)
         self._stop = threading.Event()
         self._wake = threading.Event()
 
@@ -307,7 +308,9 @@ class Station:
                 pc = c.get("passcode") or eng.aprs_passcode(c["call"])
                 self.isc = tncmod.AprsIsClient(c["call"], int(pc), c.get("server") or "rotate.aprs2.net",
                                                software=APP_NAME, version=APP_VERSION)
-                self.isc.start()
+                self.isc.start(self.on_is_line)
+            if not self.chat or self.chat.mycall != c["call"]:
+                self.chat = tncmod.ChatManager(c["call"], self._chat_send)
             self.running = True
             self.openings = {}
             self._rf_was_live = self.rf_live()
@@ -373,6 +376,11 @@ class Station:
             if self.cfg.get("tc_enabled") and now >= self.tc_next:
                 self.tc_next = now + 20 * 60
                 threading.Thread(target=self.check_tropical, daemon=True).start()
+            if self.chat:
+                try:
+                    self.chat.tick()
+                except Exception as e:
+                    self.add_log("ERR", f"chat: {e}")
             self._wake.wait(1.0)
             self._wake.clear()
 
@@ -646,9 +654,40 @@ class Station:
         self.transmit(f":{eng.bln_addressee('9', self.cfg['group'])}:{APP_NAME} test - no propagation alert",
                       force_rf=True)
 
+    # ---- two-way chat
+    def _chat_send(self, call, info, route):
+        """Send one APRS message for the chat (RF ignores the propagation-mode standby)."""
+        c, sent = self.cfg, []
+        if route in ("rf", "rf_is"):
+            if self.rf_possible():
+                path = [p.strip() for p in (c.get("rf_path") or "").split(",") if p.strip()]
+                self.tnc.send(c["call"], eng.TOCALL, path, info)
+                sent.append("RF")
+            elif route == "rf":
+                raise IOError("RF needs a radio: set a TNC under MENU > RADIO / TNC, or choose APRS-IS")
+        if route in ("rf_is", "is") and self.isc and self.isc.verified:
+            self.isc.send(f"{c['call']}>{eng.TOCALL},TCPIP*:{info}")
+            sent.append("IS")
+        if not sent:
+            raise IOError("nothing to send with - no radio and APRS-IS not connected")
+        self.add_log("MSG", f"[{'+'.join(sent)}] {c['call']}>{call}: {info[11:]}")
+
+    def on_is_line(self, line):
+        if self.chat:
+            try:
+                if self.chat.on_packet(line, "IS"):
+                    self.add_log("MSG", f"[IS] {line}")
+            except Exception as e:
+                self.add_log("ERR", f"chat: {e}")
+
     # ---- RX
     def on_rf_packet(self, line):
         self.add_log("RX", line)
+        if self.chat:
+            try:
+                self.chat.on_packet(line, "RF")
+            except Exception as e:
+                self.add_log("ERR", f"chat: {e}")
         c = self.cfg
         if not (c.get("igate") and self.isc and self.isc.verified):
             return
@@ -752,6 +791,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(PRESETS)
         elif path == "/api/map":
             self._json(STATION.map_data())
+        elif path == "/api/chat":
+            self._json(STATION.chat.state() if STATION.chat else {"seq": 0, "peers": [], "events": [], "off": True})
         elif path == "/api/freqs":
             self._json([{"value": v, "label": l} for v, l in tncmod.APRS_FREQS])
         else:
@@ -783,6 +824,23 @@ class Handler(BaseHTTPRequestHandler):
             if kind not in ("general", "marine", "aviation"):
                 return self._json({"ok": False, "errors": ["Unknown bulletin type."]})
             threading.Thread(target=STATION.send_wx, args=(kind,), daemon=True).start()
+            self._json({"ok": True})
+        elif path == "/api/chat":
+            if not (STATION.running and STATION.chat):
+                return self._json({"ok": False, "errors": ["Turn the station ON first."]})
+            b = self._body()
+            act, call = b.get("action"), str(b.get("call") or "")
+            try:
+                if act == "hail":
+                    STATION.chat.hail(call, b.get("route") or "rf")
+                elif act in ("accept", "decline", "end", "read"):
+                    getattr(STATION.chat, "mark_read" if act == "read" else act)(call)
+                elif act == "send":
+                    STATION.chat.send(call, str(b.get("text") or ""))
+                else:
+                    return self._json({"ok": False, "errors": ["Unknown chat action."]})
+            except ValueError as e:
+                return self._json({"ok": False, "errors": [str(e)]})
             self._json({"ok": True})
         elif path in ("/api/beacon", "/api/test", "/api/check"):
             if not STATION.running:

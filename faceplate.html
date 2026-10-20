@@ -158,7 +158,7 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
   font-size:13px;padding:10px 12px;border:1px solid #000;box-shadow:0 2px 10px rgba(0,0,0,.8) inset}
 .mon div{white-space:pre-wrap;word-break:break-all;line-height:1.45}
 .mon .t{color:var(--mon-dim)}
-.mon .k-TX{color:#ffd27a}.mon .k-ERR{color:#ff7b70}.mon .k-PROP{color:#7fd8ff}.mon .k-SYS{color:#b9c2cb}.mon .k-IGT{color:#c7a6ff}.mon .k-WX{color:#8ef0e0}
+.mon .k-TX{color:#ffd27a}.mon .k-ERR{color:#ff7b70}.mon .k-PROP{color:#7fd8ff}.mon .k-SYS{color:#b9c2cb}.mon .k-IGT{color:#c7a6ff}.mon .k-WX{color:#8ef0e0}.mon .k-MSG{color:#7dd3fc}
 .missed{margin-top:18px;border-radius:10px;border:1px solid #6b4a12;background:linear-gradient(180deg,#2a1d08,#1c1407);
   padding:14px 16px;box-shadow:0 0 0 1px rgba(255,181,71,.15) inset}
 .missed.hide{display:none}
@@ -190,6 +190,143 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
 .leaflet-tooltip.tw-tip{background:#15181b;color:#e6edf3;border:1px solid #33393f;font-family:var(--mono);font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.6)}
 .leaflet-tooltip.tw-tip:before{display:none}
 @media (max-width:480px){ .map-box{height:340px} }
+/* ---------- face plate switcher ---------- */
+.fp-bar{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:6px;margin:0 0 14px}
+.fp-bar span{font-size:12px;letter-spacing:.2em;color:var(--engrave);margin-right:4px}
+.fp-bar button{min-height:36px;padding:0 14px;border-radius:8px;border:1px solid #3a4148;background:#1b1f23;color:var(--engrave-hi);
+  font:600 14px var(--label);letter-spacing:.06em;cursor:pointer}
+.fp-bar button[aria-pressed="true"]{background:var(--sea);border-color:var(--sea);color:#03201c}
+.fp{display:none}
+body[data-fp="console"] .wrap{max-width:1360px}
+body[data-fp="field"] .wrap{max-width:520px}
+body:not([data-fp="classic"]) .plate{display:none}
+body[data-fp="console"] #fp-console{display:flex}
+body[data-fp="field"] #fp-field{display:flex}
+body[data-fp="field"]{background:#e6ecf1}
+body[data-fp="field"] .fp-bar span{color:#475569}
+body[data-fp="field"] #mon-wrap{display:none}
+body[data-fp="field"] .foot{color:#64748b}
+
+/* ---------- Ops Console (A) ---------- */
+.c-root{flex-wrap:wrap;background:#0b1220;color:#e6edf6;border:1px solid #1f2b42;border-radius:14px;overflow:hidden;
+  font-family:system-ui,'Segoe UI',Roboto,sans-serif}
+.c-nav{flex:1 1 230px;background:#0f172a;border-right:1px solid #1f2b42;padding:22px 14px;display:flex;flex-direction:column;gap:18px}
+.c-brand{display:flex;align-items:center;gap:10px;padding:0 8px;font-weight:700;letter-spacing:.22em;font-size:15px}
+.c-card{background:#131d33;border:1px solid #22304a;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:6px}
+.c-call{font-family:var(--mono);font-size:22px;color:#fff}
+.c-sub{font-size:13px;color:#9fb0c8}
+.c-onrow{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:4px}
+.c-on{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#9fb0c8}
+.c-on i{width:9px;height:9px;border-radius:50%;background:#475569}
+.c-on.on{color:#6ee7b7}.c-on.on i{background:#34d399}
+.c-pwr{min-height:40px;padding:0 14px;border-radius:8px;border:1px solid #2b3b58;background:#15213a;color:#e6edf6;font:600 13px system-ui,sans-serif;cursor:pointer}
+.c-pwr.on{background:#0f3b31;border-color:#1f8f80;color:#a7f3e7}
+.c-links{display:flex;flex-direction:column;gap:2px}
+.c-links a,.c-links button{display:flex;align-items:center;gap:12px;min-height:44px;padding:0 12px;border-radius:8px;color:#b6c3d6;
+  text-decoration:none;font:15px system-ui,sans-serif;background:none;border:0;cursor:pointer;text-align:left}
+.c-links a:hover,.c-links button:hover{background:#17243d;color:#fff}
+.c-links svg{flex:0 0 auto}
+.c-foot{margin-top:auto;font-size:12px;color:#8396b0;line-height:1.5;padding:0 8px}
+.c-main{flex:999 1 560px;min-width:0;padding:22px 26px 28px;display:flex;flex-direction:column;gap:18px}
+.c-chips{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.c-chip{font-family:var(--mono);font-size:13px;padding:7px 12px;border-radius:999px;background:#10233a;border:1px solid #1e3a5f;color:#cfe3f7}
+.c-chip b{color:#fff;font-weight:400}
+.c-chip.warn{background:#2a2210;border-color:#5c4613;color:#fde68a}.c-chip.warn b{color:#fde68a}
+.c-chip.ok{background:#0f2a25;border-color:#1d5249;color:#99f6e4}.c-chip.ok b{color:#99f6e4}
+.c-utc{font-family:var(--mono);font-size:13px;color:#9fb0c8;margin-left:auto}
+.c-btns{display:flex;gap:8px;flex-wrap:wrap}
+.c-btn{min-height:44px;padding:0 18px;border-radius:8px;border:1px solid #2b3b58;background:#15213a;color:#e6edf6;font:600 14px system-ui,sans-serif;cursor:pointer}
+.c-btn.pri{background:#2dd4bf;border-color:#2dd4bf;color:#04241f}
+.c-msg{font-family:var(--mono);font-size:13px;color:#9fb0c8}
+.c-open{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.c-cell{background:#121b2e;border:1px solid #22304a;border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.c-cell .h{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:13px;color:#9fb0c8}
+.c-cell .big{font-size:20px;font-weight:600;color:#c4d0e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.c-cell .sm{font-size:13px;color:#8396b0}
+.c-cell .tag{font-weight:700;font-size:12px;padding:3px 8px;border-radius:6px}
+.c-cell.TEP{background:#2a1d07;border-color:#b7791f}.c-cell.TEP .h,.c-cell.TEP .sm{color:#fcd9a0}.c-cell.TEP .big{color:#fff3dc;font-family:var(--mono)}.c-cell.TEP .tag{background:#f59e0b;color:#241500}
+.c-cell.TROPO{background:#0d2623;border-color:#1f8f80}.c-cell.TROPO .h,.c-cell.TROPO .sm{color:#a7f3e7}.c-cell.TROPO .big{color:#ecfffb;font-family:var(--mono)}.c-cell.TROPO .tag{background:#2dd4bf;color:#032a25}
+.c-cell.ES{background:#2a0f22;border-color:#a8327f}.c-cell.ES .h,.c-cell.ES .sm{color:#fbcfe8}.c-cell.ES .big{color:#fff0f8;font-family:var(--mono)}.c-cell.ES .tag{background:#f472b6;color:#2a0619}
+.c-cell.off{opacity:.55}
+.c-row{display:flex;flex-wrap:wrap;gap:18px;align-items:stretch}
+.c-row>#c-slot-map{flex:2 1 480px;min-width:0}
+.c-panel{flex:1 1 300px;min-width:0;background:#121b2e;border:1px solid #22304a;border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.c-panel h2{margin:0;font-size:13px;letter-spacing:.14em;color:#c4d0e0;font-weight:600}
+.c-alert{display:flex;gap:10px;padding:9px 10px;border-radius:8px;background:#15213a;font-size:14px;line-height:1.35}
+.c-alert .k{flex:0 0 auto;font:700 11px var(--mono);padding:3px 6px;border-radius:4px;height:fit-content;background:#93c5fd;color:#0b1a33}
+.c-alert .k.VHF{background:#f59e0b;color:#241500}.c-alert .k.WX{background:#8ef0e0;color:#062a25}.c-alert .k.TC{background:#c4b5fd;color:#1e1338}
+.c-alert .k.CHAT{background:#2dd4bf;color:#032a25}
+.c-alert small{display:block;color:#9fb0c8;font-size:12px}
+.c-empty{font-size:13px;color:#8396b0}
+body[data-fp="console"] .map-wrap,body[data-fp="console"] .chat-wrap,body[data-fp="console"] .mon-wrap{margin-top:0}
+@media (max-width:820px){ .c-open{grid-template-columns:repeat(2,minmax(0,1fr))} }
+@media (max-width:480px){ .c-open{grid-template-columns:1fr} .c-main{padding:16px} }
+
+/* ---------- Field Compact (B) ---------- */
+.f-root{flex-direction:column;gap:12px;background:#eef2f5;color:#0f172a;border-radius:16px;overflow:hidden;border:1px solid #cbd5df;
+  font-family:system-ui,'Segoe UI',Roboto,sans-serif;padding-bottom:0}
+.f-head{background:#0f172a;color:#f8fafc;padding:18px 18px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.f-head .t{font-size:12px;letter-spacing:.2em;color:#cbd5e1}
+.f-head .c{font-family:var(--mono);font-size:26px}
+.f-head .s{font-size:13px;color:#cbd5e1}
+.f-pwr{width:68px;height:68px;border-radius:50%;border:3px solid #64748b;background:#1e293b;color:#f8fafc;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:2px;font:700 12px system-ui,sans-serif;cursor:pointer;flex:0 0 auto}
+.f-pwr svg{stroke:#94a3b8}
+.f-pwr.on{border-color:#22d3ee;background:#12324a}.f-pwr.on svg{stroke:#22d3ee}
+.f-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:0 14px}
+.f-tile{background:#fff;border:1px solid #d5dde5;border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:2px}
+.f-tile span{font-size:12px;color:#475569}.f-tile b{font-size:17px}
+.f-now{margin:0 14px;background:#fff;border-radius:14px;border:2px solid #cbd5df;padding:14px;display:flex;flex-direction:column;gap:6px}
+.f-now.open{border-color:#d97706}
+.f-now .h{display:flex;justify-content:space-between;font-size:13px;font-weight:700;letter-spacing:.12em;color:#475569}
+.f-now.open .h{color:#92400e}
+.f-now .big{font-size:22px;font-weight:700}
+.f-now .sm{font-family:var(--mono);font-size:14px;color:#334155}
+.f-bands{margin:0 14px;background:#fff;border-radius:14px;border:1px solid #d5dde5;overflow:hidden}
+.f-bands .r{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:center;padding:10px 12px;border-top:1px solid #e2e8f0;font-size:15px}
+.f-bands .r.hd{border-top:0;font-size:12px;color:#475569;padding-bottom:6px}
+.f-bands .q{color:#64748b}.f-bands .TEP{font-weight:700;color:#92400e}.f-bands .TROPO{font-weight:700;color:#0f766e}.f-bands .ES{font-weight:700;color:#9d174d}
+.f-slot{margin:0 14px}
+.f-slot .map-box{height:260px}
+.f-actions{position:sticky;bottom:0;margin-top:4px;background:#fff;border-top:1px solid #d5dde5;padding:12px 14px 16px;
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;z-index:600}
+.f-actions button{min-height:52px;border-radius:12px;border:1px solid #c3cfda;background:#f8fafc;color:#0f172a;font:700 15px system-ui,sans-serif;cursor:pointer}
+.f-actions button.pri{background:#0e7490;border-color:#0e7490;color:#fff}
+body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;background:#111827;border-radius:12px;padding:12px}
+
+/* ---------- two-way chat ---------- */
+.chat-wrap{margin-top:18px;border:1px solid var(--edge);border-radius:10px;padding:14px;background:#111418;color:var(--engrave-hi)}
+.map-wrap{color:var(--engrave-hi)}
+#fp-console .missed,#fp-field .missed{margin:0}
+#fp-field .missed{margin:0 14px}
+.hail{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:12px}
+.hail label{display:flex;flex-direction:column;gap:4px;font-size:12px;letter-spacing:.12em;color:var(--engrave);flex:1 1 160px}
+.hail .btn{min-height:42px}
+.chat-peers{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.chat-peers button{display:flex;align-items:center;gap:8px;min-height:38px;padding:0 12px;border-radius:999px;border:1px solid #3a4148;
+  background:#1b1f23;color:var(--engrave-hi);font:15px var(--mono);cursor:pointer}
+.chat-peers button[aria-pressed="true"]{border-color:var(--sea);background:#0f2a26}
+.chat-peers i{width:9px;height:9px;border-radius:50%;background:#5c6670}
+.chat-peers i.open{background:var(--green)}.chat-peers i.wait{background:var(--amber)}.chat-peers i.in{background:var(--blue)}
+.chat-peers .n{font:700 11px var(--label);background:var(--red);color:#fff;border-radius:999px;padding:1px 6px}
+.chat-status{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-radius:8px;
+  background:#1a1f24;font-size:15px;margin-bottom:10px}
+.chat-status b{font-family:var(--mono);font-weight:400;color:#fff}
+.chat-status .acts{display:flex;gap:8px;flex-wrap:wrap}
+.chat-status .btn{min-height:40px;padding:0 14px}
+.chat-status.ask{background:#0d2a3a;border:1px solid #2b7bb0}
+.chat-status.ask.pulse{animation:twpulse 1.2s ease-in-out infinite}
+@keyframes twpulse{50%{box-shadow:0 0 0 4px rgba(79,182,255,.25)}}
+.chat-msgs{height:240px;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:6px 2px;margin-bottom:10px}
+.cm{max-width:80%;padding:8px 12px;border-radius:12px;font-size:15px;line-height:1.35;word-break:break-word}
+.cm small{display:block;font:12px var(--mono);opacity:.75;margin-top:3px}
+.cm.in{align-self:flex-start;background:#22282e;color:#e6edf3;border-radius:4px 12px 12px 12px}
+.cm.out{align-self:flex-end;background:#0f3b31;color:#dcfff7;border-radius:12px 4px 12px 12px}
+.cm.out.failed{background:#3a1512;color:#ffd9d4}
+.cm.sys{align-self:center;background:none;color:var(--engrave);font-size:13px;font-family:var(--mono);padding:2px}
+.chat-form{display:flex;gap:8px}
+.chat-form input{flex:1;min-width:0}
+.chat-empty{color:var(--engrave);font-size:14px;padding:6px 2px 10px}
 .foot{margin-top:16px;font-size:13px;color:#5d656e;text-align:center;letter-spacing:.08em}
 
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(120%);max-width:min(560px,92vw);
@@ -225,6 +362,78 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
 </head>
 <body>
 <div class="wrap">
+  <div class="fp-bar" role="group" aria-label="Face plate style"><span>FACE PLATE</span>
+    <button type="button" data-fp-btn="classic" aria-pressed="true">Classic</button>
+    <button type="button" data-fp-btn="console" aria-pressed="false">Ops Console</button>
+    <button type="button" data-fp-btn="field" aria-pressed="false">Field</button></div>
+
+  <section class="fp c-root" id="fp-console" aria-label="Ops Console face plate">
+    <nav class="c-nav" aria-label="Ops Console">
+      <div class="c-brand"><svg width="30" height="18" viewBox="0 0 34 20" aria-hidden="true"><path d="M1 7c4-4 8-4 12 0s8 4 12 0 6-3 8-2" stroke="#2dd4bf" stroke-width="2.4" fill="none" stroke-linecap="round"/><path d="M1 14c4-4 8-4 12 0s8 4 12 0 6-3 8-2" stroke="#64748b" stroke-width="2.4" fill="none" stroke-linecap="round"/></svg>TRADEWIND</div>
+      <div class="c-card">
+        <div class="c-call" id="c-call">NOCALL</div>
+        <div class="c-sub" id="c-grid">----</div>
+        <div class="c-onrow"><div class="c-on" id="c-on"><i></i><span>Station OFF</span></div>
+          <button type="button" class="c-pwr" id="c-power">Power</button></div>
+      </div>
+      <div class="c-links">
+        <a href="#c-open"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Openings</a>
+        <a href="#c-slot-map"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg>Live map</a>
+        <a href="#c-slot-chat"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/></svg>Two-way chat</a>
+        <a href="#c-alerts"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v4l-2 3h16l-2-3V9a6 6 0 0 0-6-6zM10 19a2 2 0 0 0 4 0"/></svg>Alert center</a>
+        <a href="#c-slot-log"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Packet log</a>
+        <button type="button" id="c-settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>Settings</button>
+      </div>
+      <div class="c-foot">Spot data: PSKReporter<br>by 8P5DG &amp; 8P5AB · MIT</div>
+    </nav>
+    <div class="c-main">
+      <div class="c-chips">
+        <span class="c-chip" id="c-tnc">TNC <b>OFF</b></span>
+        <span class="c-chip" id="c-rf">RF <b>OFF</b></span>
+        <span class="c-chip" id="c-net">NET <b>OFF</b></span>
+        <span class="c-chip hide" id="c-qrg">QRG <b></b></span>
+        <span class="c-chip" id="c-next">Next check <b>--:--</b></span>
+        <span class="c-utc" id="c-utc">--:--:-- UTC</span>
+        <div class="c-btns">
+          <button type="button" class="c-btn" data-click="#b-bcn">Beacon</button>
+          <button type="button" class="c-btn" data-click="#b-test">Test</button>
+          <button type="button" class="c-btn pri" data-click="#b-chk">Check now</button>
+        </div>
+      </div>
+      <div class="c-msg" id="c-msg"></div>
+      <div id="c-slot-missed"></div>
+      <section class="c-open" id="c-open" aria-label="Band openings" aria-live="polite"></section>
+      <div class="c-row">
+        <div id="c-slot-map"></div>
+        <section class="c-panel" id="c-alerts" aria-label="Alert center"><h2>ALERT CENTER</h2><div id="c-alert-list"><div class="c-empty">Alerts, bulletins and chat requests appear here.</div></div></section>
+      </div>
+      <div id="c-slot-chat"></div>
+      <div id="c-slot-log"></div>
+    </div>
+  </section>
+
+  <section class="fp f-root" id="fp-field" aria-label="Field face plate">
+    <header class="f-head">
+      <div><div class="t">TRADEWIND</div><div class="c" id="f-call">NOCALL</div><div class="s" id="f-sub">----</div></div>
+      <button type="button" class="f-pwr" id="f-power" aria-label="Station power"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg><span id="f-pwr-t">OFF</span></button>
+    </header>
+    <div class="f-tiles">
+      <div class="f-tile"><span>RF</span><b id="f-rf">OFF</b></div>
+      <div class="f-tile"><span>APRS-IS</span><b id="f-net">OFF</b></div>
+      <div class="f-tile"><span>Next check</span><b id="f-next" style="font-family:var(--mono)">--:--</b></div>
+    </div>
+    <section class="f-now" id="f-now" aria-live="polite"><div class="h"><span id="f-now-h">BANDS</span><span id="f-now-t"></span></div>
+      <div class="big" id="f-now-big">Station off</div><div class="sm" id="f-now-sm">Press the power button to start</div></section>
+    <div id="f-slot-missed"></div>
+    <section class="f-bands" id="f-bands" aria-label="All bands"></section>
+    <div class="f-slot" id="f-slot-map"></div>
+    <div class="f-slot" id="f-slot-chat"></div>
+    <nav class="f-actions" aria-label="Actions">
+      <button type="button" data-click="#b-bcn">Beacon</button>
+      <button type="button" id="f-menu">Menu</button>
+      <button type="button" class="pri" data-click="#b-chk">Check</button>
+    </nav>
+  </section>
   <section class="plate" aria-label="Tradewind face plate">
     <i class="screw s1"></i><i class="screw s2"></i><i class="screw s3"></i><i class="screw s4"></i>
     <div class="top">
@@ -444,7 +653,8 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
     <div id="missed-list"></div>
   </section>
 
-  <section class="map-wrap" aria-label="Live propagation map">
+  <div id="classic-slots">
+  <section class="map-wrap" id="map-wrap" aria-label="Live propagation map">
     <div class="mon-head"><span>LIVE PROPAGATION MAP</span><span id="map-when">--</span></div>
     <div class="map-bar">
       <div class="chips" role="group" aria-label="Map filters">
@@ -460,10 +670,25 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
     <div class="map-legend">Lines join Caribbean stations to the stations that heard them (or that they heard) on PSKReporter during the look-back window. Solid = 2m, dashed = 70cm. Updated after every check (every 5 minutes by default).</div>
   </section>
 
-  <section class="mon-wrap">
+  <section class="chat-wrap" id="chat-wrap" aria-label="Two-way chat">
+    <div class="mon-head"><span>TWO-WAY CHAT · APRS 2M / 70CM</span><span id="chat-note"></span></div>
+    <form class="hail" id="hail-form">
+      <label>Hail a station<input class="inset" id="hail-call" placeholder="8P6XX-9" autocomplete="off" spellcheck="false" maxlength="9"></label>
+      <label>Send via<select class="inset" id="hail-route">
+        <option value="rf">RF only (tests the path)</option>
+        <option value="rf_is">RF + APRS-IS</option>
+        <option value="is">APRS-IS only</option></select></label>
+      <button class="btn accent" type="submit">HAIL</button>
+    </form>
+    <div class="chat-peers" id="chat-peers" role="group" aria-label="Stations"></div>
+    <div id="chat-pane"><div class="chat-empty">Hail a station to open a two-way link. They get a call-out tone and an Accept button; when they accept, you confirm, and the chat opens.</div></div>
+  </section>
+
+  <section class="mon-wrap" id="mon-wrap">
     <div class="mon-head"><span>PACKET MONITOR</span><span id="near"></span></div>
     <div class="mon" id="mon" role="log" aria-live="polite"></div>
   </section>
+  </div>
   <div class="foot" id="foot">Tradewind &middot; by Brandon St Rose (8P5DG) &amp; Kammie Holder (8P5AB) &middot; MIT License &middot; spot data from PSKReporter</div>
 </div>
 <datalist id="serial-list"></datalist>
@@ -615,6 +840,7 @@ async function poll(){
       const first = s.tc.alerts[0];
       toast('🌀 ' + first.slice(0,3).join(' / '), false, 20000);
       playAlert('Tropical cyclone alert. ' + (first[1]||first[0]), 'tc');
+      addAlert('TC', first.slice(0,2).join(' / '));
     }
     prevTc = s.tc.seq;
   }
@@ -653,10 +879,12 @@ async function poll(){
       const tt = document.createElement('span'); tt.className='t'; tt.textContent = hms(new Date(e.t*1000))+' '+e.kind.padEnd(4)+' ';
       d.append(tt, document.createTextNode(e.text)); mon.append(d);
       logSince = Math.max(logSince, e.id);
+      alertFromLog(e);
     }
     while (mon.children.length > 400) mon.firstChild.remove();
     if (stick) mon.scrollTop = mon.scrollHeight;
   }
+  renderAlt(s);
 }
 function androidMode(){
   document.body.dataset.android = '1';
@@ -749,7 +977,7 @@ document.addEventListener('visibilitychange', ()=>{
 });
 $('#b-missed-ok').onclick = ()=>{ $('#missed').classList.add('hide'); markSeen(); };
 
-function tick(){ $('#l-clock').textContent = hms(new Date()); }
+function tick(){ $('#l-clock').textContent = hms(new Date()); const u=$('#c-utc'); if (u) u.textContent = hms(new Date()) + ' UTC'; }
 
 /* ---------- live map ---------- */
 const MAP_COL = {TEP:'#ffb547', TROPO:'#20c7b4', ES:'#ff6bd6'};
@@ -839,6 +1067,180 @@ function drawMap(){
   }
 }
 
+/* ---------- switchable face plates ---------- */
+const FP_SLOTS = {
+  classic: {'map-wrap':'classic-slots', 'chat-wrap':'classic-slots', 'mon-wrap':'classic-slots'},
+  console: {'map-wrap':'c-slot-map', 'chat-wrap':'c-slot-chat', 'mon-wrap':'c-slot-log'},
+  field:   {'map-wrap':'f-slot-map', 'chat-wrap':'f-slot-chat', 'mon-wrap':'classic-slots'},
+};
+function setFp(name){
+  if (!FP_SLOTS[name]) name = 'classic';
+  document.body.dataset.fp = name; lsSet('tw_fp', name);
+  $$('[data-fp-btn]').forEach(b=>b.setAttribute('aria-pressed', String(b.dataset.fpBtn===name)));
+  for (const [id, slot] of Object.entries(FP_SLOTS[name])) $('#'+slot).append($('#'+id));
+  if (name==='classic'){ const cs=$('#classic-slots'); cs.append($('#map-wrap'), $('#chat-wrap'), $('#mon-wrap')); cs.before($('#missed')); }
+  else $(name==='console' ? '#c-slot-missed' : '#f-slot-missed').append($('#missed'));
+  if (map) setTimeout(()=>map.invalidateSize(), 60);
+  if (lastState) renderAlt(lastState);
+}
+$$('[data-fp-btn]').forEach(b=>b.onclick=()=>setFp(b.dataset.fpBtn));
+$$('[data-click]').forEach(b=>b.onclick=()=>{
+  const t = $(b.dataset.click);
+  if (t.disabled) return toast('Turn the station ON first (power button).');
+  t.click();
+});
+$('#c-power').onclick = ()=>$('#power').click();
+$('#f-power').onclick = ()=>$('#power').click();
+const openSettings = ()=>{ if (!$('#drawer').classList.contains('open')) $('#b-menu').click(); else $('#drawer').scrollIntoView({behavior:'smooth'}); };
+$('#c-settings').onclick = openSettings; $('#f-menu').onclick = openSettings;
+
+const alerts = [];
+function addAlert(kind, text, t){
+  alerts.unshift({kind, text, t: t || Date.now()/1000}); alerts.length = Math.min(alerts.length, 12);
+  if (document.body.dataset.fp==='console') drawAlerts();
+}
+function alertFromLog(e){
+  if (e.kind==='TX' && /:BLN\w*VHF/.test(e.text)) addAlert('VHF', e.text.split(':').slice(-1)[0].trim(), e.t);
+  else if (e.kind==='TX' && /:BLN\w*TC/.test(e.text)) addAlert('TC', e.text.split(':').slice(-1)[0].trim(), e.t);
+  else if (e.kind==='TX' && /:BLN\w*(WX|MAR|AVN)/.test(e.text)) addAlert('WX', e.text.split(':').slice(-1)[0].trim(), e.t);
+  else if (e.kind==='ERR') addAlert('ERR', e.text, e.t);
+}
+function drawAlerts(){
+  const L = $('#c-alert-list');
+  if (!alerts.length){ L.innerHTML = '<div class="c-empty">Alerts, bulletins and chat requests appear here.</div>'; return; }
+  L.innerHTML = alerts.slice(0,8).map(a=>`<div class="c-alert"><span class="k ${a.kind}">${a.kind}</span><div>${esc(a.text)}<small>${hms(new Date(a.t*1000)).slice(0,5)} UTC</small></div></div>`).join('');
+}
+const REGION_LONG = {NA:'North America', EU:'Europe', LA:'Latin America'};
+const MODE_TAG = {TEP:'TEP', TROPO:'DUCT', ES:'Es'};
+function renderAlt(s){
+  const fp = document.body.dataset.fp, t = s.tnc, now = Date.now()/1000, is = s.aprsis;
+  const freq = running && t && t.freq ? (t.freq/1e6).toFixed(3) + (t.cat && t.cat.startsWith('tuned') ? ' FM-D' : '?') : '';
+  const net = !is ? 'OFF' : is.verified ? 'IS OK' : is.connected ? 'UNVER' : 'CONN..';
+  const nextc = s.next_check ? mmss(s.next_check-now) : '--:--';
+  if (fp==='console'){
+    $('#c-call').textContent = cfg.call || 'NOCALL';
+    $('#c-grid').textContent = (cfg.grid || '----') + (cfg.wx_place ? ' · ' + cfg.wx_place : '');
+    $('#c-on').classList.toggle('on', running); $('#c-on span').textContent = running ? 'Station ON' : 'Station OFF';
+    $('#c-power').classList.toggle('on', running); $('#c-power').textContent = running ? 'Turn off' : 'Turn on';
+    $('#c-tnc b').textContent = $('#l-tnc').textContent;
+    $('#c-rf b').textContent = s.rf || 'OFF'; $('#c-rf').className = 'c-chip' + (s.rf==='STBY' ? ' warn' : s.rf==='ON' ? ' ok' : '');
+    $('#c-net b').textContent = net; $('#c-net').className = 'c-chip' + (is && is.verified ? ' ok' : '');
+    $('#c-qrg').classList.toggle('hide', !freq); $('#c-qrg b').textContent = freq;
+    $('#c-next b').textContent = nextc;
+    $('#c-msg').textContent = $('#l-msg').textContent;
+    $('#c-open').innerHTML = ['2m','70cm'].flatMap(band=>['NA','EU','LA'].map(reg=>{
+      const c = s.matrix.find(x=>x.band===band && x.region===reg) || {};
+      const head = `${band} · ${REGION_LONG[reg]}`;
+      if (c.open) return `<div class="c-cell ${c.prop_mode}"><div class="h"><span>${head}</span><span class="tag">${MODE_TAG[c.prop_mode]||''} OPEN</span></div>
+        <div class="big">${esc(c.tx)} › ${esc(c.rx)}</div><div class="sm">${Number(c.km).toLocaleString()} km · ${esc(c.mode)} ${esc(c.snr)} dB · ${c.paths} path${c.paths==1?'':'s'}</div></div>`;
+      return `<div class="c-cell${c.enabled===false?' off':''}"><div class="h"><span>${head}</span><span>${c.enabled===false?'OFF':running?'QUIET':'----'}</span></div>
+        <div class="big">${c.enabled===false?'Not watched':'No paths'}</div><div class="sm">${running ? 'Watching ' + (cfg.watch_modes||[]).map(m=>MODE_TAG[m]).join(' / ') : 'Station off'}</div></div>`;
+    })).join('');
+    drawAlerts();
+  } else if (fp==='field'){
+    $('#f-call').textContent = cfg.call || 'NOCALL';
+    $('#f-sub').textContent = (cfg.grid || '----') + (freq ? ' · ' + freq : '');
+    $('#f-power').classList.toggle('on', running); $('#f-pwr-t').textContent = running ? 'ON' : 'OFF';
+    $('#f-rf').textContent = s.rf || 'OFF'; $('#f-rf').style.color = s.rf==='ON' ? '#047857' : s.rf==='STBY' ? '#92400e' : '#475569';
+    $('#f-net').textContent = net==='IS OK' ? 'OK' : net; $('#f-net').style.color = is && is.verified ? '#047857' : '#475569';
+    $('#f-next').textContent = nextc;
+    const open = s.matrix.filter(c=>c.open), now0 = open[0];
+    $('#f-now').classList.toggle('open', !!now0);
+    $('#f-now-h').textContent = now0 ? 'OPEN NOW' : 'BANDS';
+    $('#f-now-t').textContent = s.last_check ? hms(new Date(s.last_check*1000)).slice(0,5) + ' UTC' : '';
+    $('#f-now-big').textContent = now0 ? `${now0.band} ${now0.mode_name} to ${REGION_LONG[now0.region]}` + (open.length>1 ? ` (+${open.length-1} more)` : '')
+      : !running ? 'Station off' : s.last_check ? 'All bands quiet' : 'Checking...';
+    $('#f-now-sm').textContent = now0 ? `${now0.tx} › ${now0.rx} · ${Number(now0.km).toLocaleString()} km · ${now0.paths} path${now0.paths==1?'':'s'}`
+      : !running ? 'Press the power button to start' : $('#l-msg').textContent;
+    $('#f-bands').innerHTML = '<div class="r hd"><span></span><span>N.Amer</span><span>Europe</span><span>Lat.Am</span></div>' +
+      ['2m','70cm'].map(band=>`<div class="r"><b>${band}</b>` + ['NA','EU','LA'].map(reg=>{
+        const c = s.matrix.find(x=>x.band===band && x.region===reg) || {};
+        return c.open ? `<span class="${c.prop_mode}">${MODE_TAG[c.prop_mode]}</span>` : `<span class="q">${c.enabled===false?'off':'quiet'}</span>`;
+      }).join('') + '</div>').join('');
+  }
+}
+
+/* ---------- two-way chat ---------- */
+let chatSeq = -1, chatSel = null, chatEvSeen = null, chatData = null;
+function ring(){                         // call-out tone for an incoming link request
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  for (let r=0; r<2; r++) for (let i=0; i<6; i++){
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain(), at = t0 + r*1.1 + i*0.09;
+    o.type='sine'; o.frequency.value = i%2 ? 1600 : 1200; o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(0.3, at+0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, at+0.085); o.start(at); o.stop(at+0.09);
+  }
+}
+function chatAlert(ev){
+  const say1 = t => { if (soundReady && cfg.alert_voice !== false) setTimeout(()=>say(t), 1200); };
+  if (ev.kind==='request'){ toast('📡 ' + ev.text, true, 15000); if (soundReady) ring(); else pendingAlert = {msg: ev.text, kind:'open'}; say1(`${ev.call.split('').join(' ')} wants to chat`); }
+  else if (ev.kind==='accepted'){ toast('✅ ' + ev.text, true, 15000); if (soundReady) ring(); say1('Your chat request was accepted. Press accept to confirm.'); }
+  else if (ev.kind==='open'){ toast(ev.text, true); if (soundReady) chime(); }
+  else if (ev.kind==='message'){ toast(ev.text, true, 8000); if (soundReady) chime(); }
+  else toast(ev.text);
+  addAlert('CHAT', ev.text, ev.t);
+  try { if (document.hidden && 'Notification' in window && Notification.permission==='granted') new Notification('Tradewind chat', {body: ev.text}); } catch(e){}
+}
+const ST_CLASS = {open:'open', hailing:'wait', await_confirm:'in', incoming:'in', accepted:'wait'};
+async function pollChat(){
+  let c; try { c = await api('/api/chat'); } catch(e){ return; }
+  if (c.off){ $('#chat-note').textContent = 'turn the station on to chat'; chatData = c; if (chatSeq !== 0){ chatSeq = 0; drawChat(); } return; }
+  $('#chat-note').textContent = c.mycall || '';
+  if (chatEvSeen === null) chatEvSeen = c.events.length ? c.events[c.events.length-1].seq : 0;
+  for (const ev of c.events) if (ev.seq > chatEvSeen){ chatEvSeen = ev.seq; chatAlert(ev); if (ev.kind==='request' || ev.kind==='accepted') chatSel = ev.call; }
+  chatData = c;
+  if (c.seq !== chatSeq){ chatSeq = c.seq; drawChat(); }
+}
+function drawChat(){
+  const c = chatData || {peers:[]};
+  const peers = c.peers || [];
+  if (!chatSel && peers.length) chatSel = peers[0].call;
+  $('#chat-peers').innerHTML = peers.map(p=>`<button type="button" data-peer="${esc(p.call)}" aria-pressed="${p.call===chatSel}"><i class="${ST_CLASS[p.status]||''}"></i>${esc(p.call)}${p.unread?`<span class="n">${p.unread}</span>`:''}</button>`).join('');
+  $$('[data-peer]').forEach(b=>b.onclick=()=>{ chatSel = b.dataset.peer; api('/api/chat', {action:'read', call: chatSel}); drawChat(); });
+  const p = peers.find(x=>x.call===chatSel);
+  if (!p){ $('#chat-pane').innerHTML = `<div class="chat-empty">${c.off ? 'Turn the station on, then hail a station to open a two-way link.' :
+    'Hail a station to open a two-way link. They hear a call-out tone and get an Accept button; when they accept, you confirm, and the chat opens.'}</div>`; return; }
+  const ROUTE = {rf:'RF only', rf_is:'RF + APRS-IS', is:'APRS-IS only'};
+  let acts = '';
+  if (p.status==='incoming') acts = `<button class="btn accent" data-act="accept">ACCEPT</button><button class="btn" data-act="decline">DECLINE</button>`;
+  else if (p.status==='await_confirm') acts = `<button class="btn accent" data-act="accept">ACCEPT</button><button class="btn" data-act="end">CANCEL</button>`;
+  else if (['open','hailing','accepted'].includes(p.status)) acts = `<button class="btn" data-act="end">${p.status==='open'?'END LINK':'CANCEL'}</button>`;
+  else acts = `<button class="btn" data-act="hail">HAIL AGAIN</button>`;
+  const ask = ['incoming','await_confirm'].includes(p.status);
+  const icon = m => m.dir!=='out' ? '' : m.state==='delivered' ? ' · ✓ delivered' : m.state==='failed' ? ' · ✗ not delivered' : m.state==='rejected' ? ' · ✗ rejected' : ' · sending…';
+  const msgs = p.messages.map(m => m.dir==='sys' ? `<div class="cm sys">${hms(new Date(m.t*1000)).slice(0,5)} ${esc(m.text)}</div>` :
+    `<div class="cm ${m.dir} ${m.state==='failed'||m.state==='rejected'?'failed':''}">${esc(m.text)}<small>${hms(new Date(m.t*1000)).slice(0,5)}${m.via?' · via '+m.via:''}${icon(m)}${m.error?' · '+esc(m.error):''}</small></div>`).join('');
+  $('#chat-pane').innerHTML = `<div class="chat-status${ask?' ask pulse':''}"><span><b>${esc(p.call)}</b> · ${esc(p.status_text)} · ${ROUTE[p.route]||p.route}${p.via?' · last heard via '+p.via:''}</span><span class="acts">${acts}</span></div>
+    <div class="chat-msgs" id="chat-msgs" role="log" aria-live="polite">${msgs}</div>
+    <form class="chat-form" id="chat-form"><input class="inset" id="chat-text" maxlength="200" autocomplete="off" placeholder="${p.can_send?'Type a message':'Chat opens when both sides accept'}" ${p.can_send?'':'disabled'}><button class="btn accent" type="submit" ${p.can_send?'':'disabled'}>SEND</button></form>`;
+  const box = $('#chat-msgs'); box.scrollTop = box.scrollHeight;
+  $$('[data-act]').forEach(b=>b.onclick = async ()=>{
+    unlockAudio();
+    const body = {action: b.dataset.act, call: p.call};
+    if (body.action==='hail') body.route = p.route;
+    const r = await api('/api/chat', body);
+    if (r.errors && r.errors.length) toast(r.errors[0]);
+    pollChat();
+  });
+  $('#chat-form').onsubmit = async e=>{
+    e.preventDefault(); const t = $('#chat-text').value.trim(); if (!t) return;
+    const r = await api('/api/chat', {action:'send', call: p.call, text: t});
+    if (r.errors && r.errors.length) return toast(r.errors[0]);
+    pollChat();
+  };
+}
+$('#hail-form').onsubmit = async e=>{
+  e.preventDefault(); unlockAudio();
+  const call = $('#hail-call').value.trim().toUpperCase();
+  const r = await api('/api/chat', {action:'hail', call, route: $('#hail-route').value});
+  if (r.errors && r.errors.length) return toast(r.errors[0]);
+  chatSel = call; $('#hail-call').value = '';
+  toast(`Calling ${call}... waiting for them to accept`, true);
+  pollChat();
+};
+$('#hail-call').addEventListener('input', e=>{ const p=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); e.target.setSelectionRange(p,p); });
+
 /* ---------- wiring ---------- */
 $$('[data-wx]').forEach(b=>b.onclick = async ()=>{
   if (dirty) await save();
@@ -879,8 +1281,10 @@ $('#f-grid').addEventListener('blur', e=>{ const v=e.target.value.trim(); e.targ
   } catch(e){}
   await poll(); dirty=false; $('#b-save-top').textContent='SAVE';
   tick(); setInterval(tick, 1000); setInterval(poll, 1500);
+  setFp(lsGet('tw_fp') || 'classic');
   await checkMissed('load');
   initMap();
+  pollChat(); setInterval(pollChat, 2000);
   setInterval(markSeen, 30000);
 })();
 </script>

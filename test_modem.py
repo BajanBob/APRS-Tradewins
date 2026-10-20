@@ -37,6 +37,8 @@ def main():
     assert eng.classify("K4ABC", "EL96", "") == "NA"
     assert eng.classify("PY7AA", "HI21", "") == "LA"
     assert eng.classify("G4XXX", "IO91", "") == "EU"
+    assert eng.classify("CN8WEBSDR", "FK93", "") is None, "wrong locator must not make a station Caribbean"
+    assert eng.classify("K1ABC/KP4", "FK68", "") == "CAR", "portable Caribbean call"
     assert eng.aprs_passcode("N0CALL") == 13023
     assert tnc.civ_ptt_command("7C", True) == bytes.fromhex("FEFE7CE01C0001FD"), "CI-V TX on"
     assert tnc.civ_ptt_command("7C", False) == bytes.fromhex("FEFE7CE01C0000FD"), "CI-V TX off"

@@ -157,8 +157,9 @@ def region_from_latlon(lat, lon):
 
 
 def caribbean_by_call(call):
-    c = (call or "").upper().split("/")[0]
-    return any(c.startswith(p) for p in CARIBBEAN_CALL_PREFIXES)
+    """Caribbean callsign prefix, including portable forms such as K1ABC/KP4."""
+    parts = [p for p in (call or "").upper().split("/") if p]
+    return any(p.startswith(x) for p in parts for x in CARIBBEAN_CALL_PREFIXES)
 
 
 def classify(call, grid, dxcc_code):
@@ -173,9 +174,12 @@ def classify(call, grid, dxcc_code):
         return "EU"
     if pos:
         r = region_from_latlon(*pos)
-        # Don't let a grid box label a non-Caribbean DXCC as Caribbean
-        if r == "CAR" and code:
-            return "NA" if code == "K" else "LA"
+        # Don't let a grid box label a non-Caribbean station as Caribbean
+        # (a wrong locator such as a European WebSDR showing a Caribbean grid)
+        if r == "CAR":
+            if code:
+                return "NA" if code == "K" else "LA"
+            return None
         return r
     return None
 

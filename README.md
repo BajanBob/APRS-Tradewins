@@ -214,6 +214,22 @@ The **FORMS** button in the chat sends short structured reports, styled on Winli
 
 Each form becomes one or more numbered messages of up to 67 characters, e.g. `WXOBS 201225L 1/3 Ocean City, St Philip. Wind ENE 35 G50kt...`. Each message is acknowledged like any other chat message.
 
+## New in v3.3
+
+**Linux and Raspberry Pi.** Download `Tradewind-linux.tar.gz` from Releases, unpack it, and run `bash install_linux.sh` in the folder. Add `--sdr` for the RTL-SDR tools, and `--service` to start Tradewind at power-on on a headless Pi, which you then use from your phone at `http://<pi-address>:8073`.
+
+**iPhone and iPad.** There's no App Store app. Instead, open Tradewind running on a PC or Raspberry Pi in Safari on the same network, tap Share, then **Add to Home Screen**. It opens full screen like an app. Set a station PIN first (MENU > STATION).
+
+**RTL-SDR receive.** TNC type "RTL-SDR dongle" listens on the APRS frequency with Tradewind's own decoder. It's receive-only: good for a listening post or an RX iGate. To transmit as well, add a radio as the second link.
+
+**Be a TNC for other apps.** Tick "KISS TNC server" (MENU > RADIO / TNC) and Xastir, YAAC, APRSIS32 or PinPoint can connect to Tradewind's modem on port 8001. Packets they send must carry your callsign.
+
+**Full iGate.** Besides gating RF to APRS-IS, Tradewind can pass internet messages to stations heard locally on RF in the last 30 minutes (standard third-party format, at most 30 an hour). Messages gated by other iGates are now read by the chat too.
+
+**RF first, then relay, then APRS-IS.** The default chat route tries RF directly. If there's no answer, it asks up to two Tradewind stations heard directly in the last 30 minutes to relay. If none of them confirms delivery within 4 minutes, it sends the message over APRS-IS. You can follow each step in the chat.
+
+**Tradewind badge.** Stations whose packets carry Tradewind's code (APZPRP) or that use the TW-LINK handshake get a green TRADEWIND badge in "Stations heard". Counts for today and this week show the network growing, and "Tradewind only" filters the list.
+
 ## Good-neighbour limits (v3.2)
 
 Tradewind has limits built in so it can't be used, by mistake or on purpose, to flood the channel or pester other stations.

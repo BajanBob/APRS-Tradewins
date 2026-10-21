@@ -402,8 +402,14 @@ class BaseTNC:
         self.error = ""
         self._stop = threading.Event()
         self.airtime = AirtimeGuard()
+        self.on_frame = None
 
     def _heard(self, frame_no_fcs):
+        if self.on_frame:                      # KISS server: pass the raw frame to other APRS apps
+            try:
+                self.on_frame(frame_no_fcs)
+            except Exception:
+                pass
         line = afsk.decode_ax25(frame_no_fcs)
         if line:
             self.rx_count += 1
@@ -628,6 +634,13 @@ class SoundModemTNC(BaseTNC):
         else:
             self.txq.put(afsk.encode_ax25(src, dst, path, info))
 
+    def send_frame(self, frame_no_fcs):
+        """Transmit a raw AX.25 frame from another app (KISS server)."""
+        if self.modem == "robust":
+            raise IOError("KISS frames can't be sent in Robust mode")
+        crc = afsk.crc16_x25(frame_no_fcs)
+        self.txq.put(frame_no_fcs + bytes([crc & 0xFF, crc >> 8]))
+
     def _heard_text(self, payload):
         try:
             line = payload.decode("latin-1")
@@ -700,12 +713,167 @@ class _KissStreamTNC(BaseTNC):
         if wait > 0:
             raise IOError(f"airtime limit (10% of 10 min) - try again in {int(wait)} s")
         self.airtime.add(dur)
+        self._send_kiss(frame)
+
+    def send_frame(self, frame_no_fcs):
+        dur = frame_airtime(len(frame_no_fcs))
+        wait = self.airtime.wait(dur)
+        if wait > 0:
+            raise IOError(f"airtime limit (10% of 10 min) - try again in {int(wait)} s")
+        self.airtime.add(dur)
+        self._send_kiss(frame_no_fcs)
+
+    def _send_kiss(self, frame):
         self.tx_active = True
         try:
             self._write(kiss_wrap(frame))
             self.tx_count += 1
         finally:
             self.tx_active = False
+
+
+class SdrTNC(BaseTNC):
+    """Receive-only: an RTL-SDR dongle via rtl_fm, decoded by Tradewind's own 1200-baud demodulator.
+    Good for a listen-only station or an RX iGate (a Raspberry Pi + dongle + antenna)."""
+    kind = "RTL-SDR (receive only)"
+    RATE = 24000
+
+    def __init__(self, freq_hz, gain="", ppm=0, index=0, rtl_fm="rtl_fm"):
+        super().__init__()
+        self.freq_hz, self.gain, self.ppm, self.index, self.rtl_fm = freq_hz, str(gain or ""), int(ppm or 0), int(index or 0), rtl_fm
+        self.proc = None
+        self.audio_level = 0.0
+
+    def command(self):
+        cmd = [self.rtl_fm, "-f", str(int(self.freq_hz)), "-M", "fm", "-s", str(self.RATE),
+               "-d", str(self.index), "-p", str(self.ppm), "-E", "dc"]
+        if self.gain and self.gain.lower() != "auto":
+            cmd += ["-g", self.gain]
+        return cmd + ["-"]
+
+    def start(self, on_packet):
+        super().start(on_packet)
+        import shutil
+        import subprocess
+        exe = shutil.which(self.rtl_fm)
+        if not exe:
+            raise IOError("rtl_fm not found - install the RTL-SDR tools (Linux / Pi: sudo apt install rtl-sdr)")
+        self.rtl_fm = exe
+        self.proc = subprocess.Popen(self.command(), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        threading.Thread(target=self._rx_loop, daemon=True).start()
+
+    def _rx_loop(self):
+        np = afsk.np
+        demod = afsk.Demodulator(self.RATE, "1200")
+        block = self.RATE // 10 * 2            # 0.1 s of 16-bit samples
+        try:
+            while not self._stop.is_set():
+                raw = self.proc.stdout.read(block)
+                if not raw:
+                    self.error = "rtl_fm stopped - is the dongle plugged in?"
+                    break
+                x = np.frombuffer(raw[:len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
+                self.audio_level = float((x ** 2).mean() ** 0.5) if len(x) else 0.0
+                for fr in demod.process(x):
+                    self._heard(fr)
+        except Exception as e:
+            self.error = f"SDR: {e}"
+
+    def send(self, src, dst, path, info):
+        raise IOError("the SDR only receives - add a radio as a second link to transmit")
+
+    def send_frame(self, frame_no_fcs):
+        self.send(None, None, None, None)
+
+    def stop(self):
+        super().stop()
+        if self.proc:
+            try:
+                self.proc.terminate()
+            except Exception:
+                pass
+
+    @property
+    def status(self):
+        d = super().status
+        d.update(audio_level=round(self.audio_level, 4), freq=self.freq_hz)
+        return d
+
+
+class KissServer:
+    """Lets other APRS programs (Xastir, YAAC, APRSIS32, PinPoint...) use Tradewind's modem as a KISS TCP TNC.
+    on_tx(frame) is called for each frame a client wants transmitted."""
+
+    def __init__(self, host="127.0.0.1", port=8001, on_tx=None):
+        self.host, self.port, self.on_tx = host, int(port), on_tx
+        self.clients = []
+        self.lock = threading.Lock()
+        self.sock = None
+        self.error = ""
+        self._stop = threading.Event()
+
+    def start(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind((self.host, self.port))
+        self.sock.listen(4)
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while not self._stop.is_set():
+            try:
+                c, _ = self.sock.accept()
+            except OSError:
+                break
+            with self.lock:
+                self.clients.append(c)
+            threading.Thread(target=self._client, args=(c,), daemon=True).start()
+
+    def _client(self, c):
+        dec = KissDecoder()
+        try:
+            while not self._stop.is_set():
+                data = c.recv(2048)
+                if not data:
+                    break
+                for fr in dec.feed(data):
+                    if self.on_tx:
+                        try:
+                            self.on_tx(fr)
+                        except Exception as e:
+                            self.error = str(e)
+        except OSError:
+            pass
+        with self.lock:
+            if c in self.clients:
+                self.clients.remove(c)
+        try:
+            c.close()
+        except OSError:
+            pass
+
+    def broadcast(self, frame_no_fcs):
+        data = kiss_wrap(frame_no_fcs)
+        with self.lock:
+            for c in list(self.clients):
+                try:
+                    c.sendall(data)
+                except OSError:
+                    self.clients.remove(c)
+
+    def stop(self):
+        self._stop.set()
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+        with self.lock:
+            for c in self.clients:
+                try:
+                    c.close()
+                except OSError:
+                    pass
+            self.clients = []
 
 
 class KissTcpTNC(_KissStreamTNC):
@@ -787,6 +955,9 @@ def make_tnc(cfg):
         return KissTcpTNC(host, port or 8001)
     if mode == "kiss_serial":
         return KissSerialTNC(cfg.get("kiss_serial", ""), cfg.get("kiss_baud", 9600))
+    if mode == "sdr":
+        return SdrTNC(aprs_freq_hz(cfg) or 144_390_000, cfg.get("sdr_gain", ""), cfg.get("sdr_ppm", 0),
+                      cfg.get("sdr_index", 0))
     return NullTNC()
 
 
@@ -929,6 +1100,8 @@ PROBES_PER_HOUR = 4
 MSG_GAP_S = 30                       # one unanswered message per station, 30 s apart at most
 RELAYS_PER_HOUR = 10
 OUTBOX_PER_STATION, OUTBOX_MAX = 10, 50
+SMART_RELAY_WAIT_S = 240            # RF-first routing: how long a relay has to confirm delivery
+SMART_RELAYS = 2                     # ...and how many recently heard Tradewind stations are asked
 RELAY_TAG_RE = re.compile(r"\[de \S+ via \S+\]", re.I)
 CHAT_CALL_RE = re.compile(r"^[A-Z0-9]{1,6}(-([0-9]|1[0-5]))?$")
 
@@ -1110,6 +1283,10 @@ class ChatManager:
         self.muted = {}          # call -> muted until (automatic, for hail flooding)
         self.probe_times = []
         self.relay_times = []
+        self.relay_candidates = None  # callable(dest) -> recently heard Tradewind stations that can relay
+        self.is_ok = None             # callable() -> True when APRS-IS can carry a message
+        self.relay_wait = []          # RF-first: relayed messages waiting for "RELAY OK delivered"
+        self.on_tw = None             # callable(call): a station spoke the Tradewind handshake
 
     # ---- helpers
     def _peer(self, call):
@@ -1150,11 +1327,15 @@ class ChatManager:
 
     def _busy(self, call):
         """True while a chat message to this station is unanswered, or the last went out < MSG_GAP_S ago."""
-        if any(o["call"] == call and o.get("kind") in ("chat", "relay") for o in self.pending.values()):
+        if any((o["call"] == call and o.get("kind") in ("chat", "relay")) or
+               (o.get("kind") == "relay_req" and o["smart"]["dest"] == call) for o in self.pending.values()):
+            return True
+        if any(w["dest"] == call for w in self.relay_wait):
             return True
         return self.now() - self.last_msg_t.get(call, -1e9) < MSG_GAP_S
 
-    def _send(self, p, text, show=True, kind="chat", delays=None, forever=False, orig=None, entry=None):
+    def _send(self, p, text, show=True, kind="chat", delays=None, forever=False, orig=None, entry=None,
+              route=None, smart=None):
         """Send one numbered message (retried until acked).
         delays: seconds between tries (default RETRY_S); forever: keep the last delay until acked.
         Chat and relay messages wait their turn: one unanswered message per station at a time."""
@@ -1164,14 +1345,20 @@ class ChatManager:
         if kind in ("chat", "relay") and (self._busy(p["call"]) or any(h["call"] == p["call"] for h in self.held)):
             entry["state"] = "waiting"
             self.held.append({"call": p["call"], "text": text, "kind": kind, "delays": delays,
-                              "entry": entry, "orig": orig})
+                              "entry": entry, "orig": orig, "route": route, "smart": smart})
             self.seq += 1
             return entry
+        if route is None and p["route"] == "smart" and smart is None:
+            # RF first: a few tries direct on RF, then (chat only) up to two relays, then APRS-IS
+            route, smart = "rf", {"dest": p["call"], "stage": "rf", "tried": [], "body": text,
+                                  "relay": kind == "chat"}
+            if not forever:
+                delays = list(delays or self.retry)[:2]
         no = self._next_no()
         entry.update(state="sending", no=no)
-        self.pending[no] = {"call": p["call"], "text": text, "route": p["route"], "tries": 0,
+        self.pending[no] = {"call": p["call"], "text": text, "route": route or p["route"], "tries": 0,
                             "next": 0, "entry": entry, "delays": list(delays or self.retry), "forever": forever,
-                            "kind": kind, "orig": orig, "start": self.now()}
+                            "kind": kind, "orig": orig, "start": self.now(), "smart": smart}
         if kind in ("chat", "relay"):
             self.last_msg_t[p["call"]] = self.now()
         self._transmit(no)
@@ -1187,7 +1374,61 @@ class ChatManager:
             if h["entry"].get("state") == "cancelled":
                 continue
             self._send(self._peer(h["call"]), h["text"], kind=h["kind"], delays=h["delays"],
-                       orig=h["orig"], entry=h["entry"])
+                       orig=h["orig"], entry=h["entry"], route=h.get("route"), smart=h.get("smart"))
+
+    # ---- RF-first routing: direct RF -> relay through heard Tradewind stations -> APRS-IS
+    def _smart_next(self, o):
+        """The current step failed: move the message on to the next path. False = nothing left."""
+        sm = o["smart"]
+        dest, body = sm["dest"], sm["body"]
+        entry = o.get("orig_entry") or o["entry"]
+        p = self._peer(dest)
+        room = MAX_TEXT - len(f"RELAY {dest} ") - len(f" [de {self.mycall} via XXXXXX-XX]")
+        if sm["relay"] and len(body) <= room and len(sm["tried"]) < SMART_RELAYS and self.relay_candidates:
+            try:
+                cands = [norm_call(c) for c in self.relay_candidates(dest)]
+            except Exception:
+                cands = []
+            cands = [c for c in cands if c not in sm["tried"] and c not in (dest, self.mycall)
+                     and c not in self.blocked]
+            if cands:
+                r = cands[0]
+                sm["tried"].append(r)
+                sm["stage"] = "relay"
+                self._log(p, "sys", f"No direct RF contact with {dest} - asking {r} to relay")
+                entry.update(state="relaying", relay=r)
+                no = self._next_no()
+                self.pending[no] = {"call": r, "text": f"RELAY {dest} {body}", "route": "rf", "tries": 0,
+                                    "next": 0, "entry": {"state": "sending", "text": body}, "start": self.now(),
+                                    "delays": list(self.retry)[:2], "forever": False, "kind": "relay_req",
+                                    "smart": sm, "orig_entry": entry}
+                self._transmit(no)
+                return True
+        if sm["stage"] != "is" and self.is_ok and self.is_ok():
+            sm["stage"] = "is"
+            self._log(p, "sys", f"No RF path to {dest} - sending via APRS-IS")
+            entry.update(state="sending", relay="")
+            no = self._next_no()
+            entry["no"] = no
+            self.pending[no] = {"call": dest, "text": body, "route": "is", "tries": 0, "next": 0,
+                                "entry": entry, "delays": list(self.retry), "forever": False,
+                                "kind": o["kind"] if o["kind"] != "relay_req" else "chat",
+                                "start": self.now(), "smart": sm}
+            self._transmit(no)
+            return True
+        return False
+
+    def _smart_relay_failed(self, w_or_o):
+        o = w_or_o.get("o", w_or_o)
+        if not self._smart_next(o):
+            entry, sm = o.get("orig_entry") or o["entry"], o["smart"]
+            if self.store_forward:
+                entry["state"] = "queued"
+                self._outbox_add({"call": sm["dest"], "text": sm["body"], "entry": entry, "t": self.now(),
+                                  "kind": "chat"})
+            else:
+                entry["state"] = "failed"
+        self.seq += 1
 
     def _outbox_add(self, o):
         """Store an undelivered message - at most OUTBOX_PER_STATION per station, OUTBOX_MAX in all."""
@@ -1226,6 +1467,10 @@ class ChatManager:
                 p["forever"] = False
                 if p["status"] == HAILING:
                     self._set(p, EXPIRED, "No answer after 30 minutes - stopped calling")
+        if delay is None and o.get("smart") and o["smart"]["stage"] != "is" and not o.get("forever"):
+            self.pending.pop(no, None)
+            self._smart_relay_failed(o)
+            return
         if delay is None:
             self.pending.pop(no, None)
             if self.store_forward and o.get("kind") in ("chat", "relay") and not o.get("probe"):
@@ -1262,7 +1507,7 @@ class ChatManager:
             wait = p.get("declined_at", -1e9) + DECLINE_COOLDOWN_S - self.now()
             if wait > 0:
                 raise ValueError(f"{call} declined recently - please wait {int(wait // 60) + 1} min before calling again.")
-            p["route"] = route if (route in ("rf", "rf_is", "is", "auto") or str(route).startswith("link:")) else "rf"
+            p["route"] = route if (route in ("rf", "rf_is", "is", "auto", "smart") or str(route).startswith("link:")) else "rf"
             for o in [o for o in self.pending.values() if o["call"] == call and o["text"].startswith(T_REQ)]:
                 o["entry"]["state"] = "cancelled"            # replace an earlier call to the same station
             self.pending = {n: o for n, o in self.pending.items() if o["entry"].get("state") != "cancelled"}
@@ -1397,6 +1642,15 @@ class ChatManager:
                         self._log(self._peer(m["src"]), "sys", f"Probe on link {o['probe']} ({info.get('name', '')}): "
                                   f"reply in {rtt:.1f} s via {via}")
                     o["entry"]["state"] = "delivered" if m["ack"] else "rejected"
+                    if o.get("kind") == "relay_req":
+                        if m["ack"]:            # the relay has it; now wait for "RELAY OK delivered"
+                            o["orig_entry"]["state"] = "relayed"
+                            self.relay_wait.append({"relay": o["call"], "dest": o["smart"]["dest"],
+                                                    "until": self.now() + SMART_RELAY_WAIT_S, "o": o})
+                        else:
+                            self._smart_relay_failed(o)
+                        self.seq += 1
+                        return True
                     if o.get("kind") == "relay" and o.get("orig") and m["ack"]:
                         self._send(self._peer(o["orig"]), f"RELAY OK delivered to {o['call']}", show=False, kind="sys")
                     o["entry"]["via"] = via
@@ -1445,6 +1699,20 @@ class ChatManager:
             self.roster[p["call"]] = r
             self.seq += 1
         if up.startswith("RELAY OK") or up.startswith("RELAY REFUSED"):
+            ok = up.startswith("RELAY OK")
+            for w in [w for w in self.relay_wait if w["relay"] == p["call"] and w["dest"] in up]:
+                self.relay_wait.remove(w)
+                e = w["o"]["orig_entry"]
+                if ok:
+                    e.update(state="delivered", via=f"relay {p['call']}")
+                    self._log(self._peer(w["dest"]), "sys", f"Delivered to {w['dest']} through {p['call']}")
+                else:
+                    self._smart_relay_failed(w)
+            if not ok:
+                for n, o in [(n, o) for n, o in self.pending.items()
+                             if o.get("kind") == "relay_req" and o["call"] == p["call"] and o["smart"]["dest"] in up]:
+                    self.pending.pop(n)
+                    self._smart_relay_failed(o)
             self._log(p, "sys", text)
             return
         if up.startswith("RELAY ") and self.relay_enabled:
@@ -1470,6 +1738,11 @@ class ChatManager:
                     self._send(q, part, kind="relay", orig=p["call"])
                 self._event("relay", p["call"], f"Relaying {p['call']} -> {dest}")
                 return
+        if up.startswith("TW-") and self.on_tw:
+            try:
+                self.on_tw(p["call"])
+            except Exception:
+                pass
         word = up.strip(" .!").split(" ")[0] if up else ""
         if up.startswith(T_REQ):
             now = self.now()
@@ -1525,6 +1798,10 @@ class ChatManager:
             for no, o in list(self.pending.items()):
                 if now >= o["next"]:
                     self._transmit(no)
+            for w in [w for w in self.relay_wait if now >= w["until"]]:
+                self.relay_wait.remove(w)
+                self._log(self._peer(w["dest"]), "sys", f"{w['relay']} did not confirm delivery to {w['dest']}")
+                self._smart_relay_failed(w)
             self._release_held()
             for c in [c for c, t in self.muted.items() if t <= now]:
                 del self.muted[c]
@@ -1565,7 +1842,8 @@ class ChatManager:
     def route_name(r):
         if str(r).startswith("link:"):
             return "radio link " + r[5:]
-        return {"rf": "RF only", "rf_is": "RF + APRS-IS", "is": "APRS-IS only", "auto": "Auto (best radio link)"}.get(r, r)
+        return {"rf": "RF only", "rf_is": "RF + APRS-IS", "is": "APRS-IS only", "auto": "Auto (best radio link)",
+                "smart": "RF first, then relay, then APRS-IS"}.get(r, r)
 
     def state(self):
         with self.lock:

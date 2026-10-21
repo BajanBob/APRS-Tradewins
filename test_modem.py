@@ -2,6 +2,7 @@
 # Released under the MIT License - see LICENSE
 """Quick self-test: modem loopback, FCS, KISS framing and grid/region logic.
 Run with:  python test_modem.py"""
+import time
 import os
 import sys
 
@@ -70,6 +71,7 @@ def main():
     test_cat()
     test_chat()
     test_limits()
+    test_v33()
     if not tnc.crypto_available():
         test_secure()
     else:
@@ -391,6 +393,94 @@ def test_limits():
     assert app.Station.same_tx_ok(st, "!beacon", t0 + 3601)
     assert app._pin_hash("1234", "ab") == app._pin_hash("1234", "ab") != app._pin_hash("1235", "ab")
     assert app.validate({"call": "N0CALL", "grid": "GK03"}) and app.validate({"call": "8P5AB-10", "grid": "GK03", "rf_path": "WIDE3-3"})
+
+
+def test_v33():
+    """RF-first routing, iGate to RF, KISS server, SDR command, Tradewind badge."""
+    import socket as so
+    import types
+    clock = [9000.0]
+    now = lambda: clock[0]  # noqa: E731
+    net = []
+    reach = {"8P5AB-10": {"8P6RR"}, "8P6RR": {"8P5AB-10", "J37PG"}, "J37PG": {"8P6RR"}}
+    A = tnc.ChatManager("8P5AB-10", lambda to, info, r: net.append(("8P5AB-10", info, r)), now)
+    R = tnc.ChatManager("8P6RR", lambda to, info, r: net.append(("8P6RR", info, r)), now)
+    C = tnc.ChatManager("J37PG", lambda to, info, r: net.append(("J37PG", info, r)), now)
+    R.relay_enabled = True
+    A.relay_candidates = lambda dest: ["8P6RR"]
+    A.is_ok = lambda: False
+    def air():
+        while net:
+            src, info, route = net.pop(0)
+            for st in (A, R, C):
+                if st.mycall in reach[src] and route != "is":
+                    st.on_packet(f"{src}>APZPRP:{info}", "RF")
+    p = A._peer("J37PG")
+    p["route"], p["direct"] = "smart", True
+    A.send("J37PG", "Shelter open at Grenville")
+    air()
+    for _ in range(3):
+        clock[0] += 61; A.tick(); air()
+    got = [m["text"] for m in C._peer("8P6RR")["messages"] if m["dir"] == "in"]
+    assert got and got[0].startswith("Shelter open at Grenville"), got
+    out = [m for m in A._peer("J37PG")["messages"] if m["dir"] == "out"]
+    assert out[-1]["state"] == "delivered" and "8P6RR" in out[-1].get("via", ""), out[-1]
+    # no relay available: falls back to APRS-IS
+    routes = []
+    B = tnc.ChatManager("8P5AB-10", lambda to, info, r: routes.append(r), now)
+    B.is_ok = lambda: True
+    q = B._peer("K4XYZ")
+    q["route"], q["direct"] = "smart", True
+    B.send("K4XYZ", "test")
+    for _ in range(4):
+        clock[0] += 61; B.tick()
+    assert routes[0] == "rf" and "is" in routes, routes
+    # the handshake marks Tradewind stations
+    seen = []
+    D = tnc.ChatManager("8P5AB-10", lambda *x: None, now)
+    D.on_tw = seen.append
+    D.on_packet("J37PGP-5>APZPRP::8P5AB-10 :TW-LINK? J37PGP-5 asks to chat{3", "RF")
+    assert seen == ["J37PGP-5"]
+    # KISS TNC server: a client frame arrives, heard frames go out to the client
+    got_tx = []
+    srv = tnc.KissServer("127.0.0.1", 0, got_tx.append)
+    srv.start()
+    port = srv.sock.getsockname()[1]
+    cl = so.create_connection(("127.0.0.1", port), timeout=3)
+    frame = afsk.encode_ax25("8P5AB-10", "APZPRP", [], "!test")[:-2]
+    cl.sendall(tnc.kiss_wrap(frame))
+    for _ in range(50):
+        if got_tx:
+            break
+        time.sleep(0.02)
+    assert got_tx == [frame], "client frame received"
+    while not srv.clients:
+        time.sleep(0.02)
+    srv.broadcast(frame)
+    assert tnc.KissDecoder().feed(cl.recv(512)) == [frame], "heard frame sent to client"
+    cl.close(); srv.stop()
+    # SDR command line
+    cmd = tnc.SdrTNC(144_390_000, "35", 2, 1).command()
+    assert cmd[:3] == ["rtl_fm", "-f", "144390000"] and "-g" in cmd and cmd[-1] == "-"
+    assert "-g" not in tnc.SdrTNC(144_390_000, "auto").command()
+    # SDR demodulates what the sound modem sends (at rtl_fm's 24 kHz)
+    audio = afsk.modulate(afsk.encode_ax25("8P6XX-9", "APZPRP", ["WIDE2-1"], ">hello"), 24000, 300, 50, 0.5, "1200")
+    assert afsk.Demodulator(24000, "1200").process(audio), "24 kHz decode"
+    # full iGate: internet message to a local RF station goes out as third-party
+    import app
+    sent = []
+    st = types.SimpleNamespace(cfg={"igate_tx": True, "igate": True, "call": "8P5AB-10", "rf_path": "WIDE2-1"},
+                               commercial=False, tnc=object(), igate_seen={},
+                               igate_tx_times=__import__("collections").deque(),
+                               heard={"8P6XX-9": {"last": time.time()}}, add_log=lambda *a: None)
+    st._tx_tnc = lambda: types.SimpleNamespace(send=lambda *a: sent.append(a))
+    gate = app.Station._igate_to_rf
+    gate(st, "K4ABC>APDR16,TCPIP*,qAC,T2USA::8P6XX-9  :Are you OK after the storm?{12")
+    assert sent and sent[0][3] == "}K4ABC>APDR16,TCPIP,8P5AB-10*::8P6XX-9  :Are you OK after the storm?{12", sent
+    gate(st, "K4ABC>APDR16,TCPIP*,qAC,T2USA::8P6XX-9  :Are you OK after the storm?{12")
+    assert len(sent) == 1, "duplicate not gated twice"
+    gate(st, "K4ABC>APDR16,TCPIP*,qAC,T2USA::W1FAR    :not local{1")
+    assert len(sent) == 1, "station not heard locally: not gated"
 
 
 class FakeIcom:

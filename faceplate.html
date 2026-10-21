@@ -2,6 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Tradewind">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon.png">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tradewind</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%23202428%22/%3E%3Cpath d=%22M5 13c4-4 7-4 11 0s7 4 11 0M5 21c4-4 7-4 11 0s7 4 11 0%22 stroke=%22%2320c7b4%22 stroke-width=%222.6%22 fill=%22none%22 stroke-linecap=%22round%22/%3E%3C/svg%3E">
@@ -351,6 +357,12 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
   padding:6px 4px;border-bottom:1px solid #20262c;font-size:14px}
 .heard-row b{font-family:var(--mono);font-weight:400;color:#fff}
 .heard-row span{color:var(--engrave)}
+.tw-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0}
+.tw-stats div{background:#11161b;border:1px solid #2a3036;border-radius:8px;padding:8px 10px;font-size:12px;color:var(--engrave)}
+.tw-stats b{display:block;font-size:22px;color:#fff;font-weight:500}.tw-stats i{font-style:normal;color:#22c55e;font-size:12px}
+.tw-filter{display:flex;gap:6px;margin-bottom:6px}.tw-filter button{background:none;border:1px solid #2a3036;color:var(--engrave);border-radius:6px;min-height:32px;padding:0 10px;font-size:11px;letter-spacing:.1em;cursor:pointer}
+.tw-filter button.on{border-color:#3b82f6;color:#fff}
+.tw-badge{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:5px;background:#052e16;color:#4ade80;border:1px solid #166534;font-size:10px;letter-spacing:.08em;font-family:var(--mono);vertical-align:1px}
 .heard-row .btn{min-height:34px;padding:0 10px;font-size:12px}
 .help-q{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;margin-left:6px;border-radius:50%;
   border:1px solid #4a535c;background:#1b1f23;color:var(--engrave-hi);font:700 12px var(--label);cursor:pointer;vertical-align:middle;padding:0}
@@ -592,6 +604,7 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
           <option value="sound">Built-in sound modem (AFSK 1200)</option>
           <option value="kiss_tcp">KISS over TCP (Direwolf, UZ7HO)</option>
           <option value="kiss_serial">KISS serial (radio TNC, Mobilinkd)</option>
+          <option value="sdr">RTL-SDR dongle - receive only (iGate, listening)</option>
           <option value="none">None - APRS-IS only</option>
         </select></div>
       <div class="set m-sound"><label>Modem</label>
@@ -629,6 +642,13 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
       <div class="set m-sound"><label>TX delay (ms)</label><input class="inset" data-k="txdelay" data-num type="number" min="50" max="1000" step="10"></div>
       <div class="set m-sound"><label>TX tail (ms)</label><input class="inset" data-k="txtail" data-num type="number" min="10" max="500" step="10"></div>
       <div class="set m-sound"><label>TX audio level (0.05 - 1.0)</label><input class="inset" data-k="tx_level" data-num type="number" min="0.05" max="1" step="0.05"></div>
+      <div class="set m-sdr"><label>SDR gain (dB, blank = auto)</label><input class="inset" data-k="sdr_gain" placeholder="auto" inputmode="decimal"></div>
+      <div class="set m-sdr"><label>SDR frequency correction (ppm)</label><input class="inset" data-k="sdr_ppm" data-num type="number" min="-100" max="100"></div>
+      <div class="set m-sdr"><label>SDR device number</label><input class="inset" data-k="sdr_index" data-num type="number" min="0" max="9"></div>
+      <div class="set wide note m-sdr">Needs the RTL-SDR tools (rtl_fm). Linux / Raspberry Pi: <b>sudo apt install rtl-sdr</b>. The SDR only listens - add a radio as the second link if you also want to transmit.</div>
+      <div class="set m-kissrv"><label class="chk"><input type="checkbox" data-k="kiss_server"> KISS TNC server: let other APRS apps (Xastir, YAAC, APRSIS32) use this modem</label></div>
+      <div class="set m-kissrv"><label>KISS server port</label><input class="inset" data-k="kiss_server_port" data-num type="number" min="1024" max="65535"></div>
+      <div class="set m-kissrv"><label class="chk"><input type="checkbox" data-k="kiss_server_lan"> Allow other computers on my network (KISS has no password - trusted networks only)</label></div>
       <div class="set m-kiss_tcp"><label>KISS TCP host:port</label><input class="inset" data-k="kiss_addr" placeholder="127.0.0.1:8001"></div>
       <div class="set m-kiss_serial"><label>Serial port</label><input class="inset" data-k="kiss_serial" list="serial-list" placeholder="COM5 or /dev/ttyACM0"></div>
       <div class="set m-kiss_serial"><label>Baud rate</label>
@@ -727,6 +747,7 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
       <div class="set"><label>Server</label><input class="inset" data-k="server" placeholder="rotate.aprs2.net"></div>
       <div class="set"><label>Passcode (blank = auto)</label><input class="inset" data-k="passcode" placeholder="auto" inputmode="numeric"></div>
       <div class="set"><label class="chk"><input type="checkbox" data-k="igate"> RX iGate (gate heard RF packets to APRS-IS)</label></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="igate_tx"> Full iGate: pass internet messages to stations heard locally on RF (max 30 an hour)</label></div>
     </div>
 
 
@@ -820,6 +841,7 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
     <form class="hail" id="hail-form">
       <label>Hail a station<input class="inset" id="hail-call" placeholder="8P6XX-9" autocomplete="off" spellcheck="false" maxlength="9"></label>
       <label id="hail-route-lbl">Send via<select class="inset" id="hail-route">
+        <option value="smart">RF first - then relay - then APRS-IS</option>
         <option value="rf">RF only (tests the path)</option>
         <option value="rf_is">RF + APRS-IS</option>
         <option value="is">APRS-IS only</option></select></label>
@@ -868,6 +890,8 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
     </details>
     <details class="heard" id="heard-box">
       <summary>STATIONS HEARD ON RF <span id="heard-n"></span></summary>
+      <div class="tw-stats" id="tw-stats"></div>
+      <div class="tw-filter" role="group" aria-label="Filter"><button type="button" class="on" data-hf="all">ALL</button><button type="button" data-hf="tw">TRADEWIND ONLY</button></div>
       <div class="heard-list" id="heard-list"><div class="chat-empty">Stations your radio decodes appear here, even with no internet.</div></div>
     </details>
   </section>
@@ -954,6 +978,8 @@ function updateVisibility(){
   $$('.m-sound').forEach(e=>e.classList.toggle('hide', t!=='sound'));
   $$('.m-kiss_tcp').forEach(e=>e.classList.toggle('hide', t!=='kiss_tcp'));
   $$('.m-kiss_serial').forEach(e=>e.classList.toggle('hide', t!=='kiss_serial'));
+  $$('.m-sdr').forEach(e=>e.classList.toggle('hide', t!=='sdr'));
+  $$('.m-kissrv').forEach(e=>e.classList.toggle('hide', !['sound','sdr','kiss_serial'].includes(t)));
   $$('.m-rf').forEach(e=>e.classList.toggle('hide', t==='none'));
   if (t!=='none') $$('.m-rfsel').forEach(e=>e.classList.toggle('hide', $('#f-rfwhen').value!=='selected'));
   if (t==='sound'){
@@ -972,6 +998,11 @@ function updateVisibility(){
         (f==='145.825' ? ' <b>ISS:</b> set RF path to <b>ARISS</b>, and only transmit while the ISS is overhead.' : '');
     $('#ptt-port-lbl').textContent = p==='CM108' ? 'HID device' : p==='RIGCTLD' ? 'rigctld host:port' :
       p==='CIV' ? 'CI-V / CAT serial port' : p==='YAESU_CAT' ? 'CAT serial port' : 'PTT serial port';
+  }
+  if (t==='sdr'){                                   // the SDR listens on the APRS frequency
+    const f = $('#f-freq').value;
+    $$('.m-tune').forEach(e=>e.classList.toggle('hide', e.querySelector('[data-k="cat_restore"]') || e.id==='tune-note'));
+    $$('.m-custom').forEach(e=>e.classList.toggle('hide', f!=='custom'));
   }
 }
 function showPresetNote(){
@@ -1412,7 +1443,7 @@ function drawChat(){
   const p = peers.find(x=>x.call===chatSel);
   if (!p){ $('#chat-pane').innerHTML = `<div class="chat-empty">${c.off ? 'Turn the station on, then hail a station to open a two-way link.' :
     'Hail a station to open a two-way link. They hear a call-out tone and get an Accept button; when they accept, you confirm, and the chat opens.'}</div>`; return; }
-  const ROUTE = {rf:'RF only', rf_is:'RF + APRS-IS', is:'APRS-IS only', auto:'Auto link', 'link:A':'link A', 'link:B':'link B'};
+  const ROUTE = {smart:'RF first', rf:'RF only', rf_is:'RF + APRS-IS', is:'APRS-IS only', auto:'Auto link', 'link:A':'link A', 'link:B':'link B'};
   let acts = '';
   if (p.forever && p.status==='hailing') p.status_text = 'Calling until received (stops after 30 min) - waiting for an answer';
   if (p.status==='incoming') acts = `<button class="btn accent" data-act="accept">ACCEPT</button><button class="btn" data-act="decline">DECLINE</button>`;
@@ -1426,6 +1457,8 @@ function drawChat(){
   const icon = m => (m.dir!=='out' ? '' : m.state==='delivered' ? ' · ✓ delivered' : m.state==='failed' ? ' · ✗ not delivered' :
     m.state==='rejected' ? ' · ✗ rejected' : m.state==='cancelled' ? ' · cancelled' : m.state==='queued' ? ' · stored - will resend when they are heard' :
     m.state==='waiting' ? ' · waiting its turn (one message at a time)' :
+    m.state==='relaying' ? ` · no direct contact - asking ${esc(m.relay||'')} to relay` :
+    m.state==='relayed' ? ' · with the relay - waiting for delivery' :
     ' · sending…' + (m.tries>1 ? ` (try ${m.tries})` : '')) + (m.link && m.link!=='IS' && (p.links||[]).length>1 ? ` · link ${m.link}` : '');
   const msgs = p.messages.map(m => m.dir==='sys' ? `<div class="cm sys">${hms(new Date(m.t*1000)).slice(0,5)} ${esc(m.text)}</div>` :
     `<div class="cm ${m.dir} ${m.state==='failed'||m.state==='rejected'?'failed':''}"><span class="who">${m.dir==='in' ? esc(p.call) : 'YOU'}</span>${esc(m.text)}<small>${hms(new Date(m.t*1000)).slice(0,5)}${m.via?' · via '+m.via:''}${icon(m)}${m.error?' · '+esc(m.error):''}</small></div>`).join('');
@@ -1558,15 +1591,24 @@ function openForms(){ $('#forms').classList.remove('hide'); $('#form-to').textCo
 
 /* ---------- stations heard on RF + comms log ---------- */
 const ago = t => { const d = Math.max(0, Date.now()/1000 - t); return d < 60 ? 'now' : d < 3600 ? Math.round(d/60)+' min ago' : Math.round(d/3600)+' h ago'; };
+let heardFilter = 'all';
+document.querySelectorAll('[data-hf]').forEach(b=>b.addEventListener('click', ()=>{
+  heardFilter = b.dataset.hf;
+  document.querySelectorAll('[data-hf]').forEach(x=>x.classList.toggle('on', x===b));
+  if (lastState) drawHeard(lastState);
+}));
 function drawHeard(s){
   routeOptions(s);
   const H = s.heard || [];
   $('#heard-n').textContent = H.length ? `(${H.length})` : '';
   $('#commlog-n').textContent = s.commlog_count ? `${s.commlog_count} message${s.commlog_count==1?'':'s'} logged` : 'No chat messages logged yet';
-  if (!H.length) return;
-  $('#heard-list').innerHTML = H.map(h=>`<div class="heard-row"><b>${esc(h.call)}</b><span>${ago(h.last)}</span><span>${esc(h.via)} · ${h.count} pkt</span>
+  const T = s.tw || {};
+  $('#tw-stats').innerHTML = `<div>Tradewind users today<b>${T.today||0}</b></div><div>This week<b>${T.week||0} ${T.new_week?`<i>+${T.new_week} new</i>`:''}</b></div>`;
+  const list = heardFilter==='tw' ? H.filter(h=>h.tw) : H;
+  if (!list.length){ $('#heard-list').innerHTML = `<div class="chat-empty">${heardFilter==='tw' ? 'No Tradewind stations heard on RF yet. They show a green TRADEWIND badge.' : 'Stations your radio decodes appear here, even with no internet.'}</div>`; return; }
+  $('#heard-list').innerHTML = list.map(h=>`<div class="heard-row"><b>${esc(h.call)}${h.tw?'<span class="tw-badge" title="Running Tradewind">TRADEWIND</span>':''}</b><span>${ago(h.last)}</span><span>${esc(h.via)} · ${h.count} pkt</span>
     <button class="btn" type="button" data-hail="${esc(h.call)}">HAIL</button></div>`).join('');
-  $$('[data-hail]').forEach(b=>b.onclick=()=>{ $('#hail-call').value = b.dataset.hail; $('#hail-route').value = 'rf'; $('#hail-call').focus(); $('#hail-form').scrollIntoView({behavior:'smooth', block:'center'}); });
+  $$('[data-hail]').forEach(b=>b.onclick=()=>{ $('#hail-call').value = b.dataset.hail; $('#hail-route').value = 'smart'; $('#hail-call').focus(); $('#hail-form').scrollIntoView({behavior:'smooth', block:'center'}); });
 }
 
 /* ---------- Phase 2: second link, Direwolf generator, link stats ---------- */
@@ -1599,12 +1641,13 @@ $('#dw-box').addEventListener('input', dwConf); $('#dw-box').addEventListener('c
 
 function routeOptions(s){
   const sel = $('#hail-route'), has = (s.links || []).length > 1;
-  const want = has ? ['auto','link:A','link:B','rf_is','is'] : ['rf','rf_is','is'];
+  const want = has ? ['smart','auto','link:A','link:B','rf_is','is'] : ['smart','rf','rf_is','is'];
   if (sel.dataset.mode === String(has)) return;
   sel.dataset.mode = String(has);
   const L = Object.fromEntries((s.links || []).map(l=>[l.link, l.name]));
   const label = {auto:'Auto - best radio link', 'link:A':`Link A only (${L.A||'main'})`, 'link:B':`Link B only (${L.B||'second'})`,
-                 rf:'RF only (tests the path)', rf_is:'RF + APRS-IS', is:'APRS-IS only'};
+                 rf:'RF only (tests the path)', rf_is:'RF + APRS-IS', is:'APRS-IS only',
+                 smart:'RF first - then relay - then APRS-IS'};
   sel.innerHTML = want.map(v=>`<option value="${v}">${label[v]}</option>`).join('');
 }
 
@@ -1731,6 +1774,9 @@ const HELP = {
   link2_speed:'Air speed of the second link. Used to choose links: faster links are preferred while they deliver.',
   link2_name:'A short name shown in the chat, e.g. "70cm 9600".', link1_name:'A short name for the main radio link, e.g. "2m 1200".',
   link1_speed:'Air speed of the main link when it is an external KISS TNC (the built-in modem sets this itself).',
+  igate_tx:'Messages from the internet for stations your radio hears locally are passed on to them on RF, as a standard iGate does. Limited to 30 an hour.',
+  kiss_server:'Other APRS programs on this computer can connect to Tradewind on this port as if it were a hardware TNC. Packets they send must use your callsign.',
+  sdr_gain:'Leave blank for automatic gain. Try 30-40 dB if the SDR hears too little or too much noise.',
   store_forward:'If a message cannot be delivered, Tradewind keeps it (up to 24 h) and sends it again as soon as that station is heard on the air.',
   relay_enabled:'Let other Tradewind stations send messages through you to stations they cannot reach. You will see each relayed message in your chat.',
   bands:'Bands to watch for openings.', regions:'Regions to watch for paths from the Caribbean.',

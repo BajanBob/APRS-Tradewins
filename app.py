@@ -26,12 +26,13 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import afsk
 import tnc as tncmod
 import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.2"
+APP_VERSION = "3.3"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -120,6 +121,9 @@ DEFAULTS = {
     "kiss_addr": "127.0.0.1:8001", "kiss_serial": "", "kiss_baud": 9600,
     "rf_announce": True, "rf_path": "WIDE2-1", "rf_when": "always", "rf_modes": ["TEP"],
     "aprsis": True, "server": "rotate.aprs2.net", "igate": False,
+    "igate_tx": False,           # full iGate: also pass internet messages to local RF stations
+    "kiss_server": False, "kiss_server_port": 8001, "kiss_server_lan": False,   # be a TNC for other apps
+    "sdr_gain": "", "sdr_ppm": 0, "sdr_index": 0,                             # RTL-SDR receive
     "window": 60, "interval": 10, "min_km": 800, "min_paths": 2,
     "strong_km": 1500, "repeat": 30, "announce_close": False, "group": "VHF",
     "alert_sound": True, "alert_voice": True, "alert_modes": ["TEP", "TROPO", "ES"],
@@ -286,8 +290,33 @@ def _migrate(cfg):
 # ---- on-air and network etiquette limits (v3.2)
 PSK_MIN_GAP = 600        # at least 10 minutes between PSKReporter queries
 PSK_MAX_PER_HOUR = 6     # and never more than 6 in any hour
+IGATE_TX_PER_HOUR = 30   # internet -> RF messages gated per hour (full iGate)
+LOCAL_HEARD_S = 30 * 60  # "local" = heard on RF in the last 30 minutes
 SAME_TX_PER_HOUR = 2     # identical beacon / bulletin text: at most twice an hour
 BEACON_MIN_MIN = 30      # so the position beacon is never more than twice an hour
+
+
+TW_USERS_PATH = os.path.join(CONF_DIR, "tradewind_users.json")
+
+
+def load_tw_users():
+    try:
+        with open(TW_USERS_PATH) as f:
+            d = json.load(f)
+        return {k: v for k, v in d.items() if isinstance(v, dict) and "last" in v}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_tw_users(users):
+    try:
+        os.makedirs(CONF_DIR, exist_ok=True)
+        keep = dict(sorted(users.items(), key=lambda kv: -kv[1]["last"])[:500])
+        with open(TW_USERS_PATH + ".tmp", "w") as f:
+            json.dump(keep, f)
+        os.replace(TW_USERS_PATH + ".tmp", TW_USERS_PATH)
+    except OSError:
+        pass
 
 
 def block_set(cfg):
@@ -401,6 +430,12 @@ def validate(cfg):
                 wx.parse_times(cfg.get(k))
             except ValueError as e:
                 errs.append(f"Weather times must look like 05:30, 12:00 (problem: {e}).")
+    if cfg.get("tnc") == "sdr" and IS_ANDROID:
+        errs.append("The RTL-SDR receiver needs the Windows, Linux or Raspberry Pi version.")
+    if cfg.get("tnc") == "sdr" and not tncmod.aprs_freq_hz(cfg):
+        errs.append("APRS frequency must be in MHz within the 2m or 70cm band, e.g. 144.390.")
+    if cfg.get("igate_tx") and not cfg.get("igate"):
+        errs.append("The full iGate needs 'RX iGate' switched on too (MENU > APRS-IS).")
     if cfg.get("tnc") == "kiss_serial" and not cfg.get("kiss_serial"):
         errs.append("Choose the radio / TNC serial port.")
     return errs
@@ -446,6 +481,10 @@ class Station:
         self.last_id = 0
         self.prop_off = False
         self.heard = {}               # callsign -> stations heard on RF (works with no internet)
+        self.kiss_srv = None          # KISS TCP server for other APRS apps
+        self.igate_tx_times = collections.deque()
+        self.igate_seen = {}          # (src, info) -> last gated, to skip duplicates
+        self.tw_users = load_tw_users()   # Tradewind stations heard: call -> {first, last, via}
         self.commlog = []             # ICS-309-style log of chat traffic
         self._chat_saved = -1
         self._chat_save_t = 0
@@ -487,7 +526,7 @@ class Station:
                 except Exception as e:
                     self.tnc2 = None
                     self.add_log("ERR", f"Second radio link not started: {e}")
-            if self.tnc2 is not None and c.get("tnc") != "none":
+            if self.tnc2 is not None and c.get("tnc") not in ("none", "sdr"):
                 s1 = 44 if c.get("tnc") == "sound" and c.get("modem") == "robust" else \
                     300 if c.get("tnc") == "sound" and str(c.get("modem")) == "300" else \
                     (1200 if c.get("tnc") == "sound" else int(c.get("link1_speed") or 1200))
@@ -496,6 +535,17 @@ class Station:
                     "B": {"name": c.get("link2_name") or "second link", "speed": int(c.get("link2_speed") or 9600)}})
             self.commercial = c.get("op_mode") == "commercial"
             self.sec, self.last_id = None, 0
+            self.kiss_srv = None
+            if c.get("kiss_server") and not self.commercial and c.get("tnc") in ("sound", "sdr", "kiss_serial"):
+                try:
+                    self.kiss_srv = tncmod.KissServer("0.0.0.0" if c.get("kiss_server_lan") else "127.0.0.1",
+                                                     int(c.get("kiss_server_port") or 8001), self._kiss_client_tx)
+                    self.kiss_srv.start()
+                    self.tnc.on_frame = self.kiss_srv.broadcast
+                    self.add_log("SYS", f"KISS TNC server on port {self.kiss_srv.port} - other APRS apps can connect")
+                except Exception as e:
+                    self.kiss_srv = None
+                    self.add_log("ERR", f"KISS server not started: {e}")
             if self.commercial:
                 self.sec = tncmod.SecureLink(bytes.fromhex(c["com_key"]))
                 unit = c["com_unit"].upper()
@@ -539,13 +589,13 @@ class Station:
                 return
             self._stop.set()
             self._wake.set()
-            for x in (self.tnc, self.isc, self.tnc2):
+            for x in (self.tnc, self.isc, self.tnc2, self.kiss_srv):
                 try:
                     x and x.stop()
                 except Exception:
                     pass
             self._save_chat()
-            self.tnc = self.isc = self.tnc2 = None
+            self.tnc = self.isc = self.tnc2 = self.kiss_srv = None
             self.linkctl = None
             self.running = False
             self.add_log("SYS", "Station OFF")
@@ -884,7 +934,7 @@ class Station:
         if rf and (self.rf_live(mode) or (force_rf and self.rf_possible())):
             path = [p.strip() for p in (c.get("rf_path") or "").split(",") if p.strip()]
             try:
-                self.tnc.send(call, eng.TOCALL, path, info)
+                self._tx_tnc().send(call, eng.TOCALL, path, info)
                 sent.append("RF")
             except Exception as e:
                 self.add_log("ERR", f"RF send: {e}")
@@ -922,6 +972,9 @@ class Station:
         self.chat.store_forward = bool(self.cfg.get("store_forward", True))
         self.chat.relay_enabled = bool(self.cfg.get("relay_enabled"))
         self.chat.blocked = set(block_set(self.cfg))
+        self.chat.relay_candidates = self.relay_candidates
+        self.chat.is_ok = lambda: bool(self.isc and self.isc.verified)
+        self.chat.on_tw = lambda call: self._tw_seen(call, "chat")
         self.chat.links = self.linkctl
         robust = self.cfg.get("tnc") == "sound" and self.cfg.get("modem") == "robust"
         self.chat.retry = (90, 150, 240) if robust else tncmod.RETRY_S
@@ -985,19 +1038,79 @@ class Station:
         path = head.split(">", 1)[1].split(",")[1:]
         digi = [x.rstrip("*") for x in path if x.endswith("*") and not x.startswith(("WIDE", "TCPIP", "q"))]
         h = self.heard.setdefault(call, {"call": call, "count": 0, "first": time.time()})
-        h.update(last=time.time(), via=("via " + digi[-1]) if digi else "direct")
+        h.update(last=time.time(), via=("via " + digi[-1]) if digi else "direct", direct=not digi)
         h["count"] += 1
+        dst = head.split(">", 1)[1].split(",")[0].upper()
+        if dst == eng.TOCALL or call in self.tw_users:
+            h["tw"] = True
+            self._tw_seen(call, "RF")
         if len(self.heard) > 300:
             oldest = min(self.heard.values(), key=lambda x: x["last"])
             self.heard.pop(oldest["call"], None)
 
+    # ---- Tradewind users heard (the "Tradewind" badge)
+    def _tw_seen(self, call, via):
+        call = tncmod.norm_call(call)
+        if not call or call == self.cfg.get("call", "").upper():
+            return
+        now = time.time()
+        u = self.tw_users.get(call)
+        changed = not u or now - u["last"] > 600
+        if not u:
+            u = self.tw_users[call] = {"first": now, "last": now, "via": via}
+            self.add_log("SYS", f"New Tradewind station heard: {call} ({via})")
+        u.update(last=now, via=via)
+        if call in self.heard:
+            self.heard[call]["tw"] = True
+        if changed:
+            save_tw_users(self.tw_users)
+
+    def tw_summary(self):
+        now = time.time()
+        u = self.tw_users
+        return {"today": sum(1 for x in u.values() if now - x["last"] < 86400),
+                "week": sum(1 for x in u.values() if now - x["last"] < 7 * 86400),
+                "new_week": sum(1 for x in u.values() if now - x["first"] < 7 * 86400),
+                "total": len(u),
+                "list": sorted(({"call": c, **v} for c, v in u.items()), key=lambda x: -x["last"])[:60]}
+
+    def relay_candidates(self, dest):
+        """RF-first routing: Tradewind stations heard directly on RF in the last 30 minutes, newest first."""
+        now = time.time()
+        hs = [h for h in self.heard.values() if h.get("tw") and h.get("direct") and now - h["last"] < LOCAL_HEARD_S
+              and h["call"] != tncmod.norm_call(dest)]
+        return [h["call"] for h in sorted(hs, key=lambda h: -h["last"])]
+
     def _pick_link(self, call, route):
         """Which radio link a message goes out on: 'A' (main radio), 'B' (second link) or None."""
+        if route == "smart":
+            route = "rf"
         if route == "auto":
             return self.linkctl.choose(call) if self.linkctl else "A"
         if str(route).startswith("link:"):
             return route[5:]
         return "A" if route in ("rf", "rf_is") else None
+
+    def _tx_tnc(self):
+        """The radio that transmits: the main TNC, or link B when the main one is a receive-only SDR."""
+        if isinstance(self.tnc, tncmod.SdrTNC):
+            if not self.tnc2:
+                raise IOError("the SDR only receives - add a radio as the second link to transmit")
+            return self.tnc2
+        return self.tnc
+
+    def _kiss_client_tx(self, frame):
+        """A frame from another app connected to the KISS server: transmit it if it is from this station."""
+        line = afsk.decode_ax25(frame) or ""
+        src = line.split(">", 1)[0].split("-")[0].upper()
+        if not line or src != self.cfg["call"].split("-")[0].upper():
+            self.add_log("ERR", f"KISS client frame refused (not from {self.cfg['call'].split('-')[0]}): {line[:60]}")
+            return
+        tx = self._tx_tnc()
+        if not hasattr(tx, "send_frame"):
+            raise IOError("this radio link cannot send frames from other apps")
+        tx.send_frame(frame)
+        self.add_log("TX", f"[KISS client] {line}")
 
     def _link_send(self, link, src, dst, path, info):
         if link == "B":
@@ -1007,7 +1120,7 @@ class Station:
         else:
             if not self.rf_possible() and not self.commercial:
                 raise IOError("RF needs a radio: set a TNC under MENU > RADIO / TNC, or choose APRS-IS")
-            self.tnc.send(src, dst, path, info)
+            self._tx_tnc().send(src, dst, path, info)
 
     def _chat_send(self, call, info, route):
         """Send one APRS message for the chat (RF ignores the propagation-mode standby).
@@ -1126,6 +1239,13 @@ class Station:
         return fp
 
     def on_is_line(self, line):
+        try:
+            head = line.partition(":")[0]
+            if ">" in head and head.split(">", 1)[1].split(",")[0].upper() == eng.TOCALL:
+                self._tw_seen(head.split(">", 1)[0], "APRS-IS")
+            self._igate_to_rf(line)
+        except Exception as e:
+            self.add_log("ERR", f"iGate: {e}")
         if self.chat:
             try:
                 self.chat.on_heard(line.split(">", 1)[0])
@@ -1133,6 +1253,43 @@ class Station:
                     self.add_log("MSG", f"[IS] {line}")
             except Exception as e:
                 self.add_log("ERR", f"chat: {e}")
+
+    def _igate_to_rf(self, line):
+        """Full iGate: an internet message for a station heard locally on RF is passed to RF
+        (as a third-party packet), the standard iGate rules."""
+        c = self.cfg
+        if not (c.get("igate_tx") and c.get("igate") and not self.commercial and self.tnc):
+            return
+        m = tncmod.parse_message(line)
+        if not m:
+            return
+        head, _, info = line.partition(":")
+        src, path = m["src"], head.split(">", 1)[1].split(",")
+        mycall = c["call"].upper()
+        if m["to"] in (mycall, "") or src == mycall or m["to"].startswith(("BLN", "NWS")):
+            return
+        if any(x.rstrip("*") in ("TCPXX", "NOGATE", "RFONLY") for x in path):
+            return
+        now = time.time()
+        h, hs = self.heard.get(m["to"]), self.heard.get(src)
+        if not h or now - h["last"] > LOCAL_HEARD_S:
+            return                              # addressee not local
+        if hs and now - hs["last"] < LOCAL_HEARD_S:
+            return                              # sender is local too: they hear each other on RF
+        key = (src, info)
+        if now - self.igate_seen.get(key, 0) < 30:
+            return
+        while self.igate_tx_times and now - self.igate_tx_times[0] > 3600:
+            self.igate_tx_times.popleft()
+        if len(self.igate_tx_times) >= IGATE_TX_PER_HOUR:
+            return
+        self.igate_seen = {k: t for k, t in self.igate_seen.items() if now - t < 600}
+        self.igate_seen[key] = now
+        self.igate_tx_times.append(now)
+        dst = head.split(">", 1)[1].split(",")[0]
+        rf_path = [x.strip() for x in (c.get("rf_path") or "").split(",") if x.strip()]
+        self._tx_tnc().send(mycall, eng.TOCALL, rf_path, f"}}{src}>{dst},TCPIP,{mycall}*:{info}")
+        self.add_log("IGT", f"internet -> RF: {src} -> {m['to']}")
 
     # ---- RX
     def on_rf_packet(self, line, link="A"):
@@ -1149,9 +1306,20 @@ class Station:
             except Exception as e:
                 self.add_log("ERR", f"secure rx: {e}")
             return          # no iGate in commercial mode
+        inner = line.partition(":")[2]
+        if inner.startswith("}") and ">" in inner.split(":", 1)[0]:
+            line_for_chat = inner[1:]                  # gated from the internet by an iGate: unwrap
+            try:
+                h0 = line_for_chat.partition(":")[0]
+                if h0.split(">", 1)[1].split(",")[0].upper() == eng.TOCALL:
+                    self._tw_seen(h0.split(">", 1)[0], "RF (gated)")
+            except Exception:
+                pass
+        else:
+            line_for_chat = line
         if self.chat:
             try:
-                self.chat.on_packet(line, "RF" if link == "A" else f"RF:{link}")
+                self.chat.on_packet(line_for_chat, "RF" if link == "A" else f"RF:{link}")
             except Exception as e:
                 self.add_log("ERR", f"chat: {e}")
         c = self.cfg
@@ -1192,6 +1360,8 @@ class Station:
             "pin_set": bool(c.get("pin_hash")),
             "op_mode": "commercial" if self.commercial else c.get("op_mode", "amateur"),
             "heard": sorted(self.heard.values(), key=lambda h: -h["last"])[:40],
+            "tw": self.tw_summary(),
+            "kiss_clients": len(self.kiss_srv.clients) if self.kiss_srv else None,
             "links": ([{"link": l, **v} for l, v in sorted(self.linkctl.links.items())] if self.linkctl else []),
             "link2": None if not self.tnc2 else {"kind": self.tnc2.kind, "error": self.tnc2.error,
                                                   "rx": self.tnc2.rx_count, "tx": self.tnc2.tx_count},
@@ -1299,6 +1469,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        if path == "/manifest.json":          # iPhone / Android "Add to Home Screen"
+            return self._bytes(json.dumps({
+                "name": APP_NAME, "short_name": APP_NAME, "start_url": "/", "display": "standalone",
+                "background_color": "#0b0f14", "theme_color": "#0b0f14",
+                "icons": [{"src": "/icon.png", "sizes": "512x512", "type": "image/png"}]}).encode(),
+                "application/manifest+json", "public, max-age=86400")
+        if path == "/icon.png":
+            try:
+                with open(os.path.join(HERE, "icon.png"), "rb") as f:
+                    return self._bytes(f.read(), "image/png", "public, max-age=86400")
+            except OSError:
+                return self._json({"error": "no icon"}, 404)
         if not self._authed():
             if path in ("/", "/index.html"):
                 return self._html(LOGIN_PAGE if STATION.cfg.get("pin_hash") else NO_PIN_PAGE, 401)

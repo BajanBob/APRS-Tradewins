@@ -359,6 +359,49 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
 .link-stats span.best{border-color:var(--sea);color:#bff7ef}
 .link-stats span.bad{border-color:#7a2a22;color:#ffb4aa}
 .roster-row .st-Safe{color:#6ee7b7}.roster-row .st-Need{color:#fbbf24}.roster-row .st-Emergency{color:#ff7b70}
+/* ---------- chat makeover: black, RED = incoming, BLUE = you / reply ---------- */
+#chat-wrap{background:#050505;border:1px solid #26262b;color:#f3f4f6;--in:#ef4444;--in-bg:#2b0b0e;--out:#3b82f6;--out-bg:#0a1f44}
+#chat-wrap .mon-head span:first-child{color:#e5e7eb}
+#chat-wrap .hail label,#chat-wrap .forms-head label,#chat-wrap .forms-grid label{color:#a1a1aa}
+#chat-wrap .btn.accent{background:var(--out);border-color:var(--out);color:#fff;box-shadow:none}
+#chat-wrap .btn.accent:hover{background:#2563eb}
+#chat-wrap .chat-peers button{background:#0d0d0f;border-color:#2e2e33;color:#f3f4f6;min-height:42px}
+#chat-wrap .chat-peers button[aria-pressed="true"]{border-color:var(--out);background:#0a1f44}
+#chat-wrap .chat-peers .n{background:var(--in)}
+#chat-wrap .chat-peers i.in{background:var(--in)}
+#chat-wrap .chat-status{background:#0d0d0f;border:1px solid #26262b}
+#chat-wrap .chat-status.ask{background:#2b0b0e;border:2px solid var(--in)}
+#chat-wrap .chat-status.ask.pulse{animation:twpulse-red 1.2s ease-in-out infinite}
+@keyframes twpulse-red{50%{box-shadow:0 0 0 5px rgba(239,68,68,.25)}}
+#chat-wrap .chat-status [data-act="decline"],#chat-wrap .chat-status [data-act="end"]{background:transparent;border:1px solid var(--in);color:#fecaca}
+#chat-wrap .chat-msgs{background:#000;border:1px solid #1c1c20;border-radius:10px;padding:12px;height:300px;gap:10px}
+#chat-wrap .cm{max-width:82%;padding:9px 13px 8px;font-size:16px;line-height:1.4;border-radius:14px;border:1px solid transparent}
+#chat-wrap .cm .who{display:block;font:700 12px var(--mono);letter-spacing:.08em;margin-bottom:3px}
+#chat-wrap .cm.in{background:var(--in-bg);border-color:#7f1d1d;color:#fff;border-radius:4px 14px 14px 14px}
+#chat-wrap .cm.in .who{color:#fca5a5}
+#chat-wrap .cm.out{background:var(--out-bg);border-color:#1d4ed8;color:#fff;border-radius:14px 4px 14px 14px}
+#chat-wrap .cm.out .who{color:#93c5fd;text-align:right}
+#chat-wrap .cm.out.failed{background:#1a1a1a;border:1px dashed var(--in);color:#fecaca}
+#chat-wrap .cm small{color:#d4d4d8;opacity:.85}
+#chat-wrap .cm.sys{color:#a1a1aa;border:0}
+.composer{position:sticky;bottom:0;z-index:5;background:#050505;border-top:2px solid #3b82f6;padding:10px 0 4px;margin-top:4px}
+.quick{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.quick button{min-height:38px;padding:0 12px;border-radius:999px;border:1px solid #1d4ed8;background:#0a1f44;color:#dbeafe;font:600 14px var(--label);letter-spacing:.04em;cursor:pointer}
+.quick button:hover{background:#12306b}
+#chat-wrap .chat-form input{min-height:52px;font-size:17px;background:#0b0f19;border:2px solid #1d4ed8;color:#fff;border-radius:10px;padding:0 14px}
+#chat-wrap .chat-form input:focus{outline:none;border-color:#60a5fa;box-shadow:0 0 0 3px rgba(59,130,246,.3)}
+#chat-wrap .chat-form input:disabled{border-color:#2e2e33;background:#0d0d0f}
+#chat-wrap .chat-form .btn{min-height:52px;padding:0 18px;font-size:15px}
+#chat-wrap .chat-form #b-forms{background:#0d0d0f;border:1px solid #1d4ed8;color:#bfdbfe}
+.chat-legend{display:flex;gap:14px;font-size:12px;color:#a1a1aa;margin:-2px 0 8px}
+.chat-legend span{display:flex;align-items:center;gap:6px}
+.chat-legend i{width:12px;height:12px;border-radius:3px;display:inline-block}
+@media (max-width:560px){
+  #chat-wrap{padding:10px}
+  #chat-wrap .chat-msgs{height:min(55vh,460px)}
+  #chat-wrap .cm{max-width:90%;font-size:17px}
+  #chat-wrap .chat-form #b-forms{padding:0 10px}
+}
 .foot{margin-top:16px;font-size:13px;color:#5d656e;text-align:center;letter-spacing:.08em}
 
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(120%);max-width:min(560px,92vw);
@@ -1355,11 +1398,18 @@ function drawChat(){
     m.state==='rejected' ? ' · ✗ rejected' : m.state==='cancelled' ? ' · cancelled' : m.state==='queued' ? ' · stored - will resend when they are heard' :
     ' · sending…' + (m.tries>1 ? ` (try ${m.tries})` : '')) + (m.link && m.link!=='IS' && (p.links||[]).length>1 ? ` · link ${m.link}` : '');
   const msgs = p.messages.map(m => m.dir==='sys' ? `<div class="cm sys">${hms(new Date(m.t*1000)).slice(0,5)} ${esc(m.text)}</div>` :
-    `<div class="cm ${m.dir} ${m.state==='failed'||m.state==='rejected'?'failed':''}">${esc(m.text)}<small>${hms(new Date(m.t*1000)).slice(0,5)}${m.via?' · via '+m.via:''}${icon(m)}${m.error?' · '+esc(m.error):''}</small></div>`).join('');
+    `<div class="cm ${m.dir} ${m.state==='failed'||m.state==='rejected'?'failed':''}"><span class="who">${m.dir==='in' ? esc(p.call) : 'YOU'}</span>${esc(m.text)}<small>${hms(new Date(m.t*1000)).slice(0,5)}${m.via?' · via '+m.via:''}${icon(m)}${m.error?' · '+esc(m.error):''}</small></div>`).join('');
   $('#chat-pane').innerHTML = `<div class="chat-status${ask?' ask pulse':''}"><span><b>${esc(p.call)}</b> · ${esc(p.status_text)} · ${ROUTE[p.route]||p.route}${p.via?' · last heard via '+p.via:''}</span><span class="acts">${acts}</span></div>
-    ${lstats}<div class="chat-msgs" id="chat-msgs" role="log" aria-live="polite">${msgs}</div>
-    <form class="chat-form" id="chat-form"><button class="btn" type="button" id="b-forms" ${p.can_send?'':'disabled'} title="Weather, SITREP and other message forms">FORMS</button><input class="inset" id="chat-text" maxlength="200" autocomplete="off" placeholder="${p.can_send?'Type a message':'Chat opens when both sides accept'}" ${p.can_send?'':'disabled'}><button class="btn accent" type="submit" ${p.can_send?'':'disabled'}>SEND</button></form>`;
+    ${lstats}<div class="chat-legend" aria-hidden="true"><span><i style="background:#ef4444"></i>${esc(p.call)}</span><span><i style="background:#3b82f6"></i>You</span></div>
+    <div class="chat-msgs" id="chat-msgs" role="log" aria-live="polite">${msgs || '<div class="cm sys">No messages yet</div>'}</div>
+    <div class="composer">${p.can_send ? `<div class="quick" role="group" aria-label="Quick replies">${['QSL','Roger','Standby','Say again','All OK here','Need help','73'].map(q=>`<button type="button" data-quick="${q}">${q}</button>`).join('')}</div>` : ''}
+    <form class="chat-form" id="chat-form"><button class="btn" type="button" id="b-forms" ${p.can_send?'':'disabled'} title="Weather, SITREP and other message forms">FORMS</button><input class="inset" id="chat-text" maxlength="200" autocomplete="off" placeholder="${p.can_send?'Type a message':'Chat opens when both sides accept'}" ${p.can_send?'':'disabled'}><button class="btn accent" type="submit" ${p.can_send?'':'disabled'}>SEND</button></form></div>`;
   $('#b-forms').onclick = openForms;
+  $$('[data-quick]').forEach(b=>b.onclick = async ()=>{
+    const r = await api('/api/chat', {action:'send', call: p.call, text: b.dataset.quick});
+    if (r.errors && r.errors.length) return toast(r.errors[0]);
+    pollChat();
+  });
   const box = $('#chat-msgs'); box.scrollTop = box.scrollHeight;
   $$('[data-act]').forEach(b=>b.onclick = async ()=>{
     unlockAudio();

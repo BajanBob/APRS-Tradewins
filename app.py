@@ -29,7 +29,7 @@ import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.0"
+APP_VERSION = "3.1"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -1260,7 +1260,22 @@ def main():
     ap.add_argument("--demo", metavar="XML", help="replay a saved PSKReporter XML file instead of querying live")
     a = ap.parse_args()
     STATION.demo_xml = a.demo
-    srv = ThreadingHTTPServer((a.host, a.port), Handler)
+    try:
+        srv = ThreadingHTTPServer((a.host, a.port), Handler)
+    except OSError:
+        # Another program (usually an older Tradewind) already uses this port: the browser
+        # would silently show THAT copy, so say so clearly instead of closing at once.
+        print(f"{APP_NAME} {APP_VERSION} could not start: port {a.port} is already in use.")
+        print()
+        print("  Another copy of Tradewind is probably still running (maybe an older version).")
+        print("  Close its black window - or end 'Tradewind' in Task Manager (Ctrl+Shift+Esc) -")
+        print("  then start Tradewind again.")
+        if not a.no_browser:
+            try:
+                input("\nPress Enter to close this window...")
+            except EOFError:
+                pass
+        sys.exit(1)
     url = f"http://{'127.0.0.1' if a.host in ('0.0.0.0', '') else a.host}:{a.port}/"
     print(f"{APP_NAME} {APP_VERSION} - by Brandon St Rose (8P5DG) & Kammie Holder (8P5AB) - MIT License")
     print()

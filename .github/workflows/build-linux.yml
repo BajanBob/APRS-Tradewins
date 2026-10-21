@@ -1,0 +1,53 @@
+# Builds the Linux / Raspberry Pi package of Tradewind.
+#  - Every push to main: download Tradewind-linux.tar.gz from the run's "Artifacts".
+#  - Push a tag like v3.3 (or create a Release): the package is attached to that Release.
+# Upload this file to GitHub as  .github/workflows/build-linux.yml
+name: Build Linux and Raspberry Pi package
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Self-test
+        run: python test_modem.py
+
+      - name: Package
+        run: |
+          mkdir -p Tradewind
+          cp app.py afsk.py tnc.py vhf_prop_aprs.py wx.py faceplate.html icon.png \
+             requirements.txt test_modem.py install_linux.sh README.md LICENSE Tradewind/
+          chmod +x Tradewind/install_linux.sh
+          tar czf Tradewind-linux.tar.gz Tradewind
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tradewind-linux
+          path: Tradewind-linux.tar.gz
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Tradewind-linux.tar.gz

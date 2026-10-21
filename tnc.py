@@ -17,6 +17,7 @@ Back-ends
     NullTNC        APRS-IS only, no radio
 """
 
+import collections
 import os
 import queue
 import re
@@ -400,6 +401,7 @@ class BaseTNC:
         self.tx_active = False
         self.error = ""
         self._stop = threading.Event()
+        self.airtime = AirtimeGuard()
 
     def _heard(self, frame_no_fcs):
         line = afsk.decode_ax25(frame_no_fcs)
@@ -418,7 +420,51 @@ class BaseTNC:
     @property
     def status(self):
         return {"kind": self.kind, "rx": self.rx_count, "tx": self.tx_count,
-                "tx_active": self.tx_active, "last_rx": self.last_rx, "error": self.error}
+                "tx_active": self.tx_active, "last_rx": self.last_rx, "error": self.error,
+                "airtime_pct": round(100 * self.airtime.used() / self.airtime.window, 1)}
+
+
+AIRTIME_WINDOW_S = 600       # this station may transmit at most...
+AIRTIME_PCT = 10             # ...10% of any 10 minutes (60 s) on VHF/UHF packet
+AIRTIME_PCT_ROBUST = 25      # Robust HF: one message takes 12-45 s, so 25% (150 s) there
+PTT_MAX_S = {"1200": 10, "300": 20, "robust": 50}   # longest single transmission (watchdog)
+
+
+class AirtimeGuard:
+    """Keeps this station's share of the channel down: at most AIRTIME_PCT % of any AIRTIME_WINDOW_S."""
+
+    def __init__(self, pct=AIRTIME_PCT, window=AIRTIME_WINDOW_S, now=time.time):
+        self.budget, self.window, self.now = window * pct / 100.0, window, now
+        self.log = collections.deque()      # (start time, seconds on air)
+        self.lock = threading.Lock()
+
+    def used(self):
+        t = self.now()
+        while self.log and t - self.log[0][0] >= self.window:
+            self.log.popleft()
+        return sum(d for _, d in self.log)
+
+    def wait(self, dur):
+        """Seconds to wait before a dur-second transmission fits in the budget (0 = go now)."""
+        with self.lock:
+            used, t = self.used(), self.now()
+            if used + dur <= self.budget:
+                return 0.0
+            need, freed = used + dur - self.budget, 0.0
+            for start, d in self.log:
+                freed += d
+                if freed >= need:
+                    return max(0.5, start + self.window - t)
+            return float(self.window)
+
+    def add(self, dur):
+        with self.lock:
+            self.log.append((self.now(), dur))
+
+
+def frame_airtime(nbytes, baud=1200, txdelay_ms=300, txtail_ms=50):
+    """Rough on-air seconds of one AX.25 frame (bit stuffing and flags included)."""
+    return (nbytes + 20) * 8 * 1.05 / baud + (txdelay_ms + txtail_ms) / 1000.0
 
 
 class NullTNC(BaseTNC):
@@ -443,6 +489,8 @@ class SoundModemTNC(BaseTNC):
         self.audio_level = 0.0
         self.txq = queue.Queue()
         self.demod = afsk.RobustDemodulator(self.rate) if self.modem == "robust" else afsk.Demodulator(self.rate, self.modem)
+        if self.modem == "robust":
+            self.airtime = AirtimeGuard(AIRTIME_PCT_ROBUST)
         self.tune_hz, self.cat_restore = tune_hz, cat_restore
         self.cat_saved = None
         self.cat_status = ""       # shown on the face plate
@@ -521,25 +569,58 @@ class SoundModemTNC(BaseTNC):
             t0 = time.time()
             while time.time() - self.last_rx < self.busy_hold and time.time() - t0 < 10:
                 time.sleep(0.2)
-            if self.modem == "robust":
-                np = afsk.np
-                audio = np.concatenate([np.zeros(int(self.rate * self.txdelay / 1000), dtype=np.float32),
-                                        afsk.robust_modulate(frame, self.rate, self.level, lead_ms=50)])
-            else:
-                audio = afsk.modulate(frame, self.rate, self.txdelay, self.txtail, self.level, self.modem)
+            try:
+                if self.modem == "robust":
+                    np = afsk.np
+                    audio = np.concatenate([np.zeros(int(self.rate * self.txdelay / 1000), dtype=np.float32),
+                                            afsk.robust_modulate(frame, self.rate, self.level, lead_ms=50)])
+                else:
+                    audio = afsk.modulate(frame, self.rate, self.txdelay, self.txtail, self.level, self.modem)
+            except Exception as e:
+                self.error = f"transmit: {e}"
+                continue
+            dur = len(audio) / float(self.rate)
+            limit = PTT_MAX_S.get(self.modem, 10)
+            if dur > limit:
+                self.error = f"transmit refused: {dur:.0f} s is longer than the {limit} s transmit limit"
+                continue
+            wait = self.airtime.wait(dur)
+            if wait > 0:                    # over 10% of the last 10 minutes: hold until there is room
+                self.error = (f"airtime limit ({self.airtime.budget * 100 / self.airtime.window:.0f}% of 10 min)"
+                              f" - next transmission in {int(wait)} s")
+                if self._stop.wait(wait):
+                    break
+                self.error = ""
+            watchdog = threading.Timer(limit + 2, self._watchdog)   # force PTT off if playback hangs
             try:
                 self.tx_active = True
+                watchdog.start()
                 self.ptt.key(True)
+                self.airtime.add(dur)
                 sd.play(audio, self.rate, device=self.out_dev, blocking=True)
                 self.tx_count += 1
             except Exception as e:
                 self.error = f"transmit: {e}"
             finally:
+                watchdog.cancel()
                 try:
                     self.ptt.key(False)
                 finally:
                     self.tx_active = False
             time.sleep(0.5)
+
+    def _watchdog(self):
+        """Transmit timer: the radio was keyed too long - unkey it whatever the audio is doing."""
+        try:
+            import sounddevice as sd
+            sd.stop()
+        except Exception:
+            pass
+        try:
+            self.ptt.key(False)
+        except Exception:
+            pass
+        self.error = "transmit watchdog: PTT forced off (transmission ran too long)"
 
     def send(self, src, dst, path, info):
         if self.modem == "robust":         # robust frames carry the text line itself (no digipeating on HF)
@@ -614,6 +695,11 @@ class _KissStreamTNC(BaseTNC):
 
     def send(self, src, dst, path, info):
         frame = _strip_fcs(afsk.encode_ax25(src, dst, path, info))
+        dur = frame_airtime(len(frame))
+        wait = self.airtime.wait(dur)
+        if wait > 0:
+            raise IOError(f"airtime limit (10% of 10 min) - try again in {int(wait)} s")
+        self.airtime.add(dur)
         self.tx_active = True
         try:
             self._write(kiss_wrap(frame))
@@ -833,6 +919,17 @@ def list_serial_ports():
 MAX_TEXT = 67                        # APRS message text limit
 RETRY_S = (30, 60, 120)              # resend delays until acked
 LINK_TIMEOUT_S = 15 * 60             # unanswered hail / confirmation expires
+# ---- abuse limits (v3.2)
+HAIL_MAX_TRIES = 5                   # a hail is sent at most 5 times...
+HAIL_MIN_GAP_S = 60                  # ...at least 60 s apart
+HAIL_FOREVER_MAX_S = 30 * 60         # "keep calling" gives up after 30 minutes
+DECLINE_COOLDOWN_S = 15 * 60         # after a "no", wait 15 minutes before hailing them again
+MUTE_HAILS, MUTE_WINDOW_S, MUTE_S = 3, 600, 3600   # >3 hails in 10 min from one station = muted 1 hour
+PROBES_PER_HOUR = 4
+MSG_GAP_S = 30                       # one unanswered message per station, 30 s apart at most
+RELAYS_PER_HOUR = 10
+OUTBOX_PER_STATION, OUTBOX_MAX = 10, 50
+RELAY_TAG_RE = re.compile(r"\[de \S+ via \S+\]", re.I)
 CHAT_CALL_RE = re.compile(r"^[A-Z0-9]{1,6}(-([0-9]|1[0-5]))?$")
 
 T_REQ, T_OK, T_CONF, T_NO, T_END = "TW-LINK?", "TW-LINK OK", "TW-LINK CONFIRMED", "TW-LINK NO", "TW-LINK END"
@@ -1007,6 +1104,12 @@ class ChatManager:
         self.outbox = []         # undelivered messages waiting for the station to reappear
         self.relay_enabled = False # pass "RELAY <call> <text>" messages on for other stations
         self.roster = {}         # check-in net: call -> latest CHECKIN report
+        self.held = []           # messages waiting their turn (one unanswered message per station)
+        self.last_msg_t = {}     # call -> when the last chat message to it went out
+        self.blocked = set()     # calls the operator has blocked (ignored completely)
+        self.muted = {}          # call -> muted until (automatic, for hail flooding)
+        self.probe_times = []
+        self.relay_times = []
 
     # ---- helpers
     def _peer(self, call):
@@ -1045,17 +1148,55 @@ class ChatManager:
         self.counter = self.counter % 999 + 1
         return str(self.counter)
 
-    def _send(self, p, text, show=True, kind="chat", delays=None, forever=False):
+    def _busy(self, call):
+        """True while a chat message to this station is unanswered, or the last went out < MSG_GAP_S ago."""
+        if any(o["call"] == call and o.get("kind") in ("chat", "relay") for o in self.pending.values()):
+            return True
+        return self.now() - self.last_msg_t.get(call, -1e9) < MSG_GAP_S
+
+    def _send(self, p, text, show=True, kind="chat", delays=None, forever=False, orig=None, entry=None):
         """Send one numbered message (retried until acked).
-        delays: seconds between tries (default RETRY_S); forever: keep the last delay until acked."""
+        delays: seconds between tries (default RETRY_S); forever: keep the last delay until acked.
+        Chat and relay messages wait their turn: one unanswered message per station at a time."""
+        if entry is None:
+            entry = self._log(p, "out", text, state="sending", kind=kind, route=p["route"]) if show else \
+                {"state": "sending", "text": text}
+        if kind in ("chat", "relay") and (self._busy(p["call"]) or any(h["call"] == p["call"] for h in self.held)):
+            entry["state"] = "waiting"
+            self.held.append({"call": p["call"], "text": text, "kind": kind, "delays": delays,
+                              "entry": entry, "orig": orig})
+            self.seq += 1
+            return entry
         no = self._next_no()
-        entry = self._log(p, "out", text, state="sending", no=no, kind=kind, route=p["route"]) if show else \
-            {"state": "sending", "no": no, "text": text}
+        entry.update(state="sending", no=no)
         self.pending[no] = {"call": p["call"], "text": text, "route": p["route"], "tries": 0,
                             "next": 0, "entry": entry, "delays": list(delays or self.retry), "forever": forever,
-                            "kind": kind}
+                            "kind": kind, "orig": orig, "start": self.now()}
+        if kind in ("chat", "relay"):
+            self.last_msg_t[p["call"]] = self.now()
         self._transmit(no)
         return entry
+
+    def _release_held(self):
+        for h in list(self.held):
+            if h not in self.held or self._busy(h["call"]):
+                continue
+            if any(x["call"] == h["call"] for x in self.held[:self.held.index(h)]):
+                continue                                  # keep each station's messages in order
+            self.held.remove(h)
+            if h["entry"].get("state") == "cancelled":
+                continue
+            self._send(self._peer(h["call"]), h["text"], kind=h["kind"], delays=h["delays"],
+                       orig=h["orig"], entry=h["entry"])
+
+    def _outbox_add(self, o):
+        """Store an undelivered message - at most OUTBOX_PER_STATION per station, OUTBOX_MAX in all."""
+        if sum(1 for x in self.outbox if x["call"] == o["call"]) >= OUTBOX_PER_STATION:
+            o["entry"]["state"] = "failed"
+            return
+        self.outbox.append(o)
+        while len(self.outbox) > OUTBOX_MAX:
+            self.outbox.pop(0)["entry"]["state"] = "failed"
 
     def _transmit(self, no):
         o = self.pending.get(no)
@@ -1078,13 +1219,19 @@ class ChatManager:
         o["entry"]["tries"] = o["tries"]
         delays = o.get("delays") or RETRY_S
         delay = delays[o["tries"] - 1] if o["tries"] <= len(delays) else (delays[-1] if o.get("forever") else None)
+        if o.get("forever") and self.now() - o.get("start", self.now()) >= HAIL_FOREVER_MAX_S:
+            delay = None                                 # "keep calling" stops after 30 minutes
+            p = self.peers.get(o["call"])
+            if p:
+                p["forever"] = False
+                if p["status"] == HAILING:
+                    self._set(p, EXPIRED, "No answer after 30 minutes - stopped calling")
         if delay is None:
             self.pending.pop(no, None)
             if self.store_forward and o.get("kind") in ("chat", "relay") and not o.get("probe"):
                 o["entry"]["state"] = "queued"          # store and forward: resend when they are heard
-                self.outbox.append({"call": o["call"], "text": o["text"], "entry": o["entry"], "t": self.now(),
-                                    "kind": o.get("kind"), "orig": o.get("orig")})
-                del self.outbox[:-200]
+                self._outbox_add({"call": o["call"], "text": o["text"], "entry": o["entry"], "t": self.now(),
+                                  "kind": o.get("kind"), "orig": o.get("orig")})
             else:
                 o["entry"]["state"] = "failed"
             if o.get("probe"):
@@ -1109,20 +1256,24 @@ class ChatManager:
         if not valid_call(call) or call == self.mycall:
             raise ValueError("Enter the other station's callsign, e.g. 8P6XX-9")
         with self.lock:
+            if call in self.blocked:
+                raise ValueError(f"{call} is on your block list - unblock them first.")
             p = self._peer(call)
+            wait = p.get("declined_at", -1e9) + DECLINE_COOLDOWN_S - self.now()
+            if wait > 0:
+                raise ValueError(f"{call} declined recently - please wait {int(wait // 60) + 1} min before calling again.")
             p["route"] = route if (route in ("rf", "rf_is", "is", "auto") or str(route).startswith("link:")) else "rf"
             for o in [o for o in self.pending.values() if o["call"] == call and o["text"].startswith(T_REQ)]:
                 o["entry"]["state"] = "cancelled"            # replace an earlier call to the same station
             self.pending = {n: o for n, o in self.pending.items() if o["entry"].get("state") != "cancelled"}
-            delays = None
             tries = tries if isinstance(tries, int) else None
-            if interval or tries or forever:
-                iv = max(15, int(interval or 60))
-                delays = [iv] * max(0, int(tries or 4) - 1)
-                if forever:
-                    delays = delays or [iv]
+            tries = max(1, min(HAIL_MAX_TRIES, int(tries or 4)))
+            iv = max(HAIL_MIN_GAP_S, int(interval or self.retry[0]))
+            delays = [iv] * (tries - 1)
+            if forever:
+                delays = delays or [iv]
             p["forever"] = bool(forever)
-            how = "until it is received" if forever else f"{int(tries or 4)} times" if delays is not None else ""
+            how = "for up to 30 minutes" if forever else f"{tries} times, {iv} s apart"
             self._set(p, HAILING, f"Calling {call} via {self.route_name(p['route'])}" + (f", {how}" if how else "") + "...")
             self._send(p, f"{T_REQ} {self.mycall} asks to chat. Reply ACCEPT or DECLINE", kind="hs",
                        delays=delays, forever=bool(forever))
@@ -1152,6 +1303,9 @@ class ChatManager:
             for n in [n for n, o in self.pending.items() if o["call"] == p["call"]]:
                 self.pending[n]["entry"]["state"] = "cancelled"
                 del self.pending[n]
+            for h in [h for h in self.held if h["call"] == p["call"]]:
+                h["entry"]["state"] = "cancelled"
+                self.held.remove(h)
             p["forever"] = False
             if p["status"] in (OPEN, HAILING, ACCEPTED, AWAIT_CONFIRM):
                 self._send(p, f"{T_END} 73 de {self.mycall}", kind="hs")
@@ -1195,18 +1349,19 @@ class ChatManager:
             p = self._peer(call)
             self._log(p, "sys", f"{call} heard again - resending {len(due)} stored message{'s' if len(due) > 1 else ''}")
             for o in due:
-                no = self._next_no()
-                o["entry"].update(state="sending", no=no)
-                self.pending[no] = {"call": call, "text": o["text"], "route": p["route"], "tries": 0, "next": 0,
-                                    "entry": o["entry"], "delays": list(self.retry), "forever": False,
-                                    "kind": o.get("kind") or "chat", "orig": o.get("orig")}
-                self._transmit(no)
+                self._send(p, o["text"], kind=o.get("kind") or "chat", orig=o.get("orig"), entry=o["entry"])
 
     def probe(self, call):
         """Send a short test message on every radio link and time the replies."""
         if not self.links or not self.links.links:
             raise ValueError("Probing needs two radio links: set up the second link under MENU > RADIO / TNC.")
         with self.lock:
+            now = self.now()
+            self.probe_times = [t for t in self.probe_times if now - t < 3600]
+            if len(self.probe_times) >= PROBES_PER_HOUR:
+                wait = self.probe_times[0] + 3600 - now
+                raise ValueError(f"Probe limit is {PROBES_PER_HOUR} an hour - try again in {int(wait // 60) + 1} min.")
+            self.probe_times.append(now)
             p = self._peer(call)
             self._log(p, "sys", "Probing each radio link...")
             for l in sorted(self.links.links):
@@ -1227,6 +1382,8 @@ class ChatManager:
         m = parse_message(line)
         if not m or m["to"] != self.mycall or m["src"] == self.mycall:
             return False
+        if m["src"] in self.blocked or self.muted.get(m["src"], 0) > self.now():
+            return True                     # blocked / muted: ignored completely (not even acked)
         with self.lock:
             if m["ack"] or m["rej"]:
                 no = m["ack"] or m["rej"]
@@ -1287,24 +1444,42 @@ class ChatManager:
             r["status"] = st if st in ("Safe", "Need help", "Emergency", "Evacuated") else r.get("status", "")
             self.roster[p["call"]] = r
             self.seq += 1
-        if up.startswith("RELAY OK"):
+        if up.startswith("RELAY OK") or up.startswith("RELAY REFUSED"):
             self._log(p, "sys", text)
             return
         if up.startswith("RELAY ") and self.relay_enabled:
             parts = text.split(None, 2)
             if len(parts) == 3 and valid_call(parts[1]):
                 dest, body = norm_call(parts[1]), parts[2]
+                now = self.now()
+                self.relay_times = [t for t in self.relay_times if now - t < 3600]
+                why = ("it was already relayed once" if RELAY_TAG_RE.search(body)
+                       else "it would loop back" if dest in (p["call"], self.mycall)
+                       else f"limit of {RELAYS_PER_HOUR} relays an hour reached" if len(self.relay_times) >= RELAYS_PER_HOUR
+                       else "")
+                if why:
+                    self._log(p, "sys", f"Relay to {dest} refused - {why}")
+                    self._send(p, f"RELAY REFUSED to {dest}: {why}"[:MAX_TEXT], show=False, kind="sys")
+                    return
+                self.relay_times.append(now)
                 q = self._peer(dest)
                 if q["route"] == "auto" and not self.links:
                     q["route"] = "rf"
                 self._log(p, "sys", f"Relaying a message from {p['call']} to {dest}")
                 for part in split_text(f"{body} [de {p['call']} via {self.mycall}]"):
-                    e = self._send(q, part, kind="relay")
-                    self.pending[e["no"]]["orig"] = p["call"]
+                    self._send(q, part, kind="relay", orig=p["call"])
                 self._event("relay", p["call"], f"Relaying {p['call']} -> {dest}")
                 return
         word = up.strip(" .!").split(" ")[0] if up else ""
         if up.startswith(T_REQ):
+            now = self.now()
+            p["req_times"] = [t for t in p.get("req_times", []) if now - t < MUTE_WINDOW_S] + [now]
+            if len(p["req_times"]) > MUTE_HAILS:
+                self.muted[p["call"]] = now + MUTE_S
+                p["req_times"] = []
+                self._set(p, IDLE, f"{p['call']} called more than {MUTE_HAILS} times in 10 minutes - muted for 1 hour")
+                self._event("muted", p["call"], f"{p['call']} muted for 1 hour (too many calls)")
+                return
             if p["status"] != OPEN:
                 p["route"] = route_from_via(via)
                 self._set(p, INCOMING, f"{p['call']} wants to chat (heard via {via})")
@@ -1321,7 +1496,11 @@ class ChatManager:
                 self._event("accepted", p["call"], f"{p['call']} accepted your request - press Accept")
             return
         if up.startswith(T_NO) or (p["status"] == HAILING and word in ("DECLINE", "DECLINED", "NO")):
-            self._set(p, DECLINED, f"{p['call']} declined")
+            p["declined_at"] = self.now()
+            p["forever"] = False
+            for n in [n for n, o in self.pending.items() if o["call"] == p["call"] and o["text"].startswith(T_REQ)]:
+                self.pending.pop(n)["entry"]["state"] = "cancelled"     # stop calling them
+            self._set(p, DECLINED, f"{p['call']} declined - you can call again in 15 minutes")
             self._event("declined", p["call"], f"{p['call']} declined")
             return
         if up.startswith(T_END):
@@ -1346,9 +1525,12 @@ class ChatManager:
             for no, o in list(self.pending.items()):
                 if now >= o["next"]:
                     self._transmit(no)
+            self._release_held()
+            for c in [c for c, t in self.muted.items() if t <= now]:
+                del self.muted[c]
             for p in self.peers.values():
                 if p["status"] == HAILING and p.get("forever"):
-                    continue                                   # "keep calling" never expires
+                    continue                                   # "keep calling" stops itself after 30 min
                 if p["status"] in (HAILING, AWAIT_CONFIRM, INCOMING, ACCEPTED) and now - p["since"] > LINK_TIMEOUT_S:
                     self._set(p, EXPIRED, "No answer - link request expired")
 
@@ -1366,11 +1548,11 @@ class ChatManager:
             self.roster = d.get("roster") or {}
             for c, p in (d.get("peers") or {}).items():
                 for m in p.get("messages", []):
-                    if m.get("state") == "sending":
+                    if m.get("state") in ("sending", "waiting"):
                         m["state"] = "failed"          # unsent when Tradewind stopped
                     if m.get("state") == "queued" and m.get("dir") == "out":
-                        self.outbox.append({"call": norm_call(c), "text": m["text"], "entry": m,
-                                            "t": m.get("t", self.now()), "kind": "chat"})
+                        self._outbox_add({"call": norm_call(c), "text": m["text"], "entry": m,
+                                          "t": m.get("t", self.now()), "kind": "chat"})
                 if p.get("status") in (HAILING, ACCEPTED, AWAIT_CONFIRM, INCOMING):
                     p["status"] = EXPIRED
                 p.setdefault("unread", 0)
@@ -1389,7 +1571,9 @@ class ChatManager:
         with self.lock:
             peers = sorted(self.peers.values(), key=lambda p: -max([p["since"]] + [m["t"] for m in p["messages"]]))
             return {"seq": self.seq, "mycall": self.mycall, "events": list(self.events),
-                    "outbox": len(self.outbox), "relay": self.relay_enabled,
+                    "outbox": len(self.outbox), "relay": self.relay_enabled, "held": len(self.held),
+                    "blocked": sorted(self.blocked),
+                    "muted": sorted(c for c, t in self.muted.items() if t > self.now()),
                     "roster": sorted(({k: v for k, v in r.items() if k != "parts"} for r in self.roster.values()),
                                      key=lambda r: -r.get("t", 0)),
                     "peers": [{"call": p["call"], "status": p["status"], "status_text": STATUS_TEXT[p["status"]],

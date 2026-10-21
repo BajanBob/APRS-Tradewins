@@ -121,7 +121,7 @@ If you choose 145.825 for the ISS, set the RF path to `ARISS`, and only transmit
 Below the face plate, a map draws every Caribbean 2m/70cm path that PSKReporter saw during the look-back window.
 Lines are coloured by mode (TEP orange, tropo duct teal, Sporadic-E pink); 2m lines are solid and 70cm lines dashed.
 Hover over or tap a line to see the stations, distance, digital mode and signal report.
-The map refreshes after every check, which is every 5 minutes by default (PSKReporter's limit).
+The map refreshes after every check, which is every 10 minutes by default.
 It needs an internet connection for the map tiles.
 
 ## Face plates
@@ -214,6 +214,28 @@ The **FORMS** button in the chat sends short structured reports, styled on Winli
 
 Each form becomes one or more numbered messages of up to 67 characters, e.g. `WXOBS 201225L 1/3 Ocean City, St Philip. Wind ENE 35 G50kt...`. Each message is acknowledged like any other chat message.
 
+## Good-neighbour limits (v3.2)
+
+Tradewind has limits built in so it can't be used, by mistake or on purpose, to flood the channel or pester other stations.
+
+| Area | Limit |
+|---|---|
+| PSKReporter | at most 6 checks an hour, at least 10 minutes apart |
+| Beacons and bulletins | the same text goes out at most twice an hour; position beacon no more often than every 30 minutes |
+| Hailing | at most 5 calls, at least 1 minute apart; "until received" stops after 30 minutes |
+| After a "no" | you can't hail that station again for 15 minutes |
+| Nuisance callers | a station that calls you more than 3 times in 10 minutes is muted for 1 hour; BLOCK ignores a station completely |
+| Chat messages | one unanswered message per station at a time, at least 30 seconds apart (later messages wait their turn) |
+| Probes | at most 4 an hour |
+| Relay | at most 10 an hour; a message that was already relayed is never relayed again |
+| Store and forward | at most 10 waiting messages per station, 50 in all, kept 24 hours |
+| Airtime | at most 10% of any 10 minutes on VHF/UHF packet (25% in Robust HF mode, where one message takes 12-45 s) |
+| Transmit watchdog | PTT is forced off if one transmission runs past 10 s (1200 baud), 20 s (300 baud) or 50 s (Robust) |
+| Digipeater path | at most 2 hops (WIDE1-1,WIDE2-1 or WIDE2-2); WIDE3 and above, RELAY and TRACE are refused |
+| Callsign | nothing is sent until a real callsign is set (N0CALL and similar are refused) |
+| Station PIN | phones and other computers on your network need the PIN to open Tradewind; "Lock settings" also asks for it before settings or the network key change |
+| Commercial passphrase | at least 12 characters |
+
 ## Commercial / EmComm mode (encrypted, 148-174 MHz)
 
 For organisations with a **licensed commercial or emergency-services VHF channel**, MENU > COMMERCIAL switches Tradewind to an encrypted chat.
@@ -284,7 +306,7 @@ Grantley Adams (TBPB) lies within the Piarco FIR (TTZP).
 
 **Default rule:** a band counts as open when there are at least 2 distinct Caribbean paths of 800 km or more, or one path of 1500 km or more. Both thresholds are in **MENU → PROPAGATION**.
 
-**Query limit:** PSKReporter asks for no more than one query every 5 minutes, and Tradewind enforces that.
+**Query limit:** Tradewind checks PSKReporter at most 6 times an hour, with at least 10 minutes between checks. The same beacon or bulletin text is sent at most twice an hour, and the position beacon is never more often than every 30 minutes.
 
 ## Testing offline
 

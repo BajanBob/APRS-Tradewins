@@ -69,6 +69,7 @@ def main():
     assert tnc.civ_ptt_command("7C", False) == bytes.fromhex("FEFE7CE01C0000FD"), "CI-V TX off"
     test_cat()
     test_chat()
+    test_limits()
     if not tnc.crypto_available():
         test_secure()
     else:
@@ -282,6 +283,114 @@ def test_chat():
     clock[0] += chat.LINK_TIMEOUT_S + 200
     d.tick()
     assert d._peer("J68AB")["status"] == chat.EXPIRED
+
+
+def test_limits():
+    """v3.2 abuse limits."""
+    import types
+    clock = [5000.0]
+    now = lambda: clock[0]  # noqa: E731
+    # hails: at most 5 tries, at least 60 s apart
+    sent = []
+    h = tnc.ChatManager("8P5AB-10", lambda to, info, r: sent.append(info), now)
+    h.hail("8P6AA", "rf", tries=50, interval=5)
+    for _ in range(20):
+        clock[0] += 59; h.tick()
+    assert len(sent) == 5, f"hail capped at 5 tries ({len(sent)})"
+    # "keep calling" stops after 30 minutes
+    sent.clear()
+    h.hail("8P6AB", "rf", interval=60, forever=True)
+    for _ in range(40):
+        clock[0] += 61; h.tick()
+    assert 25 <= len(sent) <= 31 and h._peer("8P6AB")["status"] == tnc.EXPIRED, len(sent)
+    # a "no" means no more hailing that station for 15 minutes
+    h.hail("8P6AC", "rf")
+    h.on_packet("8P6AC>APDR16::8P5AB-10 :TW-LINK NO 8P6AC can't chat now{1", "RF")
+    try:
+        h.hail("8P6AC", "rf"); raise AssertionError("re-hail after decline must wait")
+    except ValueError:
+        pass
+    clock[0] += tnc.DECLINE_COOLDOWN_S + 1
+    h.hail("8P6AC", "rf")
+    # a station calling more than 3 times in 10 minutes is muted for an hour; blocked stations are ignored
+    m = tnc.ChatManager("8P5AB-10", lambda *x: None, now)
+    for i in range(4):
+        m.on_packet(f"8P6NN>APDR16::8P5AB-10 :TW-LINK? 8P6NN asks to chat{i + 10}", "RF")
+        clock[0] += 30
+    assert "8P6NN" in m.muted and any(e["kind"] == "muted" for e in m.events)
+    n_ev = len(m.events)
+    m.on_packet("8P6NN>APDR16::8P5AB-10 :TW-LINK? again{20", "RF")
+    assert len(m.events) == n_ev, "muted station ignored"
+    m.blocked.add("8P6BB")
+    m.on_packet("8P6BB>APDR16::8P5AB-10 :hello{1", "RF")
+    assert "8P6BB" not in m.peers, "blocked station ignored"
+    try:
+        m.hail("8P6BB"); raise AssertionError("cannot hail a blocked station")
+    except ValueError:
+        pass
+    # one unanswered message per station, at least 30 s apart
+    out = []
+    o = tnc.ChatManager("8P5AB-10", lambda to, info, r: out.append(info), now)
+    o._peer("8P6OO")["status"] = tnc.OPEN
+    o.send("8P6OO", "one")
+    o.send("8P6OO", "two")
+    assert len(out) == 1 and o.held, "second message waits its turn"
+    o.on_packet(f"8P6OO>APDR16::8P5AB-10 :ack{out[0].rsplit('{', 1)[1]}", "RF")
+    o.tick()
+    assert len(out) == 1, "still inside the 30 s gap"
+    clock[0] += tnc.MSG_GAP_S
+    o.tick()
+    assert len(out) == 2 and "two" in out[1] and not o.held
+    # probes: at most 4 an hour
+    p = tnc.ChatManager("8P5AB-10", lambda *x: "A", now)
+    p.links = tnc.LinkController({"A": {"speed": 1200}, "B": {"speed": 9600}}, now)
+    for _ in range(tnc.PROBES_PER_HOUR):
+        p.probe("8P6PP")
+    try:
+        p.probe("8P6PP"); raise AssertionError("probe limit")
+    except ValueError:
+        pass
+    # relays: never a message that was already relayed, never more than 10 an hour
+    r_out = []
+    r = tnc.ChatManager("8P6RR", lambda to, info, rt: r_out.append((to, info)), now)
+    r.relay_enabled = True
+    r.on_packet("8P5AB-10>APDR16::8P6RR    :RELAY J68CC hi [de 8P6XX via 8P6ZZ]{1", "RF")
+    assert any("RELAY REFUSED" in i for _, i in r_out) and not any(t == "J68CC" for t, _ in r_out)
+    for i in range(tnc.RELAYS_PER_HOUR + 2):
+        r.on_packet(f"8P5AB-10>APDR16::8P6RR    :RELAY J6{i}DD msg {i}{{{i + 2}", "RF")
+    assert sum(1 for t, _ in r_out if t.startswith("J6") and t != "J68CC") == tnc.RELAYS_PER_HOUR
+    # outbox: 10 per station, 50 in all
+    q = tnc.ChatManager("8P5AB-10", lambda *x: None, now)
+    for i in range(15):
+        q._outbox_add({"call": "8P6QQ", "text": str(i), "entry": {}, "t": now()})
+    for i in range(60):
+        q._outbox_add({"call": f"8P{i}Q", "text": str(i), "entry": {}, "t": now()})
+    assert sum(1 for x in q.outbox if x["call"] == "8P6QQ") <= 10 and len(q.outbox) == tnc.OUTBOX_MAX
+    # airtime: 10% of 10 minutes
+    g = tnc.AirtimeGuard(now=now)
+    for _ in range(6):
+        assert g.wait(10) == 0; g.add(10)
+    assert g.wait(5) > 0, "60 s used - must wait"
+    clock[0] += 601
+    assert g.wait(5) == 0
+    # app-level rules
+    import app
+    assert app.check_path("WIDE1-1,WIDE2-1") == "" and app.check_path("WIDE2-2") == "" and app.check_path("ARISS") == ""
+    for bad in ("WIDE3-3", "WIDE1-1,WIDE2-2", "RELAY,WIDE", "TRACE3-3", "WIDE2-1,WIDE2-1,WIDE1-1", "WIDE2-3"):
+        assert app.check_path(bad), bad
+    st = types.SimpleNamespace(psk_times=__import__("collections").deque(), tx_seen={})
+    t0 = 10000.0
+    assert app.Station.psk_wait(st, t0) == 0
+    st.psk_times.append(t0)
+    assert 599 <= app.Station.psk_wait(st, t0 + 1) <= 600, "10 minutes between PSKReporter checks"
+    for k in range(1, 6):
+        st.psk_times.append(t0 + 600 * k)
+    assert app.Station.psk_wait(st, t0 + 3001) == 599, "6th check done: 7th waits for the hour"
+    assert app.Station.same_tx_ok(st, "!beacon", t0) and app.Station.same_tx_ok(st, "!beacon", t0 + 1800)
+    assert not app.Station.same_tx_ok(st, "!beacon", t0 + 1900), "third identical beacon in an hour held"
+    assert app.Station.same_tx_ok(st, "!beacon", t0 + 3601)
+    assert app._pin_hash("1234", "ab") == app._pin_hash("1234", "ab") != app._pin_hash("1235", "ab")
+    assert app.validate({"call": "N0CALL", "grid": "GK03"}) and app.validate({"call": "8P5AB-10", "grid": "GK03", "rf_path": "WIDE3-3"})
 
 
 class FakeIcom:

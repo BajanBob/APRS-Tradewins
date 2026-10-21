@@ -15,6 +15,8 @@ Latin America as they're announced on APRS.
 
 import argparse
 import collections
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -29,7 +31,7 @@ import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.1"
+APP_VERSION = "3.2"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -113,10 +115,12 @@ DEFAULTS = {
     "link2_tnc": "kiss_tcp", "link2_addr": "127.0.0.1:8002", "link2_serial": "", "link2_baud": 9600,
     # Phase 4: off-grid / disaster features
     "store_forward": True, "relay_enabled": False,
+    "block_list": "",            # callsigns whose hails and messages are ignored
+    "pin_hash": "", "pin_salt": "", "lock_settings": False,   # station PIN (v3.2)
     "kiss_addr": "127.0.0.1:8001", "kiss_serial": "", "kiss_baud": 9600,
     "rf_announce": True, "rf_path": "WIDE2-1", "rf_when": "always", "rf_modes": ["TEP"],
     "aprsis": True, "server": "rotate.aprs2.net", "igate": False,
-    "window": 60, "interval": 5, "min_km": 800, "min_paths": 2,
+    "window": 60, "interval": 10, "min_km": 800, "min_paths": 2,
     "strong_km": 1500, "repeat": 30, "announce_close": False, "group": "VHF",
     "alert_sound": True, "alert_voice": True, "alert_modes": ["TEP", "TROPO", "ES"],
     "watch_modes": ["TEP", "TROPO", "ES"],
@@ -133,9 +137,10 @@ DEFAULTS = {
     # Commercial / EmComm mode: encrypted chat on a licensed 148-174 MHz channel
     "op_mode": "amateur", "com_callsign": "", "com_licensee": "", "com_unit": "",
     "com_freq": "", "com_net": "", "com_key": "", "com_fp": "", "com_id_min": 30,
-    "cfg_ver": 2,
+    "cfg_ver": 3,
 }
-SECRET_KEYS = ("com_key",)        # never sent to the face plate
+SECRET_KEYS = ("com_key", "pin_hash", "pin_salt")   # never sent to the face plate
+GUARDED_KEYS = SECRET_KEYS + ("lock_settings",)      # only changed through their own endpoints
 
 # Radio / interface presets. Fields override DEFAULTS when chosen in the UI.
 PRESETS = [
@@ -278,6 +283,21 @@ def _migrate(cfg):
     return cfg
 
 
+# ---- on-air and network etiquette limits (v3.2)
+PSK_MIN_GAP = 600        # at least 10 minutes between PSKReporter queries
+PSK_MAX_PER_HOUR = 6     # and never more than 6 in any hour
+SAME_TX_PER_HOUR = 2     # identical beacon / bulletin text: at most twice an hour
+BEACON_MIN_MIN = 30      # so the position beacon is never more than twice an hour
+
+
+def block_set(cfg):
+    return {tncmod.norm_call(x) for x in re.split(r"[,\s]+", str(cfg.get("block_list") or "")) if x.strip()}
+
+
+def _pin_hash(pin, salt):
+    return hashlib.pbkdf2_hmac("sha256", pin.encode(), ("tradewind-pin:" + salt).encode(), 100_000).hex()
+
+
 def load_config():
     cfg = dict(DEFAULTS)
     if IS_ANDROID:
@@ -285,12 +305,17 @@ def load_config():
     try:
         with open(CONF_PATH) as f:
             saved = json.load(f)
-        if saved.get("cfg_ver", 1) < 2 and saved.get("interval") == 10:
-            saved["interval"] = 5     # v1.5: map and checks every 5 minutes by default
         cfg.update(saved)
     except (OSError, ValueError):
         pass
-    return _migrate(cfg)
+    cfg = _migrate(cfg)
+    try:
+        cfg["interval"] = max(PSK_MIN_GAP // 60, int(cfg.get("interval") or 10))
+        cfg["beacon_min"] = max(BEACON_MIN_MIN, int(cfg.get("beacon_min") or 30))
+    except (TypeError, ValueError):
+        cfg["interval"], cfg["beacon_min"] = 10, 30
+    cfg["cfg_ver"] = 3
+    return cfg
 
 
 def save_config(cfg):
@@ -319,6 +344,34 @@ def validate_commercial(cfg):
     return errs
 
 
+PATH_WIDE_RE = re.compile(r"^WIDE([1-7])-([1-7])$")
+
+
+def check_path(path):
+    """Digipeater path rule: at most 2 hops in all (e.g. WIDE1-1,WIDE2-1 or WIDE2-2).
+    WIDE3 and above, RELAY and TRACE flood the network and are refused. Returns an error or ''."""
+    parts = [x.strip().upper() for x in str(path or "").split(",") if x.strip()]
+    if len(parts) > 2:
+        return "RF path: use at most two entries, e.g. WIDE1-1,WIDE2-1."
+    hops = 0
+    for x in parts:
+        if x.startswith(("RELAY", "TRACE")) or x.startswith("WIDE") and not PATH_WIDE_RE.match(x):
+            return f"RF path: {x} is outdated or floods the network - use WIDE1-1,WIDE2-1."
+        m = PATH_WIDE_RE.match(x)
+        if m:
+            n, hop = int(m.group(1)), int(m.group(2))
+            if n > 2 or hop > n:
+                return f"RF path: {x} is too wide - the limit is 2 hops (WIDE1-1,WIDE2-1 or WIDE2-2)."
+            hops += hop
+        elif not re.match(r"^[A-Z0-9]{1,6}(-([0-9]|1[0-5]))?$", x):
+            return f"RF path: {x} is not a valid digipeater call or WIDE alias."
+        else:
+            hops += 1
+    if hops > 2:
+        return "RF path: the limit is 2 hops in all (e.g. WIDE1-1,WIDE2-1)."
+    return ""
+
+
 def validate(cfg):
     if cfg.get("op_mode") == "commercial":
         return validate_commercial(cfg)
@@ -326,8 +379,11 @@ def validate(cfg):
     if IS_ANDROID and cfg.get("tnc") in ("sound", "kiss_serial"):
         errs.append("On Android use 'APRS-IS only' or 'KISS over TCP' - the sound modem and USB/serial radios need the Windows/PC version.")
     call = cfg.get("call", "").upper().strip()
-    if not CALL_RE.match(call) or call.startswith("N0CALL"):
+    if not CALL_RE.match(call) or call.split("-")[0] in ("N0CALL", "NOCALL", "MYCALL", "CALL", "TEST", "AB1CD"):
         errs.append("Enter your own callsign (with optional -SSID, e.g. 8P6XX-10).")
+    perr = check_path(cfg.get("rf_path"))
+    if perr:
+        errs.append(perr)
     if not GRID_RE.match(cfg.get("grid", "").strip()):
         errs.append("Enter a 4 or 6 character Maidenhead grid square (e.g. GK03 or GK03fd).")
     if cfg.get("tnc") == "sound" and cfg.get("ptt") in ("RTS", "DTR", "CM108", "CIV", "YAESU_CAT") and not cfg.get("ptt_port"):
@@ -363,6 +419,8 @@ class Station:
         self.log_id = 0
         self.openings = {}
         self.last_check = 0
+        self.psk_times = collections.deque()   # when each PSKReporter query went out
+        self.tx_seen = {}                       # beacon/bulletin text -> recent send times
         self.next_check = 0
         self.next_beacon = 0
         self.spot_count = 0
@@ -496,7 +554,7 @@ class Station:
         was = self.running
         if was:
             trial = dict(self.cfg)
-            trial.update({k: v for k, v in new.items() if k in DEFAULTS})
+            trial.update({k: v for k, v in new.items() if k in DEFAULTS and k not in GUARDED_KEYS})
             trial["call"] = str(trial.get("call", "")).upper().strip()
             errs = validate(trial)
             if errs:  # keep the running station on its last good settings
@@ -504,8 +562,9 @@ class Station:
             self.stop()
         with self.lock:
             for k, v in new.items():
-                if k in DEFAULTS:
+                if k in DEFAULTS and k not in GUARDED_KEYS:
                     self.cfg[k] = v
+            self.cfg["rf_path"] = ",".join(x.strip().upper() for x in str(self.cfg.get("rf_path") or "").split(",") if x.strip())
             _migrate(self.cfg)
             self.cfg["call"] = self.cfg.get("call", "").upper().strip()
             self.cfg["com_unit"] = str(self.cfg.get("com_unit") or "").upper().strip()
@@ -521,11 +580,15 @@ class Station:
         while not self._stop.is_set():
             now = time.time()
             if now >= self.next_check and not self.prop_off:
-                self.run_check()
-                self.next_check = time.time() + max(eng.MIN_QUERY_INTERVAL, self.cfg["interval"] * 60)
+                wait = self.psk_wait()
+                if wait > 0:
+                    self.next_check = now + wait
+                else:
+                    self.run_check()
+                    self.next_check = time.time() + max(PSK_MIN_GAP, self.cfg["interval"] * 60)
             if self.next_beacon and now >= self.next_beacon:
                 self.send_beacon()
-                self.next_beacon = time.time() + max(10, self.cfg["beacon_min"]) * 60
+                self.next_beacon = time.time() + max(BEACON_MIN_MIN, self.cfg["beacon_min"]) * 60
             if self.cfg.get("wx_enabled"):
                 self._wx_schedule(now)
             if self.cfg.get("tc_enabled") and now >= self.tc_next:
@@ -671,8 +734,25 @@ class Station:
                 self.transmit(f":{f'BLN{i}TC'.ljust(9)}:{line}", rf=bool(c.get("tc_rf")), force_rf=bool(c.get("tc_rf")))
                 time.sleep(2)
 
+    def psk_wait(self, now=None):
+        """Seconds until another PSKReporter query is allowed (0 = go now).
+        Rules: 10 minutes between queries and at most 6 in any hour."""
+        now = time.time() if now is None else now
+        while self.psk_times and now - self.psk_times[0] >= 3600:
+            self.psk_times.popleft()
+        wait = 0.0
+        if self.psk_times:
+            wait = self.psk_times[-1] + PSK_MIN_GAP - now
+        if len(self.psk_times) >= PSK_MAX_PER_HOUR:
+            wait = max(wait, self.psk_times[0] + 3600 - now)
+        return max(0.0, wait)
+
     def run_check(self):
         c = self.cfg
+        if not self.demo_xml:
+            if self.psk_wait() > 0:
+                return
+            self.psk_times.append(time.time())
         try:
             if self.demo_xml:
                 with open(self.demo_xml, "rb") as f:
@@ -779,9 +859,25 @@ class Station:
         self._rf_was_live = live
 
     # ---- TX paths
+    def same_tx_ok(self, info, now=None):
+        """Identical beacon/bulletin text may go out at most SAME_TX_PER_HOUR times an hour."""
+        now = time.time() if now is None else now
+        for k in [k for k, v in self.tx_seen.items() if not v or now - v[-1] >= 3600]:
+            del self.tx_seen[k]
+        times = [t for t in self.tx_seen.get(info, []) if now - t < 3600]
+        if len(times) >= SAME_TX_PER_HOUR:
+            self.tx_seen[info] = times
+            return False
+        self.tx_seen[info] = times + [now]
+        return True
+
     def transmit(self, info, rf=True, net=True, mode=None, force_rf=False):
         if self.commercial:
             return      # APRS bulletins / beacons never go out on a commercial channel
+        if not self.same_tx_ok(info):
+            self.add_log("SYS", f"Held back - the same text was already sent {SAME_TX_PER_HOUR} times "
+                                f"this hour: {info[:60]}")
+            return
         c = self.cfg
         call = c["call"]
         sent = []
@@ -825,6 +921,7 @@ class Station:
         self.chat.on_log = self._commlog_add
         self.chat.store_forward = bool(self.cfg.get("store_forward", True))
         self.chat.relay_enabled = bool(self.cfg.get("relay_enabled"))
+        self.chat.blocked = set(block_set(self.cfg))
         self.chat.links = self.linkctl
         robust = self.cfg.get("tnc") == "sound" and self.cfg.get("modem") == "robust"
         self.chat.retry = (90, 150, 240) if robust else tncmod.RETRY_S
@@ -968,6 +1065,55 @@ class Station:
         if self.chat:
             self.chat.on_packet(f"{src}>{tncmod.SEC_DEST}:{plain}", "RF" if link == "A" else f"RF:{link}")
 
+    def set_block(self, call, block):
+        call = tncmod.norm_call(call)
+        if not tncmod.valid_call(call):
+            raise ValueError("Enter a callsign to block or unblock.")
+        with self.lock:
+            calls = block_set(self.cfg)
+            (calls.add if block else calls.discard)(call)
+            self.cfg["block_list"] = ",".join(sorted(calls))
+            save_config(self.cfg)
+            if self.chat:
+                self.chat.blocked = set(calls)
+                self.chat.muted.pop(call, None)
+                self.chat.seq += 1
+        self.add_log("SYS", f"{call} {'blocked' if block else 'unblocked'}")
+
+    # ---- station PIN: protects the face plate from other devices and (optionally) the settings
+    def pin_ok(self, pin):
+        c = self.cfg
+        if not c.get("pin_hash"):
+            return False
+        return hmac.compare_digest(_pin_hash(str(pin or ""), c.get("pin_salt", "")), c["pin_hash"])
+
+    def set_pin(self, action, old="", new="", lock=False):
+        """action: 'set' (new or changed PIN), 'remove', or 'lock' (lock / unlock the settings)."""
+        c = self.cfg
+        if c.get("pin_hash") and not self.pin_ok(old):
+            raise ValueError("The current PIN is wrong.")
+        with self.lock:
+            if action == "set":
+                new = str(new or "").strip()
+                if not re.fullmatch(r"\d{4,8}", new):
+                    raise ValueError("The PIN must be 4 to 8 digits.")
+                salt = os.urandom(8).hex()
+                c.update(pin_salt=salt, pin_hash=_pin_hash(new, salt))
+            elif action == "remove":
+                c.update(pin_salt="", pin_hash="", lock_settings=False)
+            elif action == "lock":
+                if not c.get("pin_hash"):
+                    raise ValueError("Set a PIN first.")
+                c["lock_settings"] = bool(lock)
+            else:
+                raise ValueError("Unknown PIN action.")
+            save_config(c)
+        self.add_log("SYS", "station PIN " + ("set" if c.get("pin_hash") else "removed") +
+                     (" - settings locked" if c.get("lock_settings") else ""))
+
+    def session_token(self):
+        return hmac.new(bytes.fromhex(self.cfg["pin_hash"]), b"tradewind-session", hashlib.sha256).hexdigest()
+
     def set_com_key(self, net, passphrase):
         key = tncmod.derive_key(net, passphrase)
         fp = tncmod.key_fingerprint(key)
@@ -1043,6 +1189,7 @@ class Station:
             "app": APP_NAME, "version": APP_VERSION, "running": self.running,
             "platform": "android" if IS_ANDROID else sys.platform,
             "config": {k: v for k, v in c.items() if k not in SECRET_KEYS}, "matrix": matrix, "utc": time.time(),
+            "pin_set": bool(c.get("pin_hash")),
             "op_mode": "commercial" if self.commercial else c.get("op_mode", "amateur"),
             "heard": sorted(self.heard.values(), key=lambda h: -h["last"])[:40],
             "links": ([{"link": l, **v} for l, v in sorted(self.linkctl.links.items())] if self.linkctl else []),
@@ -1071,8 +1218,53 @@ class Station:
 STATION = Station()
 
 
+LOCAL_ADDRS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+LOGIN_FAILS = collections.deque()      # wrong PIN attempts (5 in 5 minutes locks logins out)
+LOCKED_PATHS = ("/api/config", "/api/comkey")   # need the PIN when the settings are locked
+
+LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Tradewind - PIN</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0f14;color:#e5e7eb;font:16px system-ui,sans-serif}
+form{background:#111827;border:1px solid #374151;border-radius:12px;padding:24px;width:min(320px,90vw)}
+h1{font-size:18px;margin:0 0 12px}input,button{width:100%;box-sizing:border-box;font-size:18px;padding:10px;border-radius:8px;margin-top:10px}
+input{background:#030712;color:#fff;border:1px solid #4b5563;letter-spacing:4px;text-align:center}
+button{background:#3b82f6;color:#fff;border:0;font-weight:600}p{color:#9ca3af;font-size:14px;margin:12px 0 0}#e{color:#f87171}</style></head>
+<body><form id="f"><h1>Tradewind station PIN</h1><input id="p" type="password" inputmode="numeric" autocomplete="current-password" placeholder="PIN" autofocus>
+<button>Unlock</button><p id="e"></p><p>This device is not the station computer. Enter the station PIN to use the face plate.</p></form>
+<script>f.onsubmit=async e=>{e.preventDefault();const r=await(await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin:p.value})})).json();if(r.ok)location.reload();else document.getElementById('e').textContent=r.errors[0];};</script></body></html>"""
+
+NO_PIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tradewind</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0f14;color:#e5e7eb;font:16px system-ui,sans-serif}
+div{max-width:420px;padding:24px;border:1px solid #374151;border-radius:12px;background:#111827}</style></head><body><div>
+<h1 style="font-size:18px">Station PIN needed</h1><p>Tradewind can key a transmitter, so other devices on the network are only let in once a station PIN is set.</p>
+<p>On the station computer, open MENU &gt; STATION and set a PIN, then reload this page.</p></div></body></html>"""
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = f"{APP_NAME}/{APP_VERSION}"
+
+    def _local(self):
+        return self.client_address[0] in LOCAL_ADDRS
+
+    def _authed(self):
+        if self._local():
+            return True
+        if not STATION.cfg.get("pin_hash"):
+            return False
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "tw_auth" and hmac.compare_digest(v, STATION.session_token()):
+                return True
+        return False
+
+    def _html(self, text, code=200):
+        body = text.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, *a):
         pass
@@ -1107,6 +1299,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        if not self._authed():
+            if path in ("/", "/index.html"):
+                return self._html(LOGIN_PAGE if STATION.cfg.get("pin_hash") else NO_PIN_PAGE, 401)
+            return self._json({"error": "PIN required"}, 401)
         if path in ("/", "/index.html"):
             with open(os.path.join(HERE, "faceplate.html"), "rb") as f:
                 body = f.read()
@@ -1165,6 +1361,45 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin.split("://", 1)[-1] != host:
             return self._json({"error": "cross-origin request refused"}, 403)
         path = self.path.split("?")[0]
+        if path == "/api/login":
+            now = time.time()
+            while LOGIN_FAILS and now - LOGIN_FAILS[0] > 300:
+                LOGIN_FAILS.popleft()
+            if len(LOGIN_FAILS) >= 5:
+                return self._json({"ok": False, "errors": ["Too many wrong PINs - wait 5 minutes."]}, 429)
+            if not STATION.pin_ok(self._body().get("pin")):
+                LOGIN_FAILS.append(now)
+                return self._json({"ok": False, "errors": ["Wrong PIN."]}, 403)
+            body = b'{"ok": true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Set-Cookie", f"tw_auth={STATION.session_token()}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
+        if not self._authed():
+            return self._json({"ok": False, "errors": ["PIN required - reload the page."]}, 401)
+        if path in LOCKED_PATHS and STATION.cfg.get("lock_settings") and \
+                not STATION.pin_ok(self.headers.get("X-TW-PIN")):
+            if self.headers.get("X-TW-PIN"):
+                LOGIN_FAILS.append(time.time())
+            return self._json({"ok": False, "pin_required": True,
+                               "errors": ["Settings are locked - enter the station PIN."]}, 403)
+        if path == "/api/pin":
+            b = self._body()
+            now = time.time()
+            while LOGIN_FAILS and now - LOGIN_FAILS[0] > 300:
+                LOGIN_FAILS.popleft()
+            if len(LOGIN_FAILS) >= 5:
+                return self._json({"ok": False, "errors": ["Too many wrong PINs - wait 5 minutes."]})
+            try:
+                STATION.set_pin(str(b.get("action") or ""), b.get("old"), b.get("new"), b.get("lock"))
+            except ValueError as e:
+                if "wrong" in str(e):
+                    LOGIN_FAILS.append(now)
+                return self._json({"ok": False, "errors": [str(e)]})
+            return self._json({"ok": True, "pin_set": bool(STATION.cfg.get("pin_hash")),
+                               "lock": bool(STATION.cfg.get("lock_settings"))})
         if path == "/api/config":
             errs = STATION.update_config(self._body())
             self._json({"ok": True, "errors": errs})
@@ -1204,6 +1439,8 @@ class Handler(BaseHTTPRequestHandler):
                                       tries=int(tries) if str(tries).isdigit() else None,
                                       interval=int(b["interval"]) if str(b.get("interval", "")).isdigit() else None,
                                       forever=tries == "forever")
+                elif act in ("block", "unblock"):
+                    STATION.set_block(call, act == "block")
                 elif act == "probe":
                     STATION.chat.probe(call)
                 elif act == "relay":
@@ -1226,10 +1463,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/test":
                 STATION.send_test()
             else:
-                wait = STATION.last_check + eng.MIN_QUERY_INTERVAL - time.time()
+                wait = STATION.psk_wait()
                 if wait > 0:
                     return self._json({"ok": False, "errors": [
-                        f"PSKReporter allows one query every 5 minutes - try again in {int(wait)}s."]})
+                        "Tradewind checks PSKReporter at most 6 times an hour, 10 minutes apart - "
+                        f"try again in {int(wait) // 60} min {int(wait) % 60} s."]})
                 STATION.next_check = 0
                 STATION._wake.set()
             self._json({"ok": True})
@@ -1285,7 +1523,7 @@ def main():
     print(f"  and go to:   {url}")
     print()
     if a.host not in ("127.0.0.1", "localhost"):
-        print("WARNING: anyone who can reach this port can key your transmitter. Use only on a trusted LAN.")
+        print("Other devices on your network need the station PIN (set it under MENU > STATION).")
     if a.autostart:
         errs = STATION.start()
         if errs:

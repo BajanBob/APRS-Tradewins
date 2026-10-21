@@ -327,6 +327,38 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
 .chat-form{display:flex;gap:8px}
 .chat-form input{flex:1;min-width:0}
 .chat-empty{color:var(--engrave);font-size:14px;padding:6px 2px 10px}
+.sec-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border-radius:8px;margin-bottom:12px;
+  background:#2a1430;border:1px solid #8b3fa8;color:#f3d8ff;font-size:14px}
+.sec-banner svg{flex:0 0 auto}
+.sec-banner b{font-family:var(--mono);font-weight:400;color:#fff}
+.forms{border:1px solid #2f3a45;border-radius:8px;padding:12px;margin-bottom:10px;background:#151a1f}
+.forms-head{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-bottom:10px}
+.forms-head label{display:flex;flex-direction:column;gap:4px;font-size:12px;letter-spacing:.12em;color:var(--engrave);flex:1 1 220px}
+.forms-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px}
+.forms-grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;letter-spacing:.08em;color:var(--engrave)}
+.forms-grid label.w{grid-column:1/-1}
+.forms-prev{margin-top:10px;font:13px var(--mono);color:#cfe8ff;background:#0d1217;border-radius:6px;padding:8px 10px;white-space:pre-wrap}
+.forms-acts{display:flex;gap:8px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}
+@media (max-width:560px){ .forms-grid{grid-template-columns:1fr} }
+.chat-tools{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:10px}
+.chat-tools .btn{min-height:40px;display:inline-flex;align-items:center;text-decoration:none}
+.heard{margin-top:12px;border-top:1px solid #2a3036;padding-top:10px}
+.heard summary{cursor:pointer;font-size:12px;letter-spacing:.2em;color:var(--engrave);min-height:32px;display:flex;align-items:center}
+.heard-list{display:flex;flex-direction:column;gap:2px;margin-top:6px;max-height:240px;overflow:auto}
+.heard-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,1fr) auto;gap:8px;align-items:center;
+  padding:6px 4px;border-bottom:1px solid #20262c;font-size:14px}
+.heard-row b{font-family:var(--mono);font-weight:400;color:#fff}
+.heard-row span{color:var(--engrave)}
+.heard-row .btn{min-height:34px;padding:0 10px;font-size:12px}
+.help-q{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;margin-left:6px;border-radius:50%;
+  border:1px solid #4a535c;background:#1b1f23;color:var(--engrave-hi);font:700 12px var(--label);cursor:pointer;vertical-align:middle;padding:0}
+.help-q:hover{border-color:var(--sea);color:var(--sea)}
+.set.sect{border-top:1px solid #2f363d;padding-top:12px;margin-top:4px;color:var(--engrave-hi);letter-spacing:.12em;font-size:13px}
+.link-stats{display:flex;flex-wrap:wrap;gap:8px;margin:-4px 0 10px}
+.link-stats span{font:12px var(--mono);padding:4px 8px;border-radius:6px;background:#1a1f24;color:#c9d1d9;border:1px solid #2f363d}
+.link-stats span.best{border-color:var(--sea);color:#bff7ef}
+.link-stats span.bad{border-color:#7a2a22;color:#ffb4aa}
+.roster-row .st-Safe{color:#6ee7b7}.roster-row .st-Need{color:#fbbf24}.roster-row .st-Emergency{color:#ff7b70}
 .foot{margin-top:16px;font-size:13px;color:#5d656e;text-align:center;letter-spacing:.08em}
 
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(120%);max-width:min(560px,92vw);
@@ -506,6 +538,7 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
       <button class="tab" data-p="p-prop" role="tab">PROPAGATION</button>
       <button class="tab" data-p="p-net" role="tab">APRS-IS</button>
       <button class="tab" data-p="p-wx" role="tab">WEATHER</button>
+      <button class="tab" data-p="p-com" role="tab">COMMERCIAL</button>
     </div>
 
     <div class="pane on" id="p-radio">
@@ -515,6 +548,12 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
           <option value="kiss_tcp">KISS over TCP (Direwolf, UZ7HO)</option>
           <option value="kiss_serial">KISS serial (radio TNC, Mobilinkd)</option>
           <option value="none">None - APRS-IS only</option>
+        </select></div>
+      <div class="set m-sound"><label>Modem</label>
+        <select class="inset" data-k="modem">
+          <option value="1200">1200 baud AFSK - VHF/UHF FM (APRS)</option>
+          <option value="300">300 baud AFSK - HF SSB (USB, 1600/1800 Hz)</option>
+          <option value="robust">Tradewind Robust - HF weak signal, down to about -12 dB (8-FSK, ~44 bit/s)</option>
         </select></div>
       <div class="set m-sound"><label>Audio input (from radio)</label><select class="inset" data-k="audio_in" id="f-ain"></select></div>
       <div class="set m-sound"><label>Audio output (to radio)</label><select class="inset" data-k="audio_out" id="f-aout"></select></div>
@@ -560,6 +599,34 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
         <label class="chk"><input type="checkbox" data-list="rf_modes" value="TEP"> TEP</label>
         <label class="chk"><input type="checkbox" data-list="rf_modes" value="TROPO"> Tropo duct</label>
         <label class="chk"><input type="checkbox" data-list="rf_modes" value="ES"> Sporadic-E</label></div></div>
+      <div class="set wide sect"><b>SECOND RADIO LINK &middot; multi-speed (Phase 2)</b></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="link2_enabled" id="f-l2"> Use a second radio link</label></div>
+      <div class="set m-l2"><label>Second link connects by</label>
+        <select class="inset" data-k="link2_tnc" id="f-l2tnc"><option value="kiss_tcp">KISS over TCP (Direwolf, UZ7HO, VARA FM)</option><option value="kiss_serial">KISS serial (hardware TNC)</option></select></div>
+      <div class="set m-l2 m-l2tcp"><label>Second link host:port</label><input class="inset" data-k="link2_addr" placeholder="127.0.0.1:8002"></div>
+      <div class="set m-l2 m-l2ser"><label>Second link serial port</label><input class="inset" data-k="link2_serial" list="serial-list" placeholder="COM7"></div>
+      <div class="set m-l2 m-l2ser"><label>Serial baud</label><select class="inset" data-k="link2_baud" data-num><option>9600</option><option>19200</option><option>38400</option><option>57600</option><option>115200</option></select></div>
+      <div class="set m-l2"><label>Second link speed (bit/s)</label>
+        <select class="inset" data-k="link2_speed" data-num><option value="1200">1200 AFSK</option><option value="2400">2400 QPSK</option><option value="4800">4800 8PSK</option><option value="9600">9600 G3RUH</option></select></div>
+      <div class="set m-l2"><label>Second link name</label><input class="inset" data-k="link2_name" maxlength="24" placeholder="70cm 9600 G3RUH"></div>
+      <div class="set m-l2"><label>Main link name</label><input class="inset" data-k="link1_name" maxlength="24" placeholder="2m 1200 AFSK"></div>
+      <div class="set m-l2"><label>Main link speed if it is a KISS TNC (bit/s)</label><input class="inset" data-k="link1_speed" data-num type="number" min="44" max="19200"></div>
+      <div class="set wide note m-l2">With two links, choose <b>Auto</b> under "Send via" in the chat. Tradewind measures delivery, delay and throughput on each link,
+        uses the best one, falls back to the slower link when errors increase, and tries the faster one again after 10 minutes. <b>PROBE</b> in the chat tests both links.
+        Speeds above 1200 need Direwolf (or another modem) and a radio data port that supports them, and 9600 needs a "9600" data port on the radio.</div>
+      <div class="set wide m-l2"><button class="btn" type="button" id="b-dwgen">MAKE A DIREWOLF SETUP FILE</button></div>
+      <div class="set wide hide" id="dw-box">
+        <div class="forms-grid">
+          <label>Sound device for Direwolf<input class="inset" id="dw-adev" placeholder="Windows: 1 (device number) / Linux: plughw:1,0"></label>
+          <label>PTT<input class="inset" id="dw-ptt" placeholder="COM5 RTS  /  CM108  /  RIG 2 COM5"></label>
+          <label>Speed<select class="inset" id="dw-speed"><option value="1200">1200 AFSK</option><option value="2400">2400 QPSK</option><option value="4800">4800 8PSK</option><option value="9600" selected>9600 G3RUH</option></select></label>
+          <label>Error correction<select class="inset" id="dw-fec"><option value="il2p">IL2P (recommended between Direwolf stations)</option><option value="fx25">FX.25 (works with plain AX.25 stations)</option><option value="none">None</option></select></label>
+          <label>KISS TCP port<input class="inset" id="dw-port" value="8002" inputmode="numeric"></label>
+        </div>
+        <textarea class="inset" id="dw-out" rows="12" readonly style="width:100%;margin-top:10px;font-family:var(--mono);font-size:13px"></textarea>
+        <div class="forms-acts"><a class="btn" id="dw-dl" download="direwolf-tradewind.conf" href="#">DOWNLOAD direwolf-tradewind.conf</a></div>
+        <div class="note">Start Direwolf with:  direwolf -c direwolf-tradewind.conf  &middot; Both stations must use the same speed and error correction.</div>
+      </div>
       <div class="set wide note" id="dev-note"></div>
     </div>
 
@@ -568,6 +635,8 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
       <div class="set"><label class="chk"><input type="checkbox" data-k="beacon"> Send position beacon</label></div>
       <div class="set"><label>Beacon every (minutes)</label><input class="inset" data-k="beacon_min" data-num type="number" min="10" max="120"></div>
       <div class="set wide"><label>Beacon comment</label><input class="inset" data-k="beacon_comment" maxlength="43"></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="store_forward"> Store and forward: keep undelivered messages and resend when the station is heard again</label></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="relay_enabled"> Act as a relay: pass messages on for stations that cannot reach each other</label></div>
       <div class="set wide note">Your position is the centre of your grid square, so a 6-character grid places you within about 5 km. Use a 4-character grid for a rougher position.</div>
     </div>
 
@@ -640,6 +709,30 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
         for official forecasts and warnings use the Barbados Meteorological Services. Grantley Adams (TBPB) lies in the Piarco FIR (TTZP).</div>
       <div class="set wide note" id="wx-last"></div>
     </div>
+    <div class="pane" id="p-com">
+      <div class="set wide"><label>Operating mode</label>
+        <select class="inset" data-k="op_mode" id="f-opmode">
+          <option value="amateur">Amateur radio (APRS, plain text)</option>
+          <option value="commercial">Commercial / EmComm (licensed 148-174 MHz, encrypted chat)</option>
+        </select></div>
+      <div class="set wide note"><b>Commercial mode is only for a licensed commercial or emergency-services VHF channel (148&ndash;174 MHz)</b>,
+        never for amateur frequencies, where encryption is not allowed. Use it only on frequencies your organisation is licensed for, and follow your licence's station-identification rules.
+        In this mode APRS bulletins, beacons and APRS-IS are switched off; the chat is encrypted with AES-256-GCM. Message content is hidden, but the unit ID and the clear station ID can be seen.</div>
+      <div class="set"><label>Licence holder (organisation)</label><input class="inset" data-k="com_licensee" maxlength="40" placeholder="e.g. Red Cross Barbados"></div>
+      <div class="set"><label>Station call sign / licence no.</label><input class="inset" data-k="com_callsign" maxlength="24" placeholder="from your licence"></div>
+      <div class="set"><label>This unit's ID</label><input class="inset" data-k="com_unit" maxlength="9" placeholder="RC01" autocomplete="off"></div>
+      <div class="set"><label>Channel frequency (MHz)</label><input class="inset" data-k="com_freq" inputmode="decimal" placeholder="155.325"></div>
+      <div class="set"><label>Send clear station ID every (min)</label><input class="inset" data-k="com_id_min" data-num type="number" min="5" max="60"></div>
+      <div class="set note">To have Tradewind set the radio to this channel, tick <b>Tune the radio</b> under RADIO / TNC (CAT radios that allow it).</div>
+      <div class="set wide"><label>Network key: every unit uses the same network name and passphrase</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input class="inset" id="com-net" placeholder="Network name, e.g. BDS-RELIEF" autocomplete="off" style="flex:1 1 180px">
+          <input class="inset" id="com-pass" type="password" placeholder="Passphrase (12+ characters)" autocomplete="new-password" style="flex:2 1 240px">
+          <button class="btn accent" type="button" id="b-comkey">SET KEY</button></div></div>
+      <div class="set wide note" id="com-status">No network key set yet.</div>
+      <div class="set wide note">Share the passphrase in person or by phone, never over the radio. After setting it, read the <b>key fingerprint</b> to the other units; if it matches, you hold the same key.
+        Tradewind stores the derived 256-bit key on this computer, not the passphrase. Have the encryption reviewed independently before relying on it for sensitive operations.</div>
+    </div>
     <div class="drawer-foot">
       <div class="note" id="save-note">Saving restarts the station if it's on.</div>
       <button class="btn" id="b-close">CLOSE</button>
@@ -667,21 +760,65 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
       <span class="map-count" id="map-count"></span>
     </div>
     <div class="map-box"><div id="map"></div><div class="map-msg" id="map-msg">Loading map...</div></div>
-    <div class="map-legend">Lines join Caribbean stations to the stations that heard them (or that they heard) on PSKReporter during the look-back window. Solid = 2m, dashed = 70cm. Updated after every check (every 5 minutes by default).</div>
+    <div class="map-legend">Lines join Caribbean stations to the stations that heard them (or that they heard) on PSKReporter during the look-back window. Solid = 2m, dashed = 70cm. Updated after every check (every 5 minutes by default). Map areas you view are saved, so they still show with no internet.</div>
   </section>
 
   <section class="chat-wrap" id="chat-wrap" aria-label="Two-way chat">
-    <div class="mon-head"><span>TWO-WAY CHAT · APRS 2M / 70CM</span><span id="chat-note"></span></div>
+    <div class="mon-head"><span id="chat-title">TWO-WAY CHAT · APRS 2M / 70CM</span><span id="chat-note"></span></div>
+    <div class="sec-banner hide" id="sec-banner" role="status"></div>
     <form class="hail" id="hail-form">
       <label>Hail a station<input class="inset" id="hail-call" placeholder="8P6XX-9" autocomplete="off" spellcheck="false" maxlength="9"></label>
-      <label>Send via<select class="inset" id="hail-route">
+      <label id="hail-route-lbl">Send via<select class="inset" id="hail-route">
         <option value="rf">RF only (tests the path)</option>
         <option value="rf_is">RF + APRS-IS</option>
         <option value="is">APRS-IS only</option></select></label>
+      <label>Call<select class="inset" id="hail-tries">
+        <option value="1">Once</option>
+        <option value="4" selected>4 times</option>
+        <option value="10">10 times</option>
+        <option value="forever">Until received</option></select></label>
+      <label>Every<select class="inset" id="hail-every">
+        <option value="30">30 s</option>
+        <option value="60" selected>1 min</option>
+        <option value="120">2 min</option>
+        <option value="300">5 min</option>
+        <option value="900">15 min</option></select></label>
       <button class="btn accent" type="submit">HAIL</button>
     </form>
     <div class="chat-peers" id="chat-peers" role="group" aria-label="Stations"></div>
     <div id="chat-pane"><div class="chat-empty">Hail a station to open a two-way link. They get a call-out tone and an Accept button; when they accept, you confirm, and the chat opens.</div></div>
+    <section class="forms hide" id="forms" aria-label="Message forms">
+      <div class="forms-head">
+        <label>Form<select class="inset" id="form-pick"></select></label>
+        <span class="note" id="form-to" style="margin:0 0 10px"></span>
+      </div>
+      <div class="forms-grid" id="form-fields"></div>
+      <div class="forms-prev" id="form-prev" aria-live="polite"></div>
+      <div class="forms-acts"><button class="btn" type="button" id="form-cancel">CLOSE</button><button class="btn accent" type="button" id="form-send">SEND FORM</button></div>
+    </section>
+    <div class="chat-tools">
+      <a class="btn" id="b-commlog" href="/api/commlog.csv" download>DOWNLOAD LOG (ICS-309)</a>
+      <span class="note" id="commlog-n"></span>
+      <span class="note" id="outbox-n"></span>
+    </div>
+    <details class="heard" id="relay-box">
+      <summary>SEND THROUGH A RELAY STATION</summary>
+      <form class="hail" id="relay-form" style="margin-top:8px">
+        <label>Relay station<input class="inset" id="relay-call" placeholder="8P6RR" maxlength="9" autocomplete="off"></label>
+        <label>Final destination<input class="inset" id="relay-dest" placeholder="J68CC" maxlength="9" autocomplete="off"></label>
+        <label style="flex:3 1 260px">Message<input class="inset" id="relay-text" maxlength="200" autocomplete="off"></label>
+        <button class="btn accent" type="submit">SEND</button>
+      </form>
+      <div class="note">For a station you cannot reach directly. The relay station must have "Act as a relay" switched on; it passes the message on and tells you when it is delivered.</div>
+    </details>
+    <details class="heard" id="roster-box">
+      <summary>NET CHECK-INS <span id="roster-n"></span></summary>
+      <div class="heard-list" id="roster-list"><div class="chat-empty">Stations that send a CHECKIN form appear here with their status. Net control can see who is safe and who needs help.</div></div>
+    </details>
+    <details class="heard" id="heard-box">
+      <summary>STATIONS HEARD ON RF <span id="heard-n"></span></summary>
+      <div class="heard-list" id="heard-list"><div class="chat-empty">Stations your radio decodes appear here, even with no internet.</div></div>
+    </details>
   </section>
 
   <section class="mon-wrap" id="mon-wrap">
@@ -739,7 +876,7 @@ function fillForm(c){
     }
   });
   $$('[data-list]').forEach(el=> el.checked = (c[el.dataset.list]||[]).includes(el.value));
-  updateVisibility(); showPresetNote();
+  updateVisibility(); showPresetNote(); l2vis();
 }
 function readForm(){
   const o = {};
@@ -885,6 +1022,8 @@ async function poll(){
     if (stick) mon.scrollTop = mon.scrollHeight;
   }
   renderAlt(s);
+  drawCom(s);
+  drawHeard(s);
 }
 function androidMode(){
   document.body.dataset.android = '1';
@@ -988,11 +1127,11 @@ function loadLeaflet(){
   return new Promise((ok, bad)=>{
     if (window.L) return ok();
     const css = document.createElement('link'); css.rel='stylesheet';
-    css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    css.href='/vendor/leaflet.css';
     css.integrity='sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY='; css.crossOrigin='';
     document.head.append(css);
     const js = document.createElement('script');
-    js.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    js.src='/vendor/leaflet.js';
     js.integrity='sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo='; js.crossOrigin='';
     js.onload = ok; js.onerror = bad; document.head.append(js);
   });
@@ -1001,15 +1140,15 @@ async function initMap(){
   $$('[data-mf]').forEach(el=>{ if (mapFilter[el.dataset.mf]===false) el.checked = false;
     el.onchange = ()=>{ mapFilter[el.dataset.mf] = el.checked; lsSet('tw_map_filter', JSON.stringify(mapFilter)); drawMap(); }; });
   try { await loadLeaflet(); }
-  catch(e){ mapOffline = true; $('#map-msg').textContent = 'Map needs an internet connection (could not load the map library).';
+  catch(e){ mapOffline = true; $('#map-msg').textContent = 'Map not available yet: open Tradewind once while online so it can save the map for offline use.';
              await refreshMap(); setInterval(refreshMap, 30000); setInterval(mapClock, 1000); return; }
   map = L.map('map', {worldCopyJump:true, zoomSnap:0.5, attributionControl:true}).setView([16,-62], 3);
   // Free basemaps that need no API key: Esri dark grey canvas, falling back to OpenStreetMap
-  const esri = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
-    maxZoom: 10, minZoom: 2,
+  const esri = L.tileLayer('/tile/esri/{z}/{y}/{x}', {
+    maxZoom: 10, minZoom: 2, maxNativeZoom: 10,
     attribution:'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ &middot; spots: PSKReporter'
   });
-  const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  const osm = L.tileLayer('/tile/osm/{z}/{x}/{y}', {
     maxZoom: 10, minZoom: 2, className:'tw-dim',
     attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &middot; spots: PSKReporter'
   });
@@ -1194,6 +1333,7 @@ async function pollChat(){
 }
 function drawChat(){
   const c = chatData || {peers:[]};
+  drawNet(c);
   const peers = c.peers || [];
   if (!chatSel && peers.length) chatSel = peers[0].call;
   $('#chat-peers').innerHTML = peers.map(p=>`<button type="button" data-peer="${esc(p.call)}" aria-pressed="${p.call===chatSel}"><i class="${ST_CLASS[p.status]||''}"></i>${esc(p.call)}${p.unread?`<span class="n">${p.unread}</span>`:''}</button>`).join('');
@@ -1201,19 +1341,25 @@ function drawChat(){
   const p = peers.find(x=>x.call===chatSel);
   if (!p){ $('#chat-pane').innerHTML = `<div class="chat-empty">${c.off ? 'Turn the station on, then hail a station to open a two-way link.' :
     'Hail a station to open a two-way link. They hear a call-out tone and get an Accept button; when they accept, you confirm, and the chat opens.'}</div>`; return; }
-  const ROUTE = {rf:'RF only', rf_is:'RF + APRS-IS', is:'APRS-IS only'};
+  const ROUTE = {rf:'RF only', rf_is:'RF + APRS-IS', is:'APRS-IS only', auto:'Auto link', 'link:A':'link A', 'link:B':'link B'};
   let acts = '';
+  if (p.forever && p.status==='hailing') p.status_text = 'Calling until received - waiting for an answer';
   if (p.status==='incoming') acts = `<button class="btn accent" data-act="accept">ACCEPT</button><button class="btn" data-act="decline">DECLINE</button>`;
   else if (p.status==='await_confirm') acts = `<button class="btn accent" data-act="accept">ACCEPT</button><button class="btn" data-act="end">CANCEL</button>`;
   else if (['open','hailing','accepted'].includes(p.status)) acts = `<button class="btn" data-act="end">${p.status==='open'?'END LINK':'CANCEL'}</button>`;
   else acts = `<button class="btn" data-act="hail">HAIL AGAIN</button>`;
+  if ((p.links || []).length > 1) acts += `<button class="btn" data-act="probe" title="Send a short test on each radio link and time the replies">PROBE</button>`;
+  const lstats = (p.links || []).length > 1 ? `<div class="link-stats">${p.links.map(l=>`<span class="${l.best?'best':''} ${l.failing?'bad':''}">${esc(l.link)} ${esc(l.name)}: ${l.ok}/${l.sent} ok${l.rtt?` · ${l.rtt}s`:''}${l.tput?` · ${l.tput} B/s`:''}${l.best?' · using':''}${l.failing?' · failing':''}</span>`).join('')}</div>` : '';
   const ask = ['incoming','await_confirm'].includes(p.status);
-  const icon = m => m.dir!=='out' ? '' : m.state==='delivered' ? ' · ✓ delivered' : m.state==='failed' ? ' · ✗ not delivered' : m.state==='rejected' ? ' · ✗ rejected' : ' · sending…';
+  const icon = m => (m.dir!=='out' ? '' : m.state==='delivered' ? ' · ✓ delivered' : m.state==='failed' ? ' · ✗ not delivered' :
+    m.state==='rejected' ? ' · ✗ rejected' : m.state==='cancelled' ? ' · cancelled' : m.state==='queued' ? ' · stored - will resend when they are heard' :
+    ' · sending…' + (m.tries>1 ? ` (try ${m.tries})` : '')) + (m.link && m.link!=='IS' && (p.links||[]).length>1 ? ` · link ${m.link}` : '');
   const msgs = p.messages.map(m => m.dir==='sys' ? `<div class="cm sys">${hms(new Date(m.t*1000)).slice(0,5)} ${esc(m.text)}</div>` :
     `<div class="cm ${m.dir} ${m.state==='failed'||m.state==='rejected'?'failed':''}">${esc(m.text)}<small>${hms(new Date(m.t*1000)).slice(0,5)}${m.via?' · via '+m.via:''}${icon(m)}${m.error?' · '+esc(m.error):''}</small></div>`).join('');
   $('#chat-pane').innerHTML = `<div class="chat-status${ask?' ask pulse':''}"><span><b>${esc(p.call)}</b> · ${esc(p.status_text)} · ${ROUTE[p.route]||p.route}${p.via?' · last heard via '+p.via:''}</span><span class="acts">${acts}</span></div>
-    <div class="chat-msgs" id="chat-msgs" role="log" aria-live="polite">${msgs}</div>
-    <form class="chat-form" id="chat-form"><input class="inset" id="chat-text" maxlength="200" autocomplete="off" placeholder="${p.can_send?'Type a message':'Chat opens when both sides accept'}" ${p.can_send?'':'disabled'}><button class="btn accent" type="submit" ${p.can_send?'':'disabled'}>SEND</button></form>`;
+    ${lstats}<div class="chat-msgs" id="chat-msgs" role="log" aria-live="polite">${msgs}</div>
+    <form class="chat-form" id="chat-form"><button class="btn" type="button" id="b-forms" ${p.can_send?'':'disabled'} title="Weather, SITREP and other message forms">FORMS</button><input class="inset" id="chat-text" maxlength="200" autocomplete="off" placeholder="${p.can_send?'Type a message':'Chat opens when both sides accept'}" ${p.can_send?'':'disabled'}><button class="btn accent" type="submit" ${p.can_send?'':'disabled'}>SEND</button></form>`;
+  $('#b-forms').onclick = openForms;
   const box = $('#chat-msgs'); box.scrollTop = box.scrollHeight;
   $$('[data-act]').forEach(b=>b.onclick = async ()=>{
     unlockAudio();
@@ -1233,13 +1379,291 @@ function drawChat(){
 $('#hail-form').onsubmit = async e=>{
   e.preventDefault(); unlockAudio();
   const call = $('#hail-call').value.trim().toUpperCase();
-  const r = await api('/api/chat', {action:'hail', call, route: $('#hail-route').value});
+  const r = await api('/api/chat', {action:'hail', call, route: $('#hail-route').value,
+                                    tries: $('#hail-tries').value, interval: $('#hail-every').value});
   if (r.errors && r.errors.length) return toast(r.errors[0]);
   chatSel = call; $('#hail-call').value = '';
   toast(`Calling ${call}... waiting for them to accept`, true);
   pollChat();
 };
 $('#hail-call').addEventListener('input', e=>{ const p=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); e.target.setSelectionRange(p,p); });
+
+/* ---------- message forms (styled on Winlink / ICS forms) ---------- */
+const DTG = () => { const d = new Date(); return pad(d.getDate()) + pad(d.getHours()) + pad(d.getMinutes()) + 'L'; };
+const F = (k, label, type, opts, w) => ({k, label, type: type || 'text', opts, w});
+const FORMS = [
+  {id:'sitrep', name:'Situation report (SITREP)', tag:'SITREP', fields:[
+    F('loc','Location'), F('status','Overall status','select',['Normal','Impacted','Critical']),
+    F('power','Power','select',['On','Partial','Off']), F('water','Water','select',['On','Partial','Off']),
+    F('comms','Phone / internet','select',['Up','Partial','Down']), F('roads','Roads','select',['Clear','Partly blocked','Blocked']),
+    F('notes','Notes','text',null,true)],
+   build:v=>`${v.loc}. Status ${v.status}. Power ${v.power}, water ${v.water}, comms ${v.comms}, roads ${v.roads}. ${v.notes}`},
+  {id:'wxobs', name:'Weather observation (spot report)', tag:'WXOBS', fields:[
+    F('loc','Location'), F('wind','Wind (from, kt), e.g. E 25'), F('gust','Gusts (kt)'),
+    F('rain','Rain','select',['None','Light','Moderate','Heavy','Torrential']),
+    F('sea','Sea state','select',['Calm','Moderate','Rough','Very rough','Storm surge']),
+    F('vis','Visibility','select',['Good','Moderate','Poor']), F('notes','Notes (flooding, damage seen)','text',null,true)],
+   build:v=>`${v.loc}. Wind ${v.wind}${v.gust?' G'+v.gust:''}kt. Rain ${v.rain}. Sea ${v.sea}. Vis ${v.vis}. ${v.notes}`},
+  {id:'fcst', name:'Forecast relay (latest Tradewind bulletin)', tag:'FCST', fields:[
+    F('kind','Bulletin','select',['general','marine','aviation'])],
+   build:v=>{ const L = (lastState && lastState.wx && lastState.wx.last || {})[v.kind];
+     return L && Array.isArray(L.lines) ? L.lines.join(' / ') : `No ${v.kind} bulletin yet - use MENU > WEATHER > Send now first`; }},
+  {id:'damage', name:'Damage assessment', tag:'DAMAGE', fields:[
+    F('loc','Location / district'), F('n','Buildings damaged','num'),
+    F('sev','Worst damage','select',['Minor','Major','Destroyed']), F('inj','Injuries','num'),
+    F('roads','Roads','select',['Clear','Partly blocked','Blocked']), F('util','Power lines / poles','select',['OK','Down','Unknown']),
+    F('notes','Notes','text',null,true)],
+   build:v=>`${v.loc}. ${v.n||0} bldgs damaged, worst ${v.sev}. Injuries ${v.inj||0}. Roads ${v.roads}. Lines ${v.util}. ${v.notes}`},
+  {id:'shelter', name:'Shelter status', tag:'SHELTER', fields:[
+    F('name','Shelter name'), F('occ','Occupants','num'), F('cap','Capacity','num'),
+    F('status','Status','select',['Open','Full','Closing','Closed']), F('needs','Needs (water, food, medical, power...)','text',null,true)],
+   build:v=>`${v.name}: ${v.status}, ${v.occ||0}/${v.cap||'?'} people. Needs: ${v.needs||'none'}`},
+  {id:'medical', name:'Medical / casualty report', tag:'MEDICAL', fields:[
+    F('loc','Location'), F('n','Number of casualties','num'),
+    F('pri','Priority','select',['Urgent','Priority','Routine']), F('trans','Transport needed','select',['Yes','No']),
+    F('cond','Condition / injuries','text',null,true)],
+   build:v=>`${v.pri}: ${v.n||1} casualty at ${v.loc}. ${v.cond}. Transport ${v.trans}`},
+  {id:'resource', name:'Resource request', tag:'REQUEST', fields:[
+    F('item','Item'), F('qty','Quantity'), F('to','Deliver to'),
+    F('pri','Priority','select',['Urgent','High','Routine']), F('contact','Contact on site')],
+   build:v=>`${v.pri}: ${v.qty} ${v.item} to ${v.to}. Contact ${v.contact}`},
+  {id:'welfare', name:'Welfare check', tag:'WELFARE', fields:[
+    F('who','Person'), F('loc','Location'), F('st','Status','select',['Safe','Needs help','Unknown']),
+    F('msg','Message','text',null,true)],
+   build:v=>`${v.who} at ${v.loc}: ${v.st}. ${v.msg}`},
+  {id:'checkin', name:'Net check-in', tag:'CHECKIN', fields:[
+    F('st','Status','select',['Safe','Need help','Emergency','Evacuated']), F('loc','Location'),
+    F('n','People with you','num'), F('note','Note (needs, power, water...)','text',null,true)],
+   build:v=>`${v.st}. ${v.loc}. ${v.n||1} people. ${v.note}`},
+  {id:'ics213', name:'General message (ICS-213 style)', tag:'ICS213', fields:[
+    F('to','To (name / position)'), F('from','From (name / position)'), F('subj','Subject','text',null,true),
+    F('msg','Message','text',null,true), F('reply','Reply requested','select',['No','Yes'])],
+   build:v=>`TO ${v.to} FR ${v.from} SUBJ ${v.subj}: ${v.msg}${v.reply==='Yes'?' REPLY REQ':''}`},
+];
+$('#form-pick').innerHTML = FORMS.map(f=>`<option value="${f.id}">${f.name}</option>`).join('');
+function formParts(){
+  const f = FORMS.find(x=>x.id===$('#form-pick').value);
+  const v = {}; $$('#form-fields [data-f]').forEach(el=>v[el.dataset.f] = el.value.trim());
+  const body = f.build(v).replace(/\s+/g,' ').replace(/ \./g,'.').replace(/\.\s*\./g,'.').trim();
+  const head = `${f.tag} ${DTG()}`;
+  const words = body.split(' '), parts = []; let cur = '';
+  const room = 67 - head.length - 6;        // room left after "TAG DTG n/m "
+  for (const w of words){ if ((cur + ' ' + w).trim().length > room){ parts.push(cur.trim()); cur = w.slice(0, room); } else cur += ' ' + w; }
+  if (cur.trim()) parts.push(cur.trim());
+  return parts.map((p,i)=>`${head} ${i+1}/${parts.length} ${p}`.slice(0,67));
+}
+function drawForm(){
+  const f = FORMS.find(x=>x.id===$('#form-pick').value);
+  $('#form-fields').innerHTML = f.fields.map(x=>`<label class="${x.w?'w':''}">${x.label}${
+    x.type==='select' ? `<select class="inset" data-f="${x.k}">${x.opts.map(o=>`<option>${o}</option>`).join('')}</select>` :
+    `<input class="inset" data-f="${x.k}" ${x.type==='num'?'inputmode="numeric"':''} autocomplete="off">`}</label>`).join('');
+  previewForm();
+}
+function previewForm(){ const p = formParts(); $('#form-prev').textContent = p.join('\n') + `\n(${p.length} message${p.length>1?'s':''})`; }
+$('#form-pick').onchange = drawForm;
+$('#form-fields').addEventListener('input', previewForm); $('#form-fields').addEventListener('change', previewForm);
+$('#form-cancel').onclick = ()=>$('#forms').classList.add('hide');
+$('#form-send').onclick = async ()=>{
+  if (!chatSel) return toast('Pick a station in the chat first.');
+  const parts = formParts();
+  for (const t of parts){
+    const r = await api('/api/chat', {action:'send', call: chatSel, text: t});
+    if (r.errors && r.errors.length) return toast(r.errors[0]);
+  }
+  toast(`Form sent to ${chatSel} in ${parts.length} message${parts.length>1?'s':''}`, true);
+  $('#forms').classList.add('hide'); pollChat();
+};
+function openForms(){ $('#forms').classList.remove('hide'); $('#form-to').textContent = chatSel ? 'To ' + chatSel : ''; drawForm(); $('#forms').scrollIntoView({behavior:'smooth', block:'nearest'}); }
+
+/* ---------- stations heard on RF + comms log ---------- */
+const ago = t => { const d = Math.max(0, Date.now()/1000 - t); return d < 60 ? 'now' : d < 3600 ? Math.round(d/60)+' min ago' : Math.round(d/3600)+' h ago'; };
+function drawHeard(s){
+  routeOptions(s);
+  const H = s.heard || [];
+  $('#heard-n').textContent = H.length ? `(${H.length})` : '';
+  $('#commlog-n').textContent = s.commlog_count ? `${s.commlog_count} message${s.commlog_count==1?'':'s'} logged` : 'No chat messages logged yet';
+  if (!H.length) return;
+  $('#heard-list').innerHTML = H.map(h=>`<div class="heard-row"><b>${esc(h.call)}</b><span>${ago(h.last)}</span><span>${esc(h.via)} · ${h.count} pkt</span>
+    <button class="btn" type="button" data-hail="${esc(h.call)}">HAIL</button></div>`).join('');
+  $$('[data-hail]').forEach(b=>b.onclick=()=>{ $('#hail-call').value = b.dataset.hail; $('#hail-route').value = 'rf'; $('#hail-call').focus(); $('#hail-form').scrollIntoView({behavior:'smooth', block:'center'}); });
+}
+
+/* ---------- Phase 2: second link, Direwolf generator, link stats ---------- */
+function l2vis(){
+  const on = $('#f-l2').checked, t = $('#f-l2tnc').value;
+  $$('.m-l2').forEach(e=>e.classList.toggle('hide', !on));
+  $$('.m-l2tcp').forEach(e=>e.classList.toggle('hide', !on || t!=='kiss_tcp'));
+  $$('.m-l2ser').forEach(e=>e.classList.toggle('hide', !on || t!=='kiss_serial'));
+  if (!on) $('#dw-box').classList.add('hide');
+}
+$('#f-l2').addEventListener('change', l2vis); $('#f-l2tnc').addEventListener('change', l2vis);
+function dwConf(){
+  const sp = $('#dw-speed').value, fec = $('#dw-fec').value, call = (cfg.call || 'N0CALL').toUpperCase();
+  const lines = [
+    '# Direwolf setup made by Tradewind for the second radio link',
+    `# ${sp} bit/s ${({1200:'AFSK',2400:'QPSK',4800:'8PSK',9600:'G3RUH'})[sp]}, error correction: ${fec.toUpperCase()}`,
+    `ADEVICE ${$('#dw-adev').value.trim() || 'default'}`, 'ACHANNELS 1', 'CHANNEL 0',
+    `MYCALL ${call}`, `MODEM ${sp}`, `PTT ${$('#dw-ptt').value.trim() || 'COM5 RTS'}`,
+    `TXDELAY ${sp >= 4800 ? 20 : 30}`, 'TXTAIL 10',
+    fec === 'il2p' ? 'IL2PTX 1' : fec === 'fx25' ? 'FX25TX 16' : '# no forward error correction',
+    `KISSPORT ${parseInt($('#dw-port').value) || 8002}`,
+    `AGWPORT ${(parseInt($('#dw-port').value) || 8002) + 100}   # moved off 8000 so it can run beside another Direwolf`,
+  ];
+  const txt = lines.join('\n') + '\n';
+  $('#dw-out').value = txt;
+  $('#dw-dl').href = 'data:text/plain;charset=utf-8,' + encodeURIComponent(txt);
+}
+$('#b-dwgen').onclick = ()=>{ $('#dw-box').classList.toggle('hide'); $('#dw-speed').value = String(cfg.link2_speed || 9600); dwConf(); };
+$('#dw-box').addEventListener('input', dwConf); $('#dw-box').addEventListener('change', dwConf);
+
+function routeOptions(s){
+  const sel = $('#hail-route'), has = (s.links || []).length > 1;
+  const want = has ? ['auto','link:A','link:B','rf_is','is'] : ['rf','rf_is','is'];
+  if (sel.dataset.mode === String(has)) return;
+  sel.dataset.mode = String(has);
+  const L = Object.fromEntries((s.links || []).map(l=>[l.link, l.name]));
+  const label = {auto:'Auto - best radio link', 'link:A':`Link A only (${L.A||'main'})`, 'link:B':`Link B only (${L.B||'second'})`,
+                 rf:'RF only (tests the path)', rf_is:'RF + APRS-IS', is:'APRS-IS only'};
+  sel.innerHTML = want.map(v=>`<option value="${v}">${label[v]}</option>`).join('');
+}
+
+/* ---------- Phase 4: roster, outbox, relay ---------- */
+function drawNet(c){
+  const R = (c && c.roster) || [];
+  $('#roster-n').textContent = R.length ? `(${R.length})` : '';
+  if (R.length) $('#roster-list').innerHTML = R.map(r=>`<div class="heard-row roster-row"><b>${esc(r.call)}</b>
+      <span class="st-${esc((r.status||'').split(' ')[0])}">${esc(r.status || '-')}</span><span>${ago(r.t)}</span><span></span></div>
+      <div class="note" style="margin:0 4px 6px">${esc(r.text || '')}</div>`).join('');
+  $('#outbox-n').textContent = c && c.outbox ? `${c.outbox} message${c.outbox>1?'s':''} waiting to be forwarded` : '';
+}
+$('#relay-form').onsubmit = async e=>{
+  e.preventDefault();
+  const r = await api('/api/chat', {action:'relay', relay: $('#relay-call').value.trim().toUpperCase(),
+    dest: $('#relay-dest').value.trim().toUpperCase(), text: $('#relay-text').value.trim(), route: $('#hail-route').value});
+  if (r.errors && r.errors.length) return toast(r.errors[0]);
+  toast('Sent to the relay station', true); $('#relay-text').value = ''; pollChat();
+};
+
+/* ---------- commercial / encrypted mode ---------- */
+$('#b-comkey').onclick = async ()=>{
+  const r = await api('/api/comkey', {net: $('#com-net').value, passphrase: $('#com-pass').value});
+  $('#com-pass').value = '';
+  if (r.errors && r.errors.length) return toast(r.errors[0]);
+  toast('Network key set. Fingerprint ' + r.fp + ' - compare it with the other units.', true, 12000);
+};
+function drawCom(s){
+  const c = s.com || {}, com = s.op_mode === 'commercial';
+  $('#com-status').innerHTML = (c.crypto ? `<b>${esc(c.crypto)}</b><br>` : '') + (c.has_key
+    ? `Network <b>${esc(c.net)}</b> · key fingerprint <b>${esc(c.fp)}</b>` : 'No network key set yet.');
+  if (!$('#com-net').value && c.net) $('#com-net').value = c.net;
+  const b = $('#sec-banner');
+  b.classList.toggle('hide', !com);
+  if (com) b.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e9b8ff" stroke-width="2" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+    <span><b>ENCRYPTED</b> AES-256-GCM · unit <b>${esc((c.unit||'').toUpperCase())}</b> · net <b>${esc(c.net||'-')}</b> · ${esc(c.freq)} MHz · key <b>${esc(c.fp||'not set')}</b>${c.active?'':' · station off'}</span>`;
+  $('#hail-route-lbl').classList.toggle('hide', com);
+  $('#hail-call').placeholder = com ? 'Unit ID, e.g. RC02' : '8P6XX-9';
+  $('#chat-title').textContent = com ? 'ENCRYPTED CHAT · COMMERCIAL VHF' : 'TWO-WAY CHAT · APRS 2M / 70CM';
+}
+
+/* ---------- help on every setting (hover, or tap the ?) ---------- */
+const HELP = {
+  call:'Your amateur callsign. Add an SSID if you like: -10 is usual for an internet/iGate station, -9 mobile, -7 handheld.',
+  grid:'Your Maidenhead grid square (4 or 6 characters, e.g. GK03fd). Used for your position and for the "near me" list.',
+  preset:'Pick your radio or interface. It fills in sensible settings and shows the cable and menu settings to use.',
+  tnc:'How Tradewind reaches the radio: its own sound-card modem, an external modem (Direwolf, UZ7HO) over the network, a radio with a built-in TNC, or no radio (internet only).',
+  modem:'1200 baud: standard VHF/UHF FM packet and APRS. 300 baud: HF packet on SSB (upper sideband), e.g. 10.1476 MHz. Tradewind Robust: slow, error-corrected text for weak HF or SSB paths. It decodes far below the noise (about -12 dB) but takes 10-20 s per message, and both stations need Tradewind Robust.',
+  audio_in:'The sound device that carries audio FROM the radio (receive). For radios with a USB sound card this is usually "USB Audio CODEC".',
+  audio_out:'The sound device that sends audio TO the radio (transmit). Usually the same USB sound card as the input.',
+  sample_rate:'Sound card rate. 48000 suits almost every device; try 44100 only if the device refuses 48000.',
+  ptt:'How Tradewind keys the transmitter: VOX (interface keys itself), a serial RTS/DTR line, a CAT command (Icom CI-V, Yaesu), a CM108 GPIO, or Hamlib rigctld.',
+  ptt_port:'The serial (COM) port used for PTT or CAT - see Device Manager > Ports. For rigctld enter host:port, usually 127.0.0.1:4532.',
+  cat_baud:'Speed of the CAT / CI-V port. It must match the radio menu (IC-9100: 9600).',
+  civ_addr:'Icom CI-V address in hex: IC-9100 7C, IC-7300 94, IC-7610 98, IC-705 A4, IC-9700 A2, IC-7100 88.',
+  ptt_invert:'Tick only if the radio transmits when it should be receiving (some home-made interfaces invert the line).',
+  cat_tune:'With a CAT link, Tradewind sets the radio to the chosen frequency in FM data mode when the station turns on.',
+  aprs_freq:'The APRS frequency to tune to. 144.390 is used in North America and much of the Caribbean; 145.825 is the ISS digipeater.',
+  aprs_freq_custom:'Type any 2m or 70cm frequency in MHz, e.g. 144.930.',
+  cat_restore:'Put the radio back on the frequency and mode it was using before Tradewind tuned it.',
+  txdelay:'How long the transmitter is keyed before data starts. Raise it (400-600 ms) if other stations miss the start of your packets.',
+  txtail:'Extra time the transmitter stays keyed after the data. 30-80 ms is normal.',
+  tx_level:'Transmit audio level. Too high distorts the signal; too low and others cannot decode it. Aim for about 3 kHz deviation on FM.',
+  kiss_addr:'Address of the external modem: Direwolf is usually 127.0.0.1:8001, UZ7HO Soundmodem 127.0.0.1:8100.',
+  kiss_serial:'The serial or Bluetooth port of the radio TNC (TH-D74/D75, TM-D710, Mobilinkd).',
+  kiss_baud:'Serial speed of the radio TNC; check its menu.',
+  rf_path:'Digipeater path for your packets. WIDE2-1 is right for most areas; use WIDE1-1,WIDE2-1 from a mobile or handheld; ARISS for the ISS.',
+  rf_announce:'Send propagation alerts over the radio as well as the internet.',
+  rf_when:'Always transmit alerts on RF, or switch RF on only while the propagation modes you choose are open.',
+  symbol:'APRS map symbol: table character + symbol code. /- is a house, /> a car, /# a digipeater.',
+  beacon:'Send your position every few minutes so others see your station on APRS maps.',
+  beacon_min:'Minutes between position beacons. 30 is polite on a busy channel.',
+  beacon_comment:'Short text sent with your position beacon (up to 43 characters).',
+  window:'How far back to look at PSKReporter spots, in minutes.',
+  interval:'How often to check PSKReporter. 5 minutes is the fastest PSKReporter allows.',
+  min_km:'Shortest path that counts towards an opening. Shorter paths are usually normal local coverage.',
+  min_paths:'How many different station pairs must be heard before a band is called open.',
+  strong_km:'One path at least this long counts as an opening on its own.',
+  repeat:'Minutes between repeats of an opening bulletin while the band stays open.',
+  group:'Bulletin group name: alerts go out as BLN1VHF, BLN2VHF... Other stations can filter on it.',
+  local_km:'Radius for the "near you" spots shown under the packet monitor.',
+  announce_close:'Also send a bulletin when an opening seems to have ended.',
+  alert_sound:'Play a chime on this computer or phone when a band opens.',
+  alert_voice:'Speak the opening out loud, e.g. "Two metre TEP open to Latin America".',
+  aprsis:'Connect to the APRS internet system (APRS-IS). Needs internet; RF keeps working without it.',
+  server:'APRS-IS server. rotate.aprs2.net picks a nearby server automatically.',
+  passcode:'Your APRS-IS passcode. Leave blank and Tradewind works it out from your callsign.',
+  igate:'Pass packets your radio hears on to APRS-IS so they appear on aprs.fi (receive-only iGate).',
+  wx_enabled:'Send scheduled weather bulletins at the times below.',
+  wx_general:'General forecast bulletin (Open-Meteo). Times are local, separated by commas.',
+  wx_general_times:'Local times to send, e.g. 08:00 or 06:00, 18:00.',
+  wx_marine:'Marine bulletin: wave height, swell, wind and a small-craft caution when seas or wind are high.',
+  wx_marine_times:'Local times to send the marine bulletin.',
+  wx_aviation:'Aviation bulletin: METAR, TAF and SIGMETs for the aerodrome and FIR below.',
+  wx_aviation_times:'Local times to send the aviation bulletin.',
+  wx_place:'Place name used in the bulletins.',
+  wx_utc_offset:'Hours from UTC for the schedule times. Barbados is -4.',
+  wx_rf:'Also send weather bulletins over the radio.',
+  wx_lat:'Latitude/longitude for the land forecast.', wx_lon:'Latitude/longitude for the land forecast.',
+  wx_marine_lat:'A point at sea for the marine forecast.', wx_marine_lon:'A point at sea for the marine forecast.',
+  wx_icao:'ICAO code of the aerodrome for METAR/TAF, e.g. TBPB for Grantley Adams.',
+  wx_fir:'Flight information region for SIGMETs. Barbados lies in the Piarco FIR (TTZP).',
+  tc_enabled:'Check the National Hurricane Center every 20 minutes and alert when a storm comes within the radius or a watch/warning names your area.',
+  tc_radius_km:'Alert when a storm centre is within this distance.',
+  tc_rf:'Also send storm alerts over the radio.',
+  op_mode:'Amateur mode uses APRS in plain text, as amateur rules require. Commercial mode is for licensed 148-174 MHz channels and encrypts the chat.',
+  com_licensee:'The organisation that holds the radio licence. Sent in clear with the station ID.',
+  com_callsign:'Call sign or licence number from your licence. Sent in clear as the station ID.',
+  com_unit:'Short ID for this radio or team, e.g. RC01. Other units hail you with it.',
+  com_freq:'Your licensed channel in MHz, between 148.000 and 174.000.',
+  com_id_min:'How often the clear-text station ID is sent while you are transmitting.',
+  link2_enabled:'Add a second radio path, e.g. 70cm 9600 baud through Direwolf, next to your main radio. Tradewind then picks the best link for each station automatically.',
+  link2_tnc:'How the second link connects: KISS over TCP (Direwolf, UZ7HO Soundmodem, VARA FM) or a KISS serial TNC.',
+  link2_addr:'Address of the second modem, e.g. 127.0.0.1:8002 for a second Direwolf.',
+  link2_serial:'Serial port of the second (hardware) TNC.', link2_baud:'Serial speed of the second TNC.',
+  link2_speed:'Air speed of the second link. Used to choose links: faster links are preferred while they deliver.',
+  link2_name:'A short name shown in the chat, e.g. "70cm 9600".', link1_name:'A short name for the main radio link, e.g. "2m 1200".',
+  link1_speed:'Air speed of the main link when it is an external KISS TNC (the built-in modem sets this itself).',
+  store_forward:'If a message cannot be delivered, Tradewind keeps it (up to 24 h) and sends it again as soon as that station is heard on the air.',
+  relay_enabled:'Let other Tradewind stations send messages through you to stations they cannot reach. You will see each relayed message in your chat.',
+  bands:'Bands to watch for openings.', regions:'Regions to watch for paths from the Caribbean.',
+  watch_modes:'Propagation modes to watch: TEP, tropospheric duct and sporadic-E.',
+  rf_modes:'Modes that switch RF transmission on when "Only while these modes are open" is chosen.',
+  alert_modes:'Modes that sound an alert when they open.',
+};
+function addHelp(){
+  const done = new Set();
+  $$('[data-k],[data-list]').forEach(el=>{
+    const k = el.dataset.k || el.dataset.list, txt = HELP[k], set = el.closest('.set, .field');
+    if (!txt || !set || done.has(set)) return;
+    done.add(set);
+    const lab = set.querySelector('label');
+    if (!lab) return;
+    set.title = txt;
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'help-q'; b.textContent = '?'; b.setAttribute('aria-label', 'Help: ' + txt);
+    b.onclick = e=>{ e.preventDefault(); e.stopPropagation(); toast(txt, true, 9000); };
+    lab.append(b);
+  });
+}
 
 /* ---------- wiring ---------- */
 $$('[data-wx]').forEach(b=>b.onclick = async ()=>{
@@ -1269,6 +1693,7 @@ $('#f-tnc').onchange = updateVisibility; $('#f-rfwhen').onchange = updateVisibil
 $('#f-cattune').onchange = updateVisibility; $('#f-freq').onchange = updateVisibility;
 document.addEventListener('input', e=>{ if (e.target.matches('[data-k],[data-list]')) markDirty(); });
 document.addEventListener('change', e=>{ if (e.target.matches('[data-k],[data-list]')) markDirty(); });
+$('[data-k="com_unit"]').addEventListener('input', e=>{ const p=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); e.target.setSelectionRange(p,p); });
 $('#f-call').addEventListener('input', e=>{ const p=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); e.target.setSelectionRange(p,p); });
 $('#f-grid').addEventListener('blur', e=>{ const v=e.target.value.trim(); e.target.value = v.slice(0,4).toUpperCase()+v.slice(4).toLowerCase(); });
 
@@ -1281,6 +1706,7 @@ $('#f-grid').addEventListener('blur', e=>{ const v=e.target.value.trim(); e.targ
   } catch(e){}
   await poll(); dirty=false; $('#b-save-top').textContent='SAVE';
   tick(); setInterval(tick, 1000); setInterval(poll, 1500);
+  addHelp();
   setFp(lsGet('tw_fp') || 'classic');
   await checkMissed('load');
   initMap();

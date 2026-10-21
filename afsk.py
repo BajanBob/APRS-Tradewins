@@ -1,3 +1,5 @@
+# Tradewind - Copyright (c) 2026 Brandon St Rose (8P5DG) and Kammie Holder (8P5AB)
+# Released under the MIT License - see LICENSE
 """
 afsk.py - Bell 202 AFSK 1200 baud software modem + AX.25 framing.
 
@@ -18,6 +20,15 @@ except ImportError:  # e.g. Android build: framing/KISS still work, the sound mo
 BAUD = 1200
 MARK = 1200.0   # binary 1 (no tone change in NRZI)
 SPACE = 2200.0
+
+# Modem profiles: (baud, mark Hz, space Hz)
+#   "1200": Bell 202, VHF/UHF FM packet and APRS
+#   "300":  HF packet on SSB (USB), 1600/1800 Hz tones - e.g. HF APRS on 10.1476 MHz
+PROFILES = {"1200": (1200, 1200.0, 2200.0), "300": (300, 1600.0, 1800.0)}
+
+
+def profile(name):
+    return PROFILES.get(str(name or "1200"), PROFILES["1200"])
 RX_RATE = 12000  # internal demodulator rate (10 samples/bit)
 
 
@@ -116,9 +127,10 @@ def _need_numpy():
         raise RuntimeError("the sound modem needs numpy (pip install numpy)")
 
 
-def modulate(frame: bytes, rate=48000, txdelay_ms=300, txtail_ms=50, level=0.5):
+def modulate(frame: bytes, rate=48000, txdelay_ms=300, txtail_ms=50, level=0.5, modem="1200"):
     """AX.25 frame -> float32 mono audio (phase-continuous AFSK)."""
     _need_numpy()
+    BAUD, MARK, SPACE = profile(modem)
     pre = max(1, int(txdelay_ms * BAUD / 8000))
     post = max(2, int(txtail_ms * BAUD / 8000))
     bits = FLAG_BITS * pre + _frame_bits(frame) + FLAG_BITS * post
@@ -174,12 +186,15 @@ class Demodulator:
 
     PLL_GAIN = 0.2
 
-    def __init__(self, rate=48000):
+    def __init__(self, rate=48000, modem="1200"):
         _need_numpy()
         self.rate = rate
-        self.sps = rate / BAUD
+        self.baud, self.mark, self.space = profile(modem)
+        self.sps = rate / self.baud
         self.n = int(round(self.sps))
-        self.bpf = _bandpass(rate)
+        lo, hi = min(self.mark, self.space), max(self.mark, self.space)
+        pad = max(300.0, self.baud * 0.25)
+        self.bpf = _bandpass(rate, lo - pad, hi + pad, taps=(int(rate / max(self.baud, 150)) * 2) | 1)
         self.rawhist = np.zeros(len(self.bpf) - 1)
         self.hist = np.zeros(self.n - 1)
         self.t = 0                 # index of first filtered sample of next chunk
@@ -209,7 +224,7 @@ class Demodulator:
             im = np.convolve(x * np.sin(w * f * idx), k, "valid")
             return np.sqrt(re * re + im * im)
 
-        levels = (mag(MARK) > mag(SPACE)).tolist()
+        levels = (mag(self.mark) > mag(self.space)).tolist()
         # Digital PLL: sample each bit when the phase wraps; nudge the phase so
         # level transitions fall half-way between samples.
         step, gain = 1.0 / self.sps, self.PLL_GAIN
@@ -250,3 +265,297 @@ class Demodulator:
         body, fcs = by[:-2], by[-2] | (by[-1] << 8)
         if crc16_x25(body) == fcs:
             self.frames.append(body)
+
+
+# ==========================================================================
+# Tradewind Robust: weak-signal text mode for HF / SSB (Phase 3)
+# ==========================================================================
+# 8-FSK, 31.25 baud, tones 31.25 Hz apart (250 Hz wide, centred ~1.5 kHz on
+# USB). Rate-1/2 K=7 convolutional code (NASA 171/133) with soft-decision
+# Viterbi, an interleaver and CRC-16. A 16-symbol Costas preamble gives time
+# and frequency sync (+/-200 Hz tuning error is tolerated). About 44 bit/s;
+# a 64-byte frame takes ~12 s. In simulation it decodes at -10 dB SNR
+# (2.5 kHz noise bandwidth). Not compatible with other modes - both ends
+# need Tradewind Robust.
+
+R_RATE = 8000                      # internal processing rate
+R_BAUD = 31.25
+R_N = int(R_RATE / R_BAUD)         # 256 samples per symbol
+R_BASE = 1375.0                    # lowest tone (Hz) = 44 x 31.25
+R_TONES = 8
+R_COSTAS = [3, 6, 4, 7, 2, 0, 5, 1, 1, 5, 0, 2, 7, 4, 6, 3]   # preamble tones
+R_CLASSES = [32, 64, 128]          # frame sizes in bytes (len byte + payload + CRC)
+R_HDR = 4                          # size-class symbols after the preamble
+_G1, _G2 = 0o171, 0o133            # K=7 code polynomials
+_GRAY = [0, 1, 3, 2, 6, 7, 5, 4]   # 3 bits -> tone index (Gray coded)
+_IGRAY = [_GRAY.index(i) for i in range(8)]
+
+
+def _conv_encode(bits):
+    state, out = 0, []
+    for b in list(bits) + [0] * 6:
+        state = ((state << 1) | b) & 0x7F
+        out.append(bin(state & _G1).count("1") & 1)
+        out.append(bin(state & _G2).count("1") & 1)
+    return out
+
+
+def _viterbi(llr):
+    """Soft Viterbi for the K=7 rate-1/2 code. llr > 0 means bit 0 more likely."""
+    _need_numpy()
+    n = len(llr) // 2
+    ns = 64
+    st = np.arange(ns)
+    # for state s (6 bits, newest bit in LSB) and input b: next = ((s<<1)|b)&63, reg = (s<<1)|b (7 bits)
+    reg0, reg1 = (st << 1) & 0x7F, ((st << 1) | 1) & 0x7F
+    par = lambda r, g: np.array([bin(int(x) & g).count("1") & 1 for x in r])
+    o0 = np.stack([par(reg0, _G1), par(reg0, _G2)], 1)
+    o1 = np.stack([par(reg1, _G1), par(reg1, _G2)], 1)
+    nxt0, nxt1 = reg0 & 63, reg1 & 63
+    metric = np.full(ns, -1e9)
+    metric[0] = 0.0
+    L = np.asarray(llr, dtype=float).reshape(n, 2)
+    dec = np.zeros((n, ns), dtype=np.int16)         # predecessor state for each new state
+    bitsel = np.zeros((n, ns), dtype=np.int8)
+    for t in range(n):
+        l = L[t]
+        bm0 = ((1 - 2 * o0) * l).sum(1)               # +llr when code bit 0
+        bm1 = ((1 - 2 * o1) * l).sum(1)
+        cand_m = np.concatenate([metric + bm0, metric + bm1])
+        cand_to = np.concatenate([nxt0, nxt1])
+        cand_from = np.concatenate([st, st])
+        cand_b = np.concatenate([np.zeros(ns, np.int8), np.ones(ns, np.int8)])
+        new = np.full(ns, -1e18)
+        order = np.argsort(cand_m)                    # later (bigger) wins
+        new[cand_to[order]] = cand_m[order]
+        frm = np.zeros(ns, dtype=np.int16)
+        bsel = np.zeros(ns, dtype=np.int8)
+        frm[cand_to[order]] = cand_from[order]
+        bsel[cand_to[order]] = cand_b[order]
+        metric, dec[t], bitsel[t] = new, frm, bsel
+    s = 0                                            # tail bits force state 0
+    bits = []
+    for t in range(n - 1, -1, -1):
+        bits.append(int(bitsel[t][s]))
+        s = int(dec[t][s])
+    return bits[::-1][:-6]
+
+
+def _perm(n):
+    stride = 97 if n % 97 else 89
+    return [(i * stride) % n for i in range(n)]
+
+
+def _class_for(nbytes):
+    for i, c in enumerate(R_CLASSES):
+        if nbytes + 3 <= c:
+            return i
+    raise ValueError(f"message too long for Tradewind Robust (max {R_CLASSES[-1] - 3} bytes)")
+
+
+def _frame_symbols(payload: bytes):
+    cls = _class_for(len(payload))
+    size = R_CLASSES[cls]
+    body = bytes([len(payload)]) + payload
+    body += bytes(size - 2 - len(body))
+    crc = crc16_x25(body)
+    body += bytes([crc & 0xFF, crc >> 8])
+    bits = [(byte >> k) & 1 for byte in body for k in range(8)]
+    coded = _conv_encode(bits)
+    coded += [0] * ((-len(coded)) % 3)
+    perm = _perm(len(coded))
+    inter = [0] * len(coded)
+    for i, p in enumerate(perm):
+        inter[p] = coded[i]
+    syms = [_GRAY[inter[i] << 2 | inter[i + 1] << 1 | inter[i + 2]] for i in range(0, len(inter), 3)]
+    return R_COSTAS + [cls * 2 + 1] * R_HDR + syms
+
+
+def _nsyms(cls):
+    nb = (R_CLASSES[cls] * 8 + 6) * 2
+    return (nb + (-nb) % 3) // 3
+
+
+def robust_modulate(payload: bytes, rate=48000, level=0.5, lead_ms=200):
+    """Payload bytes -> float32 audio (continuous-phase 8-FSK)."""
+    _need_numpy()
+    syms = _frame_symbols(payload)
+    sps = rate / R_BAUD
+    edges = np.round(np.arange(len(syms) + 1) * sps).astype(int)
+    freq = np.repeat(R_BASE + np.array(syms) * R_BAUD, np.diff(edges))
+    phase = 2 * np.pi * np.cumsum(freq) / rate
+    audio = level * np.sin(phase)
+    f = int(rate * 0.01)
+    ramp = np.linspace(0, 1, f)
+    audio[:f] *= ramp
+    audio[-f:] *= ramp[::-1]
+    lead = np.zeros(int(rate * lead_ms / 1000))
+    return np.concatenate([lead, audio, lead]).astype(np.float32)
+
+
+class RobustDemodulator:
+    """Streaming receiver: buffers audio, searches for the Costas preamble over
+    time and frequency, then decodes the frame with soft Viterbi + CRC."""
+    MAX_OFF = 6.5                     # +/- tone spacings of tuning error searched (~200 Hz)
+    THRESH = 5.0                      # preamble score threshold (noise ~2, strong ~14)
+
+    def __init__(self, rate=48000):
+        _need_numpy()
+        self.rate = rate
+        self.buf = np.zeros(0)
+        self.pending = np.zeros(0)
+        self.lp = _bandpass(rate, 50.0, 3200.0, taps=(int(rate / 400) | 1)) if rate != R_RATE else None
+        self.lp_hist = np.zeros(0)
+        self.done_until = 0           # absolute sample index (at R_RATE) already decoded
+        self.base = 0                 # absolute index of buf[0]
+        self.tried = set()
+        self.last_snr = None
+
+    def _to_internal(self, x):
+        x = np.asarray(x, dtype=float)
+        if self.lp is None:
+            return x
+        y = np.concatenate([self.lp_hist, x])
+        self.lp_hist = y[-(len(self.lp) - 1):]
+        y = np.convolve(y, self.lp, "valid")
+        self.pending = np.concatenate([self.pending, y])
+        n_out = int(len(self.pending) * R_RATE / self.rate)
+        if n_out < 2:
+            return np.zeros(0)
+        t = np.arange(n_out) * (self.rate / R_RATE)
+        out = np.interp(t, np.arange(len(self.pending)), self.pending)
+        used = int(n_out * self.rate / R_RATE)
+        self.pending = self.pending[used:]
+        return out
+
+    def process(self, samples):
+        x = self._to_internal(samples)
+        self.buf = np.concatenate([self.buf, x])
+        maxlen = (len(R_COSTAS) + R_HDR + _nsyms(len(R_CLASSES) - 1) + 40) * R_N
+        if len(self.buf) > maxlen + R_RATE * 5:
+            cut = len(self.buf) - maxlen
+            self.buf, self.base = self.buf[cut:], self.base + cut
+        return self._search()
+
+    def _search(self):
+        frames = []
+        pre = len(R_COSTAS) + R_HDR
+        need_min = (pre + _nsyms(0)) * R_N
+        if len(self.buf) < need_min:
+            return frames
+        hop = R_N // 8
+        nstart = (len(self.buf) - pre * R_N) // hop
+        if nstart <= 0:
+            return frames
+        starts = np.arange(nstart) * hop
+        # power for every hop position, half-bin grid
+        win = np.lib.stride_tricks.sliding_window_view(self.buf, R_N)[::hop]
+        sp = np.abs(np.fft.rfft(win, 2 * R_N, axis=1)) ** 2
+        k0 = int(round(R_BASE / (R_BAUD / 2)))        # half-bin index of tone 0
+        offs = np.arange(-int(self.MAX_OFF * 2), int(self.MAX_OFF * 2) + 1)
+        best = []
+        nsym_pos = np.arange(len(R_COSTAS)) * 8        # symbol step = 8 hops
+        tones2 = np.array(R_COSTAS) * 2
+        for off in offs:
+            cols = k0 + off + np.arange(R_TONES) * 2
+            if cols.min() < 1 or cols.max() >= sp.shape[1]:
+                continue
+            P = sp[:, cols]                           # (hops, 8)
+            tot = P.sum(1) + 1e-12
+            frac = P / tot[:, None]
+            valid = len(starts)
+            if valid - nsym_pos[-1] <= 0:
+                continue
+            score = np.zeros(valid - nsym_pos[-1])
+            for s, tn in zip(nsym_pos, np.array(R_COSTAS)):
+                score += frac[s:s + len(score), tn]
+            i = int(np.argmax(score))
+            best.append((score[i], i, off))
+            # also keep other strong peaks (several frames in the buffer)
+            for j in np.argsort(score)[::-1][:6]:
+                if score[j] > self.THRESH and abs(j - i) > 16:
+                    best.append((score[j], int(j), off))
+        best.sort(reverse=True)
+        used = []
+        for sc, i, off in best:
+            if sc < self.THRESH:
+                break
+            st = int(starts[i])
+            absst = self.base + st
+            if any(abs(absst - u) < R_N * 4 for u in used) or absst < self.done_until:
+                continue
+            res = self._decode(st, off)
+            if res == "wait":
+                continue
+            key = (absst // (R_N // 2), off)
+            if res is None:
+                if key not in self.tried:
+                    self.tried.add(key)
+                continue
+            payload, end = res
+            used.append(absst)
+            self.done_until = self.base + end
+            frames.append(payload)
+        if len(self.tried) > 2000:
+            self.tried.clear()
+        return frames
+
+    def _sym_energy(self, start, nsym, off):
+        """Energy of the 8 tones for nsym symbols, refining timing by +/- 1/16 symbol."""
+        k0 = int(round(R_BASE / (R_BAUD / 2))) + off
+        cols = k0 + np.arange(R_TONES) * 2
+        best = None
+        for dt in (-R_N // 16, 0, R_N // 16):
+            s0 = start + dt
+            if s0 < 0 or s0 + nsym * R_N > len(self.buf):
+                continue
+            seg = self.buf[s0:s0 + nsym * R_N].reshape(nsym, R_N)
+            sp = np.abs(np.fft.rfft(seg, 2 * R_N, axis=1)) ** 2
+            E = sp[:, cols]
+            q = E.max(1).sum()
+            if best is None or q > best[0]:
+                noise = np.median(sp[:, k0 - 40:k0 - 8]) if k0 > 48 else np.median(sp)
+                best = (q, E, noise, s0)
+        return best
+
+    def _decode(self, st, off):
+        pre = len(R_COSTAS)
+        hdr = self._sym_energy(st + pre * R_N, R_HDR, off)
+        if hdr is None:
+            return "wait"
+        Eh = hdr[1].sum(0)
+        cls_tone = int(np.argmax(Eh))
+        if cls_tone not in (1, 3, 5):
+            return None
+        cls = (cls_tone - 1) // 2
+        nd = _nsyms(cls)
+        if st + (pre + R_HDR + nd) * R_N + R_N // 16 > len(self.buf):
+            return "wait"
+        got = self._sym_energy(st + (pre + R_HDR) * R_N, nd, off)
+        if got is None:
+            return "wait"
+        _, E, noise, s0 = got
+        noise = max(noise, 1e-12)
+        # max-log soft bits from noncoherent tone energies
+        tone_bits = np.array([[(_IGRAY[t] >> (2 - k)) & 1 for k in range(3)] for t in range(8)])
+        Z = E / noise
+        llr = []
+        for k in range(3):
+            m0 = np.where(tone_bits[:, k] == 0, Z, -np.inf).max(1)
+            m1 = np.where(tone_bits[:, k] == 1, Z, -np.inf).max(1)
+            llr.append(m0 - m1)
+        llr = np.stack(llr, 1).reshape(-1)
+        perm = _perm(len(llr))
+        deint = llr[perm]
+        nbits = (R_CLASSES[cls] * 8 + 6) * 2
+        bits = _viterbi(np.clip(deint[:nbits], -50, 50))
+        body = bytes(sum(bits[i + k] << k for k in range(8)) for i in range(0, R_CLASSES[cls] * 8, 8))
+        if crc16_x25(body[:-2]) != (body[-2] | body[-1] << 8):
+            return None
+        n = body[0]
+        if n > len(body) - 3:
+            return None
+        sig = float(np.mean(E.max(1)))
+        self.last_snr = 10 * np.log10(max(sig / noise - 1, 1e-3) * (R_BAUD / 2500.0) * 2) if noise > 0 else None
+        end = s0 + nd * R_N
+        return body[1:1 + n], end

@@ -147,6 +147,94 @@ Every message is numbered and resent (after 30, 60 and 120 s) until the other st
 A completed handshake over RF proves the path works both ways.
 Operators using APRSdroid, a TH-D74/D75 or another APRS radio can take part too: they see the request as a message and reply **ACCEPT** or **DECLINE**. Plain APRS messages they send you appear in the chat, and you can reply.
 
+### Built for outages, disasters and off-grid travel (v2.0)
+
+- **Works with no internet.**
+  - RF chat, forms, the heard-stations list and the logs all run without internet.
+  - The map library and every map area you have viewed are saved on the computer.
+  - Open Tradewind once while online, and pan around the islands you care about, so the map is ready for an outage.
+- **Hail retries.** Choose how often a hail repeats: once, 4 times, 10 times or **until received**, every 30 s to 15 min. "Until received" keeps calling through a fading opening until the other station's radio acknowledges it.
+- **Stations heard on RF.** A live list of every station your radio decodes, with last-heard time, packet count and whether it was direct or through a digipeater. A **HAIL** button sits next to each one.
+- **Chats survive restarts and power cuts.** They are saved to disk; commercial-mode chats are saved encrypted.
+- **ICS-309 communications log.** **DOWNLOAD LOG (ICS-309)** saves every chat message as a spreadsheet (CSV) with local and UTC time, from, to and route, ready for an EmComm after-action report.
+- **HF chat.** Choose the **300 baud HF** modem (1600/1800 Hz on USB) under MENU > RADIO / TNC to use the chat and forms on HF.
+- **More radios.**
+  - **Icom:** IC-7300, IC-7610, IC-2730 / IC-5100.
+  - **Kenwood:** TS-590 / TS-890, TM-V71.
+  - **Yaesu:** FT-710 / FTDX10 / FTDX101, FT-5DR / FT-3DR / FT-65.
+  - **Xiegu:** X6100, G90 / G106.
+  - **Radtel / Quansheng / Baofeng:** RT-890, RT-4D, UV-K5, UV-5R (AIOC cable).
+- **Help everywhere.** Hover over any setting, or tap its **?**, for a plain explanation.
+
+### Multi-speed links and automatic link selection (v3.0, Phase 2)
+
+Add a **second radio link** under MENU > RADIO / TNC, for example 70cm at 9600 baud through Direwolf next to your 2m 1200-baud radio. Choose **Auto** under "Send via" in the chat, and Tradewind:
+- measures delivery, round-trip time and throughput for each station on each link;
+- sends on the link with the best expected throughput (faster links are preferred while they deliver);
+- **falls back** to the slower link after two lost tries in a row, and **tries the faster link again** after 10 minutes;
+- resends only the messages that were lost, because each message or form part is acknowledged on its own;
+- returns acknowledgements on the link the message arrived on.
+
+**PROBE** in the chat sends a short test on each link and shows the reply time.
+**MAKE A DIREWOLF SETUP FILE** writes a ready-to-use Direwolf configuration for 1200 AFSK, 2400 QPSK, 4800 8PSK or 9600 G3RUH, with IL2P or FX.25 error correction.
+The second link can also be UZ7HO Soundmodem, VARA FM (KISS port) or a hardware KISS TNC. Speeds above 1200 need a radio data port that supports them; 9600 needs a "9600" data port.
+
+### Tradewind Robust: weak-signal text for HF / SSB (Phase 3)
+
+A modem built for paths that are too weak for packet radio. Choose **Tradewind Robust** as the modem under MENU > RADIO / TNC and use USB (upper sideband).
+
+**How it works:**
+- 8-FSK at 31.25 baud: a 250 Hz-wide signal centred near 1.5 kHz.
+- Rate-1/2 convolutional coding (K=7) with soft-decision Viterbi decoding, an interleaver and a CRC.
+- A Costas-array preamble finds the signal in time and frequency, so tuning errors up to about ±200 Hz are tolerated.
+
+**Performance:** about **44 bit/s**, so a chat message takes 10–20 s on air. In simulation (white noise, 2.5 kHz bandwidth) it decodes reliably down to **about -12 dB SNR**, below the point where the signal is audible. Real HF fading and interference will cost some of that margin, so test on the air before relying on it.
+
+Chat, forms, store-and-forward and relay all work over it, with longer resend times. Both stations need Tradewind Robust; it does not talk to other modems.
+
+### Off-grid and disaster features (Phase 4)
+
+- **Store and forward.** A message that cannot be delivered is kept for up to 24 h. It is resent automatically as soon as that station is heard on the air again (any packet or beacon), and survives a restart.
+- **Relay through another station.** Under **SEND THROUGH A RELAY STATION**, give a relay station and a final destination. The relay passes the message on, marked "de <you> via <relay>", and tells you when it is delivered. The relay must tick **Act as a relay** (MENU > STATION).
+- **Net check-ins.** The **Net check-in** form sends status (Safe / Need help / Emergency / Evacuated), location and number of people. Net control gets a live **NET CHECK-INS** roster.
+- **Works with no internet.** Everything above runs over RF alone; see v2.0.
+
+### Message forms
+
+The **FORMS** button in the chat sends short structured reports, styled on Winlink / ICS forms:
+- SITREP
+- weather observation (spot report)
+- forecast relay (the latest Tradewind weather bulletin)
+- damage assessment
+- shelter status
+- medical / casualty report
+- resource request
+- welfare check
+- general message (ICS-213 style)
+
+Each form becomes one or more numbered messages of up to 67 characters, e.g. `WXOBS 201225L 1/3 Ocean City, St Philip. Wind ENE 35 G50kt...`. Each message is acknowledged like any other chat message.
+
+## Commercial / EmComm mode (encrypted, 148-174 MHz)
+
+For organisations with a **licensed commercial or emergency-services VHF channel**, MENU > COMMERCIAL switches Tradewind to an encrypted chat.
+
+**What it does:**
+- Message content is encrypted with **AES-256-GCM**, using a 256-bit key derived (scrypt) from a shared network name and passphrase.
+- Messages are authenticated, so an altered or forged message is rejected.
+- Old or replayed messages are refused.
+- Units compare a short **key fingerprint** to confirm they hold the same key.
+
+**Rules it enforces:**
+- Only works on **148.000-174.000 MHz**. Amateur frequencies are refused, because amateur rules do not allow encryption.
+- APRS bulletins, beacons and APRS-IS are switched off in this mode.
+- Each unit sends a **clear station ID** (your licence call sign) at the start of a session and every 30 minutes by default. Unit IDs travel in clear; only the content is encrypted.
+
+**Limits:**
+- Needs the Windows/PC version and a radio licensed for that channel.
+- Many amateur transceivers cannot transmit outside the amateur bands; use a radio type-approved for the commercial channel.
+- Check your licence conditions with the national regulator.
+- Have the encryption independently reviewed before relying on it for sensitive operations.
+
 ## Setting TX audio
 
 Use **MENU → STATION → BCN** to send a beacon while you adjust the TX audio level. Aim for about 3 kHz deviation, which is clean, unclipped audio on a monitor receiver. Keep RX audio at roughly 30–50% on the face plate meter.

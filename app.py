@@ -29,7 +29,7 @@ import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "1.8"
+APP_VERSION = "3.0"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -47,6 +47,48 @@ CONF_DIR = _conf_dir()
 CONF_PATH = os.path.join(CONF_DIR, "config.json")
 STATE_PATH = os.path.join(CONF_DIR, "announce_state.json")
 HISTORY_PATH = os.path.join(CONF_DIR, "opening_history.json")
+CHAT_DIR = os.path.join(CONF_DIR, "chat")         # saved chats + comms log (per callsign / unit)
+CACHE_DIR = os.path.join(CONF_DIR, "cache")       # map library + map tiles, for use with no internet
+VENDOR = {"leaflet.js": ("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js", "application/javascript"),
+          "leaflet.css": ("https://unpkg.com/leaflet@1.9.4/dist/leaflet.css", "text/css")}
+TILE_SRC = {"esri": "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+            "osm": "https://tile.openstreetmap.org/{z}/{x}/{y}.png"}
+TILE_MAX_AGE = 30 * 86400
+
+
+def _web_get(url, timeout=15):
+    """Fetch a URL (map files) with a proper User-Agent; certifi CA bundle when available."""
+    import ssl
+    import urllib.request
+    try:
+        import certifi
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        ctx = ssl.create_default_context()
+    req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION} (amateur radio app; github.com/BajanBob/APRS-Tradewins)"})
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+        return r.read()
+
+
+def cached_get(path, url, max_age=None):
+    """Serve from the disk cache; refresh from the internet when missing or old. None if neither."""
+    fresh = os.path.exists(path) and (max_age is None or time.time() - os.path.getmtime(path) < max_age)
+    if not fresh:
+        try:
+            data = _web_get(url)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+            return data
+        except Exception:
+            pass                                        # offline: fall back to any cached copy
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
 HISTORY_KEEP_S = 48 * 3600
 
 IS_ANDROID = "ANDROID_ARGUMENT" in os.environ or hasattr(sys, "getandroidapilevel")
@@ -64,7 +106,13 @@ DEFAULTS = {
     "cat_baud": 9600, "civ_addr": "7C",
     # CAT tuning: put the radio on the APRS frequency in FM data mode at power-on
     "cat_tune": False, "aprs_freq": "144.390", "aprs_freq_custom": "", "cat_restore": True,
-    "txdelay": 300, "txtail": 50, "tx_level": 0.5,
+    "txdelay": 300, "txtail": 50, "tx_level": 0.5, "modem": "1200",
+    # Phase 2: a second radio path (Direwolf / UZ7HO / hardware TNC over KISS) and automatic link selection
+    "link1_name": "", "link1_speed": 1200,
+    "link2_enabled": False, "link2_name": "70cm 9600 G3RUH", "link2_speed": 9600,
+    "link2_tnc": "kiss_tcp", "link2_addr": "127.0.0.1:8002", "link2_serial": "", "link2_baud": 9600,
+    # Phase 4: off-grid / disaster features
+    "store_forward": True, "relay_enabled": False,
     "kiss_addr": "127.0.0.1:8001", "kiss_serial": "", "kiss_baud": 9600,
     "rf_announce": True, "rf_path": "WIDE2-1", "rf_when": "always", "rf_modes": ["TEP"],
     "aprsis": True, "server": "rotate.aprs2.net", "igate": False,
@@ -82,8 +130,12 @@ DEFAULTS = {
     "wx_icao": "TBPB", "wx_fir": "TTZP",
     # tropical cyclone alerts from the National Hurricane Center
     "tc_enabled": True, "tc_radius_km": 1500, "tc_rf": True,
+    # Commercial / EmComm mode: encrypted chat on a licensed 148-174 MHz channel
+    "op_mode": "amateur", "com_callsign": "", "com_licensee": "", "com_unit": "",
+    "com_freq": "", "com_net": "", "com_key": "", "com_fp": "", "com_id_min": 30,
     "cfg_ver": 2,
 }
+SECRET_KEYS = ("com_key",)        # never sent to the face plate
 
 # Radio / interface presets. Fields override DEFAULTS when chosen in the UI.
 PRESETS = [
@@ -144,6 +196,37 @@ PRESETS = [
     {"id": "tmd710", "label": "Kenwood TM-D710G / TM-D710GA (built-in TNC)",
      "tnc": "kiss_serial", "kiss_baud": 9600,
      "note": "Put the built-in TNC in KISS mode (PACKET mode, then KISS ON). Use the COM port on the control head."},
+    # ---- HF and more VHF/UHF radios (v2.0). HF presets use the 300-baud HF modem on USB.
+    {"id": "ic7300", "label": "Icom IC-7300 (HF/6m, built-in USB sound card)",
+     "tnc": "sound", "ptt": "CIV", "civ_addr": "94", "cat_baud": 19200, "modem": "300",
+     "note": "One USB cable. Audio: 'USB Audio CODEC'. PTT: the radio's USB COM port, Icom CI-V address 94. On the radio set CI-V USB Baud Rate to 19200 (or Auto), DATA MOD to USB, and use USB-D mode. HF packet uses the 300-baud modem (e.g. 10.1476 MHz USB for HF APRS)."},
+    {"id": "ic7610", "label": "Icom IC-7610 (HF/6m, built-in USB sound card)",
+     "tnc": "sound", "ptt": "CIV", "civ_addr": "98", "cat_baud": 19200, "modem": "300",
+     "note": "Audio: 'USB Audio CODEC'. PTT: Icom CI-V address 98 on the USB COM port. Set DATA MOD to USB and use USB-D. 300-baud HF modem."},
+    {"id": "ic2730", "label": "Icom IC-2730 / IC-5100 / other FM mobiles (via interface)",
+     "tnc": "sound", "ptt": "VOX", "txdelay": 350,
+     "note": "These radios have no built-in USB sound card. Use a SignaLink (VOX) or Digirig (Serial RTS) with the cable for your radio's data or mic jack, and check the pinout in the radio's manual."},
+    {"id": "ts590", "label": "Kenwood TS-590S / TS-590SG / TS-890S (HF, USB audio)",
+     "tnc": "sound", "ptt": "RIGCTLD", "ptt_port": "127.0.0.1:4532", "modem": "300",
+     "note": "One USB cable carries audio ('USB Audio CODEC') and CAT. Run Hamlib rigctld for your model for PTT and tuning, and set the radio's data input to USB audio. 300-baud HF modem."},
+    {"id": "tmv71", "label": "Kenwood TM-V71A / TM-V71E (data jack)",
+     "tnc": "sound", "ptt": "VOX",
+     "note": "Use the 6-pin mini-DIN DATA jack with a SignaLink (VOX) or Digirig (Serial RTS) data cable. Set the data band and 1200 bps in the radio menu."},
+    {"id": "ft710", "label": "Yaesu FT-710 / FTDX10 / FTDX101 (HF, USB audio)",
+     "tnc": "sound", "ptt": "YAESU_CAT", "cat_baud": 38400, "modem": "300",
+     "note": "Audio: the radio's USB audio device. PTT: Yaesu CAT on the 'Standard' COM port at the radio's CAT rate (or Serial RTS on the 'Enhanced' port). Select USB as the data/rear audio input and use DATA-U. 300-baud HF modem."},
+    {"id": "yaesu_ht", "label": "Yaesu FT-5DR / FT-3DR / FT-65 handhelds (audio cable)",
+     "tnc": "sound", "ptt": "RTS", "txdelay": 400, "tx_level": 0.3,
+     "note": "Use a Digirig (Serial RTS) with the Yaesu handheld audio cable for your model; check the plug type in the manual. Turn the radio's VOX off, keep TX audio low, and use low power for long sessions."},
+    {"id": "x6100", "label": "Xiegu X6100 (HF/6m, built-in USB audio)",
+     "tnc": "sound", "ptt": "RIGCTLD", "ptt_port": "127.0.0.1:4532", "modem": "300",
+     "note": "Audio and CAT over USB (depends on firmware). Run Hamlib rigctld with the X6100 model for PTT and tuning. 300-baud HF modem."},
+    {"id": "xiegu_g90", "label": "Xiegu G90 / G106 (HF, via DE-19 or Digirig)",
+     "tnc": "sound", "ptt": "VOX", "modem": "300",
+     "note": "These radios have no built-in sound card. Use the DE-19 expansion or a Digirig for audio; PTT by VOX, Serial RTS on a Digirig, or Hamlib rigctld through the CI-V port. 300-baud HF modem."},
+    {"id": "aioc_ht", "label": "Radtel RT-890 / RT-4D, Quansheng UV-K5, Baofeng UV-5R (AIOC cable)",
+     "tnc": "sound", "ptt": "DTR", "txdelay": 400, "tx_level": 0.3,
+     "note": "Use an AIOC all-in-one cable (Kenwood-style 2-pin plug). Audio device 'All-In-One-Cable'; PTT is DTR. Turn the radio's VOX off, keep TX audio low and squelch just closed. These handhelds are not made for long transmissions, so use low power."},
     {"id": "mobilinkd", "label": "Mobilinkd TNC3 / TNC4 (Bluetooth or USB)",
      "tnc": "kiss_serial", "kiss_baud": 115200,
      "note": "Pair the TNC, then choose its serial port (rfcomm / Bluetooth COM)."},
@@ -218,7 +301,27 @@ def save_config(cfg):
     os.replace(tmp, CONF_PATH)
 
 
+def validate_commercial(cfg):
+    errs = []
+    missing = tncmod.crypto_available()
+    if missing:
+        errs.append("Commercial mode: " + missing + ".")
+    if cfg.get("tnc") not in ("sound", "kiss_tcp", "kiss_serial"):
+        errs.append("Commercial mode needs a radio: choose a TNC under MENU > RADIO / TNC.")
+    if not tncmod.com_freq_hz(cfg):
+        errs.append("Commercial channel must be 148.000 - 174.000 MHz (your licensed frequency).")
+    if not re.match(r"^[A-Z0-9]{1,6}(-([0-9]|1[0-5]))?$", str(cfg.get("com_unit") or "").upper()):
+        errs.append("Enter this unit's ID: 1-6 letters/numbers, e.g. RC01 or BDF7.")
+    if not str(cfg.get("com_callsign") or "").strip() or not str(cfg.get("com_licensee") or "").strip():
+        errs.append("Enter the licence holder and the station call sign / licence number from your licence.")
+    if not cfg.get("com_key"):
+        errs.append("Set the network name and passphrase (MENU > COMMERCIAL).")
+    return errs
+
+
 def validate(cfg):
+    if cfg.get("op_mode") == "commercial":
+        return validate_commercial(cfg)
     errs = []
     if IS_ANDROID and cfg.get("tnc") in ("sound", "kiss_serial"):
         errs.append("On Android use 'APRS-IS only' or 'KISS over TCP' - the sound modem and USB/serial radios need the Windows/PC version.")
@@ -278,6 +381,16 @@ class Station:
         self.tc_alerts = []           # latest alerts for the face plate
         self.tc_seq = 0
         self.chat = None              # two-way APRS chat (created when the station starts)
+        self.tnc2 = None              # second radio link (Phase 2), KISS
+        self.linkctl = None           # automatic link controller
+        self.commercial = False       # True while running in Commercial / EmComm mode
+        self.sec = None               # SecureLink (AES-256-GCM) in commercial mode
+        self.last_id = 0
+        self.prop_off = False
+        self.heard = {}               # callsign -> stations heard on RF (works with no internet)
+        self.commlog = []             # ICS-309-style log of chat traffic
+        self._chat_saved = -1
+        self._chat_save_t = 0
         self._stop = threading.Event()
         self._wake = threading.Event()
 
@@ -304,20 +417,59 @@ class Station:
             except Exception as e:
                 self.tnc = None
                 return [f"Could not start TNC: {e}"]
-            if c.get("aprsis"):
+            self.tnc2, self.linkctl = None, None
+            if c.get("link2_enabled"):
+                try:
+                    if c.get("link2_tnc") == "kiss_serial":
+                        self.tnc2 = tncmod.KissSerialTNC(c.get("link2_serial", ""), c.get("link2_baud", 9600))
+                    else:
+                        host, _, port = (c.get("link2_addr") or "127.0.0.1:8002").partition(":")
+                        self.tnc2 = tncmod.KissTcpTNC(host, port or 8002)
+                    self.tnc2.start(lambda line: self.on_rf_packet(line, "B"))
+                except Exception as e:
+                    self.tnc2 = None
+                    self.add_log("ERR", f"Second radio link not started: {e}")
+            if self.tnc2 is not None and c.get("tnc") != "none":
+                s1 = 44 if c.get("tnc") == "sound" and c.get("modem") == "robust" else \
+                    300 if c.get("tnc") == "sound" and str(c.get("modem")) == "300" else \
+                    (1200 if c.get("tnc") == "sound" else int(c.get("link1_speed") or 1200))
+                self.linkctl = tncmod.LinkController({
+                    "A": {"name": c.get("link1_name") or f"{s1} bps (main radio)", "speed": s1},
+                    "B": {"name": c.get("link2_name") or "second link", "speed": int(c.get("link2_speed") or 9600)}})
+            self.commercial = c.get("op_mode") == "commercial"
+            self.sec, self.last_id = None, 0
+            if self.commercial:
+                self.sec = tncmod.SecureLink(bytes.fromhex(c["com_key"]))
+                unit = c["com_unit"].upper()
+                self.chat = tncmod.ChatManager(unit, self._com_send)
+                self._attach_chat()
+            elif c.get("aprsis"):
                 pc = c.get("passcode") or eng.aprs_passcode(c["call"])
                 self.isc = tncmod.AprsIsClient(c["call"], int(pc), c.get("server") or "rotate.aprs2.net",
                                                software=APP_NAME, version=APP_VERSION)
                 self.isc.start(self.on_is_line)
-            if not self.chat or self.chat.mycall != c["call"]:
+            if self.chat:
+                self.chat.links = self.linkctl
+                self.chat.store_forward = bool(c.get("store_forward", True))
+                self.chat.relay_enabled = bool(c.get("relay_enabled"))
+                self.chat.retry = (90, 150, 240) if (c.get("tnc") == "sound" and c.get("modem") == "robust") else tncmod.RETRY_S
+            if not self.commercial and (not self.chat or self.chat.mycall != c["call"]
+                                        or getattr(self.chat, "send_fn", None) != self._chat_send):
                 self.chat = tncmod.ChatManager(c["call"], self._chat_send)
+                self._attach_chat()
             self.running = True
             self.openings = {}
             self._rf_was_live = self.rf_live()
             self.next_check = time.time() + 3
-            self.next_beacon = time.time() + 10 if c.get("beacon") else 0
+            self.next_beacon = time.time() + 10 if c.get("beacon") and not self.commercial else 0
+            # commercial units without a grid square skip the propagation watch
+            self.prop_off = self.commercial and not GRID_RE.match(c.get("grid", "").strip())
             threading.Thread(target=self._loop, daemon=True).start()
-            self.add_log("SYS", f"Station ON as {c['call']} @ {c['grid']} - TNC: {self.tnc.kind}")
+            if self.commercial:
+                self.add_log("SEC", f"COMMERCIAL MODE - unit {c['com_unit'].upper()} on {c['com_freq']} MHz, "
+                                    f"network {c['com_net']} (key {c['com_fp']}), AES-256-GCM. APRS bulletins and APRS-IS are off.")
+            else:
+                self.add_log("SYS", f"Station ON as {c['call']} @ {c['grid']} - TNC: {self.tnc.kind}")
             cat = getattr(self.tnc, "cat_status", "")
             if cat:
                 self.add_log("ERR" if "failed" in cat else "SYS", f"Radio: {cat}")
@@ -329,12 +481,14 @@ class Station:
                 return
             self._stop.set()
             self._wake.set()
-            for x in (self.tnc, self.isc):
+            for x in (self.tnc, self.isc, self.tnc2):
                 try:
                     x and x.stop()
                 except Exception:
                     pass
-            self.tnc = self.isc = None
+            self._save_chat()
+            self.tnc = self.isc = self.tnc2 = None
+            self.linkctl = None
             self.running = False
             self.add_log("SYS", "Station OFF")
 
@@ -354,6 +508,7 @@ class Station:
                     self.cfg[k] = v
             _migrate(self.cfg)
             self.cfg["call"] = self.cfg.get("call", "").upper().strip()
+            self.cfg["com_unit"] = str(self.cfg.get("com_unit") or "").upper().strip()
             self.cfg["group"] = (self.cfg.get("group") or "VHF").upper()[:5]
             save_config(self.cfg)
         errs = validate(self.cfg)
@@ -365,7 +520,7 @@ class Station:
     def _loop(self):
         while not self._stop.is_set():
             now = time.time()
-            if now >= self.next_check:
+            if now >= self.next_check and not self.prop_off:
                 self.run_check()
                 self.next_check = time.time() + max(eng.MIN_QUERY_INTERVAL, self.cfg["interval"] * 60)
             if self.next_beacon and now >= self.next_beacon:
@@ -379,6 +534,8 @@ class Station:
             if self.chat:
                 try:
                     self.chat.tick()
+                    if self.chat.seq != self._chat_saved and time.time() - self._chat_save_t > 5:
+                        self._save_chat()
                 except Exception as e:
                     self.add_log("ERR", f"chat: {e}")
             self._wake.wait(1.0)
@@ -589,7 +746,7 @@ class Station:
         c = self.cfg
         me = eng.grid_to_latlon(c.get("grid", ""))
         return {"now": time.time(), "last_check": self.last_check,
-                "next_check": self.next_check if self.running else 0, "running": self.running,
+                "next_check": self.next_check if self.running and not self.prop_off else 0, "running": self.running,
                 "me": {"call": c.get("call", ""), "grid": c.get("grid", ""),
                        "pos": [round(me[0], 3), round(me[1], 3)] if me else None},
                 "paths": self.map_paths,
@@ -623,6 +780,8 @@ class Station:
 
     # ---- TX paths
     def transmit(self, info, rf=True, net=True, mode=None, force_rf=False):
+        if self.commercial:
+            return      # APRS bulletins / beacons never go out on a commercial channel
         c = self.cfg
         call = c["call"]
         sent = []
@@ -642,6 +801,8 @@ class Station:
         self.add_log("TX", f"[{'+'.join(sent) or 'nothing sent'}] {call}>{eng.TOCALL}:{info}")
 
     def send_beacon(self):
+        if self.commercial:
+            return
         c = self.cfg
         p = eng.grid_to_latlon(c["grid"])
         if not p:
@@ -655,37 +816,196 @@ class Station:
                       force_rf=True)
 
     # ---- two-way chat
-    def _chat_send(self, call, info, route):
-        """Send one APRS message for the chat (RF ignores the propagation-mode standby)."""
-        c, sent = self.cfg, []
-        if route in ("rf", "rf_is"):
-            if self.rf_possible():
-                path = [p.strip() for p in (c.get("rf_path") or "").split(",") if p.strip()]
-                self.tnc.send(c["call"], eng.TOCALL, path, info)
-                sent.append("RF")
-            elif route == "rf":
+    # ---- saved chats + ICS-309 comms log (survive restarts and power cuts)
+    def _chat_file(self):
+        name = re.sub(r"[^A-Z0-9-]", "_", self.chat.mycall)
+        return os.path.join(CHAT_DIR, ("com_" if self.commercial else "ham_") + name + ".json")
+
+    def _attach_chat(self):
+        self.chat.on_log = self._commlog_add
+        self.chat.store_forward = bool(self.cfg.get("store_forward", True))
+        self.chat.relay_enabled = bool(self.cfg.get("relay_enabled"))
+        self.chat.links = self.linkctl
+        robust = self.cfg.get("tnc") == "sound" and self.cfg.get("modem") == "robust"
+        self.chat.retry = (90, 150, 240) if robust else tncmod.RETRY_S
+        self.commlog = []
+        try:
+            with open(self._chat_file(), "rb") as f:
+                raw = f.read()
+            if self.commercial:                      # stored encrypted with the network key
+                raw = tncmod.seal_open(bytes.fromhex(self.cfg["com_key"]), raw)
+            d = json.loads(raw)
+            self.chat.load(d.get("chat"))
+            self.commlog = d.get("log", [])[-5000:]
+        except (OSError, ValueError, TypeError):
+            pass
+        self._chat_saved = self.chat.seq
+
+    def _save_chat(self):
+        if not self.chat:
+            return
+        try:
+            os.makedirs(CHAT_DIR, exist_ok=True)
+            raw = json.dumps({"chat": self.chat.to_dict(), "log": self.commlog[-5000:]}).encode()
+            if self.commercial:
+                raw = tncmod.seal_close(bytes.fromhex(self.cfg["com_key"]), raw)
+            tmp = self._chat_file() + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(raw)
+            os.replace(tmp, self._chat_file())
+            self._chat_saved, self._chat_save_t = self.chat.seq, time.time()
+        except (OSError, ValueError) as e:
+            self.add_log("ERR", f"could not save chat: {e}")
+
+    def _commlog_add(self, direction, peer, text, via):
+        me = self.chat.mycall if self.chat else ""
+        self.commlog.append({"t": time.time(), "from": peer if direction == "in" else me,
+                             "to": me if direction == "in" else peer, "via": via or "", "text": text})
+
+    def commlog_csv(self):
+        import csv
+        import io
+        c = self.cfg
+        off = float(c.get("wx_utc_offset") or 0)
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        station = (c.get("com_callsign") or c.get("com_unit")) if self.commercial else c.get("call")
+        w.writerow(["ICS-309 style communications log", f"Station: {station}",
+                    f"Exported {time.strftime('%Y-%m-%d %H:%M', time.gmtime())} UTC", f"{APP_NAME} {APP_VERSION}"])
+        w.writerow(["Date/time (local)", "Date/time (UTC)", "From", "To", "Via", "Message"])
+        for e in self.commlog:
+            w.writerow([time.strftime("%Y-%m-%d %H:%M", time.gmtime(e["t"] + off * 3600)),
+                        time.strftime("%Y-%m-%d %H:%M", time.gmtime(e["t"])),
+                        e["from"], e["to"], e["via"], e["text"]])
+        return buf.getvalue()
+
+    # ---- stations heard on RF (a local picture with no internet)
+    def _heard_add(self, line, src=None):
+        head = line.partition(":")[0]
+        if ">" not in head:
+            return
+        call = (src or head.split(">", 1)[0]).rstrip("*").upper()
+        path = head.split(">", 1)[1].split(",")[1:]
+        digi = [x.rstrip("*") for x in path if x.endswith("*") and not x.startswith(("WIDE", "TCPIP", "q"))]
+        h = self.heard.setdefault(call, {"call": call, "count": 0, "first": time.time()})
+        h.update(last=time.time(), via=("via " + digi[-1]) if digi else "direct")
+        h["count"] += 1
+        if len(self.heard) > 300:
+            oldest = min(self.heard.values(), key=lambda x: x["last"])
+            self.heard.pop(oldest["call"], None)
+
+    def _pick_link(self, call, route):
+        """Which radio link a message goes out on: 'A' (main radio), 'B' (second link) or None."""
+        if route == "auto":
+            return self.linkctl.choose(call) if self.linkctl else "A"
+        if str(route).startswith("link:"):
+            return route[5:]
+        return "A" if route in ("rf", "rf_is") else None
+
+    def _link_send(self, link, src, dst, path, info):
+        if link == "B":
+            if not self.tnc2:
+                raise IOError("the second radio link is not running (MENU > RADIO / TNC > Second radio link)")
+            self.tnc2.send(src, dst, path, info)
+        else:
+            if not self.rf_possible() and not self.commercial:
                 raise IOError("RF needs a radio: set a TNC under MENU > RADIO / TNC, or choose APRS-IS")
+            self.tnc.send(src, dst, path, info)
+
+    def _chat_send(self, call, info, route):
+        """Send one APRS message for the chat (RF ignores the propagation-mode standby).
+        Returns the radio link used ('A' / 'B'), 'IS', or raises."""
+        c, sent = self.cfg, []
+        link = self._pick_link(call, route)
+        if link:
+            path = [p.strip() for p in (c.get("rf_path") or "").split(",") if p.strip()]
+            self._link_send(link, c["call"], eng.TOCALL, path, info)
+            sent.append("RF" if link == "A" else f"RF:{link}")
         if route in ("rf_is", "is") and self.isc and self.isc.verified:
             self.isc.send(f"{c['call']}>{eng.TOCALL},TCPIP*:{info}")
             sent.append("IS")
         if not sent:
             raise IOError("nothing to send with - no radio and APRS-IS not connected")
         self.add_log("MSG", f"[{'+'.join(sent)}] {c['call']}>{call}: {info[11:]}")
+        return link or "IS"
+
+    def _com_id(self, force=False):
+        """Clear-text station identification required by most commercial licences."""
+        c, now = self.cfg, time.time()
+        if force or now - self.last_id >= max(5, int(c.get("com_id_min") or 30)) * 60:
+            text = f">ID {c['com_callsign'].strip()} {c['com_licensee'].strip()}"[:80]
+            self.tnc.send(c["com_unit"].upper(), "ID", [], text)
+            if self.tnc2:
+                self.tnc2.send(c["com_unit"].upper(), "ID", [], text)
+            self.last_id = now
+            self.add_log("SEC", f"station ID sent in clear: {text[1:]}")
+
+    def _com_send(self, call, info, route):
+        if not (self.tnc and self.sec):
+            raise IOError("station is off")
+        if self.tnc.kind == "none":
+            raise IOError("commercial mode needs a radio (TNC)")
+        self._com_id()
+        unit = self.cfg["com_unit"].upper()
+        frame = self.sec.seal(unit, info)
+        link = self._pick_link(call, route if route in ("auto",) or str(route).startswith("link:") else "rf") or "A"
+        self._link_send(link, unit, tncmod.SEC_DEST, [], frame)
+        self.add_log("SEC", f"encrypted message to {call} on link {link} ({len(frame)} bytes on air)")
+        return link
+
+    def _com_rx(self, line, link="A"):
+        head, _, info = line.partition(":")
+        if ">" not in head:
+            return
+        src = head.split(">", 1)[0].rstrip("*").upper()
+        dst = head.split(">", 1)[1].split(",")[0].rstrip("*").upper()
+        if dst != tncmod.SEC_DEST or not info.startswith(tncmod.SEC_TAG):
+            return
+        plain = self.sec.open(src, info)
+        if plain is None:
+            self.add_log("SEC", f"frame from {src} refused (wrong key, altered or replayed)")
+            return
+        if self.chat:
+            self.chat.on_packet(f"{src}>{tncmod.SEC_DEST}:{plain}", "RF" if link == "A" else f"RF:{link}")
+
+    def set_com_key(self, net, passphrase):
+        key = tncmod.derive_key(net, passphrase)
+        fp = tncmod.key_fingerprint(key)
+        with self.lock:
+            self.cfg.update(com_net=net.strip().upper(), com_key=key.hex(), com_fp=fp)
+            save_config(self.cfg)
+            if self.running and self.commercial:
+                self.sec = tncmod.SecureLink(key)
+        self.add_log("SEC", f"network key set for {net.strip().upper()} - fingerprint {fp}")
+        return fp
 
     def on_is_line(self, line):
         if self.chat:
             try:
+                self.chat.on_heard(line.split(">", 1)[0])
                 if self.chat.on_packet(line, "IS"):
                     self.add_log("MSG", f"[IS] {line}")
             except Exception as e:
                 self.add_log("ERR", f"chat: {e}")
 
     # ---- RX
-    def on_rf_packet(self, line):
-        self.add_log("RX", line)
+    def on_rf_packet(self, line, link="A"):
+        self.add_log("RX", line if link == "A" else f"[link {link}] {line}")
+        try:
+            self._heard_add(line)
+            if self.chat:
+                self.chat.on_heard(line.split(">", 1)[0].rstrip("*"))
+        except Exception:
+            pass
+        if self.commercial:
+            try:
+                self._com_rx(line, link)
+            except Exception as e:
+                self.add_log("ERR", f"secure rx: {e}")
+            return          # no iGate in commercial mode
         if self.chat:
             try:
-                self.chat.on_packet(line, "RF")
+                self.chat.on_packet(line, "RF" if link == "A" else f"RF:{link}")
             except Exception as e:
                 self.add_log("ERR", f"chat: {e}")
         c = self.cfg
@@ -722,8 +1042,17 @@ class Station:
         return {
             "app": APP_NAME, "version": APP_VERSION, "running": self.running,
             "platform": "android" if IS_ANDROID else sys.platform,
-            "config": c, "matrix": matrix, "utc": time.time(),
-            "last_check": self.last_check, "next_check": self.next_check if self.running else 0,
+            "config": {k: v for k, v in c.items() if k not in SECRET_KEYS}, "matrix": matrix, "utc": time.time(),
+            "op_mode": "commercial" if self.commercial else c.get("op_mode", "amateur"),
+            "heard": sorted(self.heard.values(), key=lambda h: -h["last"])[:40],
+            "links": ([{"link": l, **v} for l, v in sorted(self.linkctl.links.items())] if self.linkctl else []),
+            "link2": None if not self.tnc2 else {"kind": self.tnc2.kind, "error": self.tnc2.error,
+                                                  "rx": self.tnc2.rx_count, "tx": self.tnc2.tx_count},
+            "commlog_count": len(self.commlog),
+            "com": {"net": c.get("com_net", ""), "fp": c.get("com_fp", ""), "freq": c.get("com_freq", ""),
+                    "unit": c.get("com_unit", ""), "has_key": bool(c.get("com_key")),
+                    "crypto": tncmod.crypto_available(), "active": bool(self.running and self.commercial)},
+            "last_check": self.last_check, "next_check": self.next_check if self.running and not self.prop_off else 0,
             "next_beacon": self.next_beacon if self.running else 0,
             "spots": self.spot_count, "car_spots": self.car_count, "local": self.local,
             "check_error": self.check_error, "tnc": tst,
@@ -756,6 +1085,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _bytes(self, data, ctype, cache="no-store"):
+        if data is None:
+            return self._json({"error": "not available offline yet"}, 404)
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", cache)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -791,6 +1130,27 @@ class Handler(BaseHTTPRequestHandler):
             self._json(PRESETS)
         elif path == "/api/map":
             self._json(STATION.map_data())
+        elif path.startswith("/vendor/") and path[8:] in VENDOR:
+            url, ctype = VENDOR[path[8:]]
+            data = cached_get(os.path.join(CACHE_DIR, "vendor", path[8:]), url)
+            self._bytes(data, ctype, "public, max-age=86400")
+        elif path.startswith("/tile/"):
+            m = re.fullmatch(r"/tile/(esri|osm)/(\d{1,2})/(\d{1,6})/(\d{1,6})", path)
+            if not m or int(m.group(2)) > 12:
+                return self._json({"error": "bad tile"}, 404)
+            src, z, a, b = m.group(1), int(m.group(2)), int(m.group(3)), int(m.group(4))
+            x, y = (b, a) if src == "esri" else (a, b)          # esri URLs are z/y/x
+            data = cached_get(os.path.join(CACHE_DIR, "tiles", src, str(z), str(x), f"{y}.png"),
+                              TILE_SRC[src].format(z=z, x=x, y=y), TILE_MAX_AGE)
+            self._bytes(data, "image/png", "public, max-age=604800")
+        elif path == "/api/commlog.csv":
+            body = STATION.commlog_csv().encode("utf-8-sig")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="tradewind-ics309-{time.strftime("%Y%m%d-%H%M")}.csv"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/api/chat":
             self._json(STATION.chat.state() if STATION.chat else {"seq": 0, "peers": [], "events": [], "off": True})
         elif path == "/api/freqs":
@@ -825,6 +1185,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "errors": ["Unknown bulletin type."]})
             threading.Thread(target=STATION.send_wx, args=(kind,), daemon=True).start()
             self._json({"ok": True})
+        elif path == "/api/comkey":
+            b = self._body()
+            try:
+                fp = STATION.set_com_key(str(b.get("net") or ""), str(b.get("passphrase") or ""))
+            except ValueError as e:
+                return self._json({"ok": False, "errors": [str(e)]})
+            self._json({"ok": True, "fp": fp})
         elif path == "/api/chat":
             if not (STATION.running and STATION.chat):
                 return self._json({"ok": False, "errors": ["Turn the station ON first."]})
@@ -832,7 +1199,16 @@ class Handler(BaseHTTPRequestHandler):
             act, call = b.get("action"), str(b.get("call") or "")
             try:
                 if act == "hail":
-                    STATION.chat.hail(call, b.get("route") or "rf")
+                    tries = b.get("tries")
+                    STATION.chat.hail(call, b.get("route") or "rf",
+                                      tries=int(tries) if str(tries).isdigit() else None,
+                                      interval=int(b["interval"]) if str(b.get("interval", "")).isdigit() else None,
+                                      forever=tries == "forever")
+                elif act == "probe":
+                    STATION.chat.probe(call)
+                elif act == "relay":
+                    STATION.chat.relay(b.get("relay") or "", b.get("dest") or "", str(b.get("text") or ""),
+                                       b.get("route") or None)
                 elif act in ("accept", "decline", "end", "read"):
                     getattr(STATION.chat, "mark_read" if act == "read" else act)(call)
                 elif act == "send":

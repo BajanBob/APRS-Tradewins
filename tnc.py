@@ -433,15 +433,16 @@ class SoundModemTNC(BaseTNC):
 
     def __init__(self, in_dev=None, out_dev=None, rate=48000, ptt=None,
                  txdelay=300, txtail=50, level=0.5, busy_hold=1.5,
-                 tune_hz=None, cat_restore=True):
+                 tune_hz=None, cat_restore=True, modem="1200"):
         super().__init__()
+        self.modem = modem if (modem in afsk.PROFILES or modem == "robust") else "1200"
         self.in_dev, self.out_dev, self.rate = in_dev, out_dev, int(rate)
         self.ptt = ptt or PTT()
         self.txdelay, self.txtail, self.level = txdelay, txtail, level
         self.busy_hold = busy_hold
         self.audio_level = 0.0
         self.txq = queue.Queue()
-        self.demod = afsk.Demodulator(self.rate)
+        self.demod = afsk.RobustDemodulator(self.rate) if self.modem == "robust" else afsk.Demodulator(self.rate, self.modem)
         self.tune_hz, self.cat_restore = tune_hz, cat_restore
         self.cat_saved = None
         self.cat_status = ""       # shown on the face plate
@@ -502,7 +503,10 @@ class SoundModemTNC(BaseTNC):
                     if self.tx_active:
                         continue  # don't decode our own transmission
                     for fr in self.demod.process(chunk):
-                        self._heard(fr)
+                        if self.modem == "robust":
+                            self._heard_text(fr)
+                        else:
+                            self._heard(fr)
         except Exception as e:
             self.error = f"audio input: {e}"
 
@@ -517,7 +521,12 @@ class SoundModemTNC(BaseTNC):
             t0 = time.time()
             while time.time() - self.last_rx < self.busy_hold and time.time() - t0 < 10:
                 time.sleep(0.2)
-            audio = afsk.modulate(frame, self.rate, self.txdelay, self.txtail, self.level)
+            if self.modem == "robust":
+                np = afsk.np
+                audio = np.concatenate([np.zeros(int(self.rate * self.txdelay / 1000), dtype=np.float32),
+                                        afsk.robust_modulate(frame, self.rate, self.level, lead_ms=50)])
+            else:
+                audio = afsk.modulate(frame, self.rate, self.txdelay, self.txtail, self.level, self.modem)
             try:
                 self.tx_active = True
                 self.ptt.key(True)
@@ -533,7 +542,23 @@ class SoundModemTNC(BaseTNC):
             time.sleep(0.5)
 
     def send(self, src, dst, path, info):
-        self.txq.put(afsk.encode_ax25(src, dst, path, info))
+        if self.modem == "robust":         # robust frames carry the text line itself (no digipeating on HF)
+            self.txq.put(f"{src}>{dst}:{info}".encode("latin-1", "replace"))
+        else:
+            self.txq.put(afsk.encode_ax25(src, dst, path, info))
+
+    def _heard_text(self, payload):
+        try:
+            line = payload.decode("latin-1")
+        except Exception:
+            return
+        head = line.partition(":")[0]
+        if ">" not in head or not head.split(">")[0]:
+            return
+        self.rx_count += 1
+        self.last_rx = time.time()
+        if self.on_packet:
+            self.on_packet(line)
 
     def stop(self):
         super().stop()
@@ -546,7 +571,9 @@ class SoundModemTNC(BaseTNC):
     @property
     def status(self):
         d = super().status
-        d.update(audio_level=round(self.audio_level, 4), ptt=self.ptt.name,
+        snr = getattr(self.demod, "last_snr", None)
+        d.update(audio_level=round(self.audio_level, 4), ptt=self.ptt.name, modem=self.modem,
+                 snr=round(snr, 1) if snr is not None else None,
                  cat=self.cat_status, freq=self.tune_hz)
         return d
 
@@ -665,8 +692,10 @@ def make_tnc(cfg):
                              cfg.get("sample_rate", 48000), make_ptt(cfg),
                              cfg.get("txdelay", 300), cfg.get("txtail", 50),
                              cfg.get("tx_level", 0.5),
-                             tune_hz=aprs_freq_hz(cfg) if cfg.get("cat_tune") else None,
-                             cat_restore=cfg.get("cat_restore", True))
+                             tune_hz=(com_freq_hz(cfg) if cfg.get("op_mode") == "commercial" else aprs_freq_hz(cfg))
+                             if cfg.get("cat_tune") else None,
+                             cat_restore=cfg.get("cat_restore", True),
+                             modem=str(cfg.get("modem") or "1200"))
     if mode == "kiss_tcp":
         host, _, port = (cfg.get("kiss_addr") or "127.0.0.1:8001").partition(":")
         return KissTcpTNC(host, port or 8001)
@@ -869,6 +898,93 @@ def split_text(text):
     return out
 
 
+def route_from_via(via):
+    """Reply the way a packet arrived: 'RF' -> radio link A, 'RF:B' -> link B, 'IS' -> internet."""
+    v = (via or "").upper()
+    if v.startswith("RF:"):
+        return "link:" + v[3:]
+    return "rf" if v == "RF" else "is"
+
+
+class LinkController:
+    """Automatic link selection between radio paths (e.g. A = 2m 1200 AFSK on the
+    built-in modem, B = 70cm 9600 G3RUH through Direwolf).
+
+    For each station it keeps, per link: messages sent, delivered (acked),
+    lost tries, round-trip time and measured throughput. It sends on the link
+    with the best expected goodput (delivery rate x speed / delay), steps back
+    to a slower link when errors increase, and retries the faster link again
+    after a rest so the link can step back up when conditions improve.
+    """
+    FAIL_STREAK = 2          # lost tries in a row before falling back
+    REST_S = 600             # after a fallback, try the faster link again after this long
+
+    def __init__(self, links, now=time.time):
+        self.links = dict(links)          # id -> {"name": str, "speed": bps}
+        self.now = now
+        self.stats = {}                   # (peer, link) -> dict
+
+    def _st(self, peer, link):
+        return self.stats.setdefault((peer, link), {"sent": 0, "ok": 0, "lost": 0, "streak": 0, "rtt": None,
+                                                    "tput": None, "last_fail": 0, "last_ok": 0, "heard": 0})
+
+    def sent(self, peer, link):
+        if link in self.links:
+            self._st(peer, link)["sent"] += 1
+
+    def lost(self, peer, link):
+        if link in self.links:
+            st = self._st(peer, link)
+            st["lost"] += 1
+            st["streak"] += 1
+            st["last_fail"] = self.now()
+
+    def acked(self, peer, link, rtt, nbytes):
+        if link not in self.links:
+            return
+        st = self._st(peer, link)
+        st["ok"] += 1
+        st["streak"] = 0
+        st["last_ok"] = self.now()
+        rtt = max(0.05, float(rtt))
+        st["rtt"] = rtt if st["rtt"] is None else 0.7 * st["rtt"] + 0.3 * rtt
+        tp = nbytes / rtt
+        st["tput"] = tp if st["tput"] is None else 0.7 * st["tput"] + 0.3 * tp
+
+    def heard(self, peer, link):
+        if link in self.links:
+            self._st(peer, link)["heard"] = self.now()
+
+    def score(self, peer, link):
+        st, speed = self._st(peer, link), self.links[link].get("speed") or 1200
+        tries = st["ok"] + st["lost"]
+        success = (st["ok"] + 1) / (tries + 2)          # optimistic start, learns quickly
+        if st["heard"] and not tries:
+            success = 0.8                                # they reached us on this link
+        delay = st["rtt"] if st["rtt"] else 1.0 + 8000.0 / speed
+        s = success * speed / (1.0 + delay)
+        if st["streak"] >= self.FAIL_STREAK and self.now() - st["last_fail"] < self.REST_S:
+            s *= 0.02                                    # fall back while this link is failing
+        return s
+
+    def choose(self, peer):
+        if not self.links:
+            return None
+        return max(self.links, key=lambda l: (self.score(peer, l), self.links[l].get("speed") or 0))
+
+    def summary(self, peer):
+        best = self.choose(peer)
+        out = []
+        for l, info in sorted(self.links.items()):
+            st = self._st(peer, l)
+            out.append({"link": l, "name": info.get("name", l), "speed": info.get("speed"),
+                        "sent": st["sent"], "ok": st["ok"], "lost": st["lost"],
+                        "rtt": round(st["rtt"], 1) if st["rtt"] else None,
+                        "tput": round(st["tput"]) if st["tput"] else None,
+                        "failing": st["streak"] >= self.FAIL_STREAK, "best": l == best})
+        return out
+
+
 class ChatManager:
     """send_fn(addressee, info_field, route) transmits one APRS message.
     route: 'rf' (RF only), 'rf_is' (RF and APRS-IS) or 'is' (APRS-IS only)."""
@@ -884,6 +1000,13 @@ class ChatManager:
         self.counter = 0
         self.seq = 0             # bumps on every change (face plate polling)
         self.events = []         # recent events for alerts: dict(seq, kind, call, text)
+        self.on_log = None       # callback(direction, peer, text, via) for the comms log
+        self.links = None        # LinkController when more than one radio path is set up
+        self.retry = RETRY_S     # resend delays (longer for the slow HF robust mode)
+        self.store_forward = True  # keep undelivered messages; resend when the station is heard again
+        self.outbox = []         # undelivered messages waiting for the station to reappear
+        self.relay_enabled = False # pass "RELAY <call> <text>" messages on for other stations
+        self.roster = {}         # check-in net: call -> latest CHECKIN report
 
     # ---- helpers
     def _peer(self, call):
@@ -908,6 +1031,11 @@ class ChatManager:
     def _log(self, p, direction, text, **kw):
         m = {"dir": direction, "text": text, "t": self.now()}
         m.update(kw)
+        if direction in ("in", "out") and self.on_log:
+            try:
+                self.on_log(direction, p["call"], text, kw.get("via") or kw.get("route", ""))
+            except Exception:
+                pass
         p["messages"].append(m)
         del p["messages"][:-200]
         self.seq += 1
@@ -917,13 +1045,15 @@ class ChatManager:
         self.counter = self.counter % 999 + 1
         return str(self.counter)
 
-    def _send(self, p, text, show=True, kind="chat"):
-        """Send one numbered message (retried until acked)."""
+    def _send(self, p, text, show=True, kind="chat", delays=None, forever=False):
+        """Send one numbered message (retried until acked).
+        delays: seconds between tries (default RETRY_S); forever: keep the last delay until acked."""
         no = self._next_no()
         entry = self._log(p, "out", text, state="sending", no=no, kind=kind, route=p["route"]) if show else \
             {"state": "sending", "no": no, "text": text}
         self.pending[no] = {"call": p["call"], "text": text, "route": p["route"], "tries": 0,
-                            "next": 0, "entry": entry}
+                            "next": 0, "entry": entry, "delays": list(delays or self.retry), "forever": forever,
+                            "kind": kind}
         self._transmit(no)
         return entry
 
@@ -931,16 +1061,36 @@ class ChatManager:
         o = self.pending.get(no)
         if not o:
             return
+        if o.get("link") and self.links:
+            self.links.lost(o["call"], o["link"])       # the previous try was not acked
         try:
-            self.send_fn(o["call"], format_message(o["call"], o["text"], no), o["route"])
+            link = self.send_fn(o["call"], format_message(o["call"], o["text"], no), o["route"])
             o["entry"]["error"] = ""
+            o["link"], o["t"] = (link if isinstance(link, str) else None), self.now()
+            if o["link"]:
+                o["entry"]["link"] = o["link"]
+                if self.links:
+                    self.links.sent(o["call"], o["link"])
         except Exception as e:
             o["entry"]["error"] = str(e)
+            o["link"] = None
         o["tries"] += 1
-        delay = RETRY_S[o["tries"] - 1] if o["tries"] <= len(RETRY_S) else None
+        o["entry"]["tries"] = o["tries"]
+        delays = o.get("delays") or RETRY_S
+        delay = delays[o["tries"] - 1] if o["tries"] <= len(delays) else (delays[-1] if o.get("forever") else None)
         if delay is None:
-            o["entry"]["state"] = "failed"
             self.pending.pop(no, None)
+            if self.store_forward and o.get("kind") in ("chat", "relay") and not o.get("probe"):
+                o["entry"]["state"] = "queued"          # store and forward: resend when they are heard
+                self.outbox.append({"call": o["call"], "text": o["text"], "entry": o["entry"], "t": self.now(),
+                                    "kind": o.get("kind"), "orig": o.get("orig")})
+                del self.outbox[:-200]
+            else:
+                o["entry"]["state"] = "failed"
+            if o.get("probe"):
+                self._log(self._peer(o["call"]), "sys", f"Probe on link {o['probe']}: no reply")
+            elif o.get("link") and self.links:
+                self.links.lost(o["call"], o["link"])
             self.seq += 1
         else:
             o["next"] = self.now() + delay
@@ -952,15 +1102,30 @@ class ChatManager:
             pass
 
     # ---- user actions
-    def hail(self, call, route="rf"):
+    def hail(self, call, route="rf", tries=None, interval=None, forever=False):
+        """Call a station. tries: how many times to send the call (default 4),
+        interval: seconds between calls, forever: keep calling until it is received."""
         call = norm_call(call)
         if not valid_call(call) or call == self.mycall:
             raise ValueError("Enter the other station's callsign, e.g. 8P6XX-9")
         with self.lock:
             p = self._peer(call)
-            p["route"] = route if route in ("rf", "rf_is", "is") else "rf"
-            self._set(p, HAILING, f"Calling {call} via {self.route_name(p['route'])}...")
-            self._send(p, f"{T_REQ} {self.mycall} asks to chat. Reply ACCEPT or DECLINE", kind="hs")
+            p["route"] = route if (route in ("rf", "rf_is", "is", "auto") or str(route).startswith("link:")) else "rf"
+            for o in [o for o in self.pending.values() if o["call"] == call and o["text"].startswith(T_REQ)]:
+                o["entry"]["state"] = "cancelled"            # replace an earlier call to the same station
+            self.pending = {n: o for n, o in self.pending.items() if o["entry"].get("state") != "cancelled"}
+            delays = None
+            tries = tries if isinstance(tries, int) else None
+            if interval or tries or forever:
+                iv = max(15, int(interval or 60))
+                delays = [iv] * max(0, int(tries or 4) - 1)
+                if forever:
+                    delays = delays or [iv]
+            p["forever"] = bool(forever)
+            how = "until it is received" if forever else f"{int(tries or 4)} times" if delays is not None else ""
+            self._set(p, HAILING, f"Calling {call} via {self.route_name(p['route'])}" + (f", {how}" if how else "") + "...")
+            self._send(p, f"{T_REQ} {self.mycall} asks to chat. Reply ACCEPT or DECLINE", kind="hs",
+                       delays=delays, forever=bool(forever))
 
     def accept(self, call):
         with self.lock:
@@ -984,6 +1149,10 @@ class ChatManager:
     def end(self, call):
         with self.lock:
             p = self._peer(call)
+            for n in [n for n, o in self.pending.items() if o["call"] == p["call"]]:
+                self.pending[n]["entry"]["state"] = "cancelled"
+                del self.pending[n]
+            p["forever"] = False
             if p["status"] in (OPEN, HAILING, ACCEPTED, AWAIT_CONFIRM):
                 self._send(p, f"{T_END} 73 de {self.mycall}", kind="hs")
             self._set(p, ENDED, "Link ended")
@@ -999,6 +1168,53 @@ class ChatManager:
             for part in parts:
                 self._send(p, part)
             p["unread"] = 0
+
+    def relay(self, relay_call, dest, text, route=None):
+        """Ask another Tradewind station to pass a message on to a station you cannot reach."""
+        relay_call, dest = norm_call(relay_call), norm_call(dest)
+        if not (valid_call(relay_call) and valid_call(dest)):
+            raise ValueError("Enter the relay station's callsign and the final destination.")
+        with self.lock:
+            p = self._peer(relay_call)
+            p["direct"] = True
+            if route:
+                p["route"] = route
+            room = MAX_TEXT - len(f"RELAY {dest} ")
+            for part in split_text(text):
+                for chunk in [part[i:i + room] for i in range(0, len(part), room)]:
+                    self._send(p, f"RELAY {dest} {chunk}")
+
+    def on_heard(self, call):
+        """A station was heard again: resend anything stored for it."""
+        call = norm_call(call)
+        due = [o for o in self.outbox if o["call"] == call and self.now() - o["t"] > 20]
+        if not due:
+            return
+        with self.lock:
+            self.outbox = [o for o in self.outbox if o not in due]
+            p = self._peer(call)
+            self._log(p, "sys", f"{call} heard again - resending {len(due)} stored message{'s' if len(due) > 1 else ''}")
+            for o in due:
+                no = self._next_no()
+                o["entry"].update(state="sending", no=no)
+                self.pending[no] = {"call": call, "text": o["text"], "route": p["route"], "tries": 0, "next": 0,
+                                    "entry": o["entry"], "delays": list(self.retry), "forever": False,
+                                    "kind": o.get("kind") or "chat", "orig": o.get("orig")}
+                self._transmit(no)
+
+    def probe(self, call):
+        """Send a short test message on every radio link and time the replies."""
+        if not self.links or not self.links.links:
+            raise ValueError("Probing needs two radio links: set up the second link under MENU > RADIO / TNC.")
+        with self.lock:
+            p = self._peer(call)
+            self._log(p, "sys", "Probing each radio link...")
+            for l in sorted(self.links.links):
+                no = self._next_no()
+                entry = {"state": "sending", "no": no, "text": "probe"}
+                self.pending[no] = {"call": p["call"], "text": f"TW-PROBE {l}", "route": f"link:{l}", "tries": 0,
+                                    "next": 0, "entry": entry, "delays": [20], "forever": False, "probe": l}
+                self._transmit(no)
 
     def mark_read(self, call):
         with self.lock:
@@ -1016,7 +1232,16 @@ class ChatManager:
                 no = m["ack"] or m["rej"]
                 o = self.pending.pop(no, None)
                 if o and o["call"] == m["src"]:
+                    if self.links and o.get("link"):
+                        self.links.acked(o["call"], o["link"], self.now() - o.get("t", self.now()), len(o["text"]) + 30)
+                    if o.get("probe"):
+                        rtt = self.now() - o.get("t", self.now())
+                        info = (self.links.links.get(o["probe"], {}) if self.links else {})
+                        self._log(self._peer(m["src"]), "sys", f"Probe on link {o['probe']} ({info.get('name', '')}): "
+                                  f"reply in {rtt:.1f} s via {via}")
                     o["entry"]["state"] = "delivered" if m["ack"] else "rejected"
+                    if o.get("kind") == "relay" and o.get("orig") and m["ack"]:
+                        self._send(self._peer(o["orig"]), f"RELAY OK delivered to {o['call']}", show=False, kind="sys")
                     o["entry"]["via"] = via
                     self._peer(m["src"])["via"] = via
                     self._on_delivered(o)
@@ -1025,7 +1250,9 @@ class ChatManager:
             p = self._peer(m["src"])
             p["via"] = via
             if m["msgno"]:      # ack the way it arrived, so the ack can get back
-                self._ack(m["src"], m["msgno"], "rf" if via == "RF" else "is")
+                self._ack(m["src"], m["msgno"], route_from_via(via))
+                if self.links and via.upper().startswith("RF"):
+                    self.links.heard(m["src"], via.split(":")[1] if ":" in via else "A")
                 key = (m["src"], m["msgno"])
                 now = self.now()
                 for k in [k for k, t in self.seen.items() if now - t > 1800]:
@@ -1043,10 +1270,43 @@ class ChatManager:
 
     def _handle_text(self, p, text, via):
         up = text.upper()
+        if up.startswith("TW-PROBE"):
+            return                                   # link test: the ack is the answer
+        if up.startswith("CHECKIN"):
+            r = self.roster.get(p["call"]) or {"call": p["call"], "parts": {}}
+            m = re.match(r"CHECKIN\s+(\S+)\s+(\d+)/(\d+)\s*(.*)", text, re.I)
+            if m:
+                if r.get("dtg") != m.group(1):
+                    r = {"call": p["call"], "parts": {}, "dtg": m.group(1)}
+                r["parts"][m.group(2)] = m.group(4)
+                r["text"] = " ".join(r["parts"][k] for k in sorted(r["parts"], key=int))
+            else:
+                r["text"] = text[7:].strip()
+            r["t"] = self.now()
+            st = (r["text"].split(".")[0] or "").strip()
+            r["status"] = st if st in ("Safe", "Need help", "Emergency", "Evacuated") else r.get("status", "")
+            self.roster[p["call"]] = r
+            self.seq += 1
+        if up.startswith("RELAY OK"):
+            self._log(p, "sys", text)
+            return
+        if up.startswith("RELAY ") and self.relay_enabled:
+            parts = text.split(None, 2)
+            if len(parts) == 3 and valid_call(parts[1]):
+                dest, body = norm_call(parts[1]), parts[2]
+                q = self._peer(dest)
+                if q["route"] == "auto" and not self.links:
+                    q["route"] = "rf"
+                self._log(p, "sys", f"Relaying a message from {p['call']} to {dest}")
+                for part in split_text(f"{body} [de {p['call']} via {self.mycall}]"):
+                    e = self._send(q, part, kind="relay")
+                    self.pending[e["no"]]["orig"] = p["call"]
+                self._event("relay", p["call"], f"Relaying {p['call']} -> {dest}")
+                return
         word = up.strip(" .!").split(" ")[0] if up else ""
         if up.startswith(T_REQ):
             if p["status"] != OPEN:
-                p["route"] = "rf" if via == "RF" else "is"
+                p["route"] = route_from_via(via)
                 self._set(p, INCOMING, f"{p['call']} wants to chat (heard via {via})")
                 self._event("request", p["call"], f"{p['call']} wants to chat - Accept or Decline")
             return
@@ -1072,7 +1332,7 @@ class ChatManager:
         if p["status"] != OPEN:
             p["direct"] = True      # a plain APRS message (e.g. from APRSdroid): allow replies
             if p["status"] == IDLE:
-                p["route"] = "rf" if via == "RF" else "is"
+                p["route"] = route_from_via(via)
         p["unread"] += 1
         self._event("message", p["call"], f"{p['call']}: {text}")
 
@@ -1080,24 +1340,167 @@ class ChatManager:
     def tick(self):
         now = self.now()
         with self.lock:
+            for o in [o for o in self.outbox if now - o["t"] > 86400]:
+                o["entry"]["state"] = "failed"
+                self.outbox.remove(o)
             for no, o in list(self.pending.items()):
                 if now >= o["next"]:
                     self._transmit(no)
             for p in self.peers.values():
+                if p["status"] == HAILING and p.get("forever"):
+                    continue                                   # "keep calling" never expires
                 if p["status"] in (HAILING, AWAIT_CONFIRM, INCOMING, ACCEPTED) and now - p["since"] > LINK_TIMEOUT_S:
                     self._set(p, EXPIRED, "No answer - link request expired")
+
+    # ---- save / restore (chat survives a restart or power cut)
+    def to_dict(self):
+        with self.lock:
+            return {"v": 1, "mycall": self.mycall, "counter": self.counter, "roster": self.roster,
+                    "peers": {c: {k: v for k, v in p.items()} for c, p in self.peers.items()}}
+
+    def load(self, d):
+        if not d or norm_call(d.get("mycall")) != self.mycall:
+            return
+        with self.lock:
+            self.counter = int(d.get("counter") or 0)
+            self.roster = d.get("roster") or {}
+            for c, p in (d.get("peers") or {}).items():
+                for m in p.get("messages", []):
+                    if m.get("state") == "sending":
+                        m["state"] = "failed"          # unsent when Tradewind stopped
+                    if m.get("state") == "queued" and m.get("dir") == "out":
+                        self.outbox.append({"call": norm_call(c), "text": m["text"], "entry": m,
+                                            "t": m.get("t", self.now()), "kind": "chat"})
+                if p.get("status") in (HAILING, ACCEPTED, AWAIT_CONFIRM, INCOMING):
+                    p["status"] = EXPIRED
+                p.setdefault("unread", 0)
+                p.setdefault("via", "")
+                self.peers[norm_call(c)] = p
+            self.seq += 1
 
     # ---- face plate
     @staticmethod
     def route_name(r):
-        return {"rf": "RF only", "rf_is": "RF + APRS-IS", "is": "APRS-IS only"}.get(r, r)
+        if str(r).startswith("link:"):
+            return "radio link " + r[5:]
+        return {"rf": "RF only", "rf_is": "RF + APRS-IS", "is": "APRS-IS only", "auto": "Auto (best radio link)"}.get(r, r)
 
     def state(self):
         with self.lock:
             peers = sorted(self.peers.values(), key=lambda p: -max([p["since"]] + [m["t"] for m in p["messages"]]))
             return {"seq": self.seq, "mycall": self.mycall, "events": list(self.events),
+                    "outbox": len(self.outbox), "relay": self.relay_enabled,
+                    "roster": sorted(({k: v for k, v in r.items() if k != "parts"} for r in self.roster.values()),
+                                     key=lambda r: -r.get("t", 0)),
                     "peers": [{"call": p["call"], "status": p["status"], "status_text": STATUS_TEXT[p["status"]],
                                "route": p["route"], "via": p["via"], "unread": p["unread"],
                                "can_send": p["status"] == OPEN or bool(p.get("direct")),
+                               "forever": bool(p.get("forever")),
+                               "links": self.links.summary(p["call"]) if self.links else [],
                                "messages": [{k: v for k, v in m.items() if k != "kind"} for m in p["messages"][-100:]]}
                               for p in peers]}
+
+
+# --------------------------------------------------------------------------
+# Commercial / EmComm mode: encrypted chat on licensed 148-174 MHz channels
+# --------------------------------------------------------------------------
+# NOT for amateur bands - amateur rules forbid encryption. The station
+# identifier travels in clear in the AX.25 header and in periodic ID frames;
+# only the message content is encrypted.
+#
+# Cipher: AES-256-GCM (authenticated). Key: 256 bits derived from the
+# network passphrase with scrypt (salt = network name). Each frame carries a
+# fresh 96-bit nonce; the sender's ID is bound in as associated data, and a
+# timestamp + nonce cache stops replays.
+
+COM_BAND_HZ = (148_000_000, 174_000_000)
+SEC_DEST = "TWSEC"          # AX.25 destination of encrypted frames
+SEC_TAG = "}TWE1:"          # info-field prefix (version 1)
+SEC_MAX_AGE_S = 600         # frames older / newer than this are refused
+
+
+def crypto_available():
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
+        return ""
+    except Exception as e:  # not installed (e.g. the Android build)
+        return f"encryption library missing ({e.__class__.__name__}) - commercial mode needs the Windows/PC version"
+
+
+def derive_key(net, passphrase):
+    """256-bit network key from the passphrase (scrypt, salt = network name)."""
+    import hashlib
+    net, passphrase = (net or "").strip(), passphrase or ""
+    if len(passphrase) < 12:
+        raise ValueError("Use a passphrase of at least 12 characters (longer is better).")
+    if not net:
+        raise ValueError("Give the network a name (every unit must use the same name).")
+    return hashlib.scrypt(passphrase.encode(), salt=b"tradewind-net-v1:" + net.upper().encode(),
+                          n=2 ** 15, r=8, p=1, dklen=32, maxmem=64 * 1024 * 1024)
+
+
+def key_fingerprint(key):
+    """Short code that units compare by voice to confirm they hold the same key."""
+    import hashlib
+    h = hashlib.sha256(b"tradewind-fp" + key).hexdigest().upper()
+    return "-".join(h[i:i + 4] for i in range(0, 16, 4))
+
+
+def com_freq_hz(cfg):
+    try:
+        hz = int(round(float(str(cfg.get("com_freq") or "").replace(",", ".")) * 1e6))
+    except ValueError:
+        return None
+    return hz if COM_BAND_HZ[0] <= hz <= COM_BAND_HZ[1] else None
+
+
+class SecureLink:
+    def __init__(self, key, now=time.time):
+        if len(key) != 32:
+            raise ValueError("network key must be 256 bits")
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        self.aead = AESGCM(key)
+        self.now = now
+        self.seen = {}          # nonce -> time (replay cache)
+
+    def seal(self, src, info):
+        import base64
+        nonce = os.urandom(12)
+        plain = f"{int(self.now())}|{info}".encode("utf-8")
+        ct = self.aead.encrypt(nonce, plain, src.upper().encode())
+        return SEC_TAG + base64.b64encode(nonce + ct).decode()
+
+    def open(self, src, info):
+        """Encrypted info field -> plaintext, or None if forged, wrong key or replayed."""
+        import base64
+        if not info.startswith(SEC_TAG):
+            return None
+        try:
+            raw = base64.b64decode(info[len(SEC_TAG):], validate=True)
+            nonce, ct = raw[:12], raw[12:]
+            plain = self.aead.decrypt(nonce, ct, src.upper().encode()).decode("utf-8")
+            ts, _, body = plain.partition("|")
+            ts = int(ts)
+        except Exception:
+            return None
+        now = self.now()
+        if abs(now - ts) > SEC_MAX_AGE_S or nonce in self.seen:
+            return None
+        for n in [n for n, t in self.seen.items() if now - t > 2 * SEC_MAX_AGE_S]:
+            del self.seen[n]
+        self.seen[nonce] = now
+        return body
+
+
+def seal_close(key, data: bytes) -> bytes:
+    """Encrypt data at rest (AES-256-GCM) - used for saved commercial chats."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    nonce = os.urandom(12)
+    return b"TWS1" + nonce + AESGCM(key).encrypt(nonce, data, b"tradewind-store")
+
+
+def seal_open(key, blob: bytes) -> bytes:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    if not blob.startswith(b"TWS1"):
+        raise ValueError("not an encrypted Tradewind store")
+    return AESGCM(key).decrypt(blob[4:16], blob[16:], b"tradewind-store")

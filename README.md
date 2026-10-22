@@ -214,6 +214,27 @@ The **FORMS** button in the chat sends short structured reports, styled on Winli
 
 Each form becomes one or more numbered messages of up to 67 characters, e.g. `WXOBS 201225L 1/3 Ocean City, St Philip. Wind ENE 35 G50kt...`. Each message is acknowledged like any other chat message.
 
+## New in v3.4: QSY, automatic chat channels and reply-acks
+
+A chat on the APRS frequency shares airtime with every beacon. One message and its acknowledgement take about 1.7 s direct, or about 3.5 s through a digipeater, so a lively chat can use 12-25% of the channel. Long chats should move.
+
+- **144.390 for the handshake, then QSY:** in an open chat, tap QSY ("Auto - first free" is the default). The other station gets Move / Stay. Both radios retune by CAT; without CAT, Tradewind tells you what to set. No contact on the new channel within 2 minutes means both go back to APRS automatically. **Back to APRS** or **End link** returns both stations.
+- **Automatic free channel:** every QSY agreement is sent on 144.390, so every Tradewind station hears which channels other pairs have taken and offers the first free one. A channel frees up when that pair returns or ends, or after 30 minutes.
+- **Reply-acks (APRS 1.1):** between stations that support it, Tradewind waits up to 8 s before acknowledging; if you reply in that time, the acknowledgement rides inside your reply instead of a separate packet.
+- **Direct path:** chat with a station heard directly in the last 30 minutes, or on a chat channel, is sent with no digipeater path, which halves its airtime.
+- While moved, your beacons and RF alerts pause (APRS-IS still works). After 5 messages on the APRS frequency, Tradewind suggests a QSY.
+
+**Chat channels (default, in the order offered), 20 kHz apart:**
+
+| Channels (MHz) | IARU Region 2 band plan | Note |
+| --- | --- | --- |
+| 144.510, 144.530, 144.550, 144.570, 144.590 | 144.500-144.600 local option | Confirm with your national society |
+| 145.030, 145.050, 145.070, 145.090 | 145.000-145.100 data (10 kHz channels, 12 kHz max) | 145.010 skipped: protected for Caribbean APRS |
+
+A 1200-baud FM packet signal is about 10-12 kHz wide, so channels sit 20 kHz apart to avoid adjacent-channel interference. Tradewind refuses chat channels in the weak-signal segment (144.000-144.400), the beacon and ISS segment (144.400-144.500), on 145.010 and on satellite frequencies. Change the list under MENU > STATION.
+
+**Saving airtime:** a shorter TX delay helps every packet. Many modern radios switch fast enough for 150-200 ms instead of 300 ms (MENU > RADIO / TNC); test with a friend before lowering it.
+
 ## New in v3.3
 
 **Linux and Raspberry Pi.** Download `Tradewind-linux.tar.gz` from Releases, unpack it, and run `bash install_linux.sh` in the folder. Add `--sdr` for the RTL-SDR tools, and `--service` to start Tradewind at power-on on a headless Pi, which you then use from your phone at `http://<pi-address>:8073`.

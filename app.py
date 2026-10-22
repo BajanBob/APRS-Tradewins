@@ -32,7 +32,7 @@ import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.3"
+APP_VERSION = "3.4"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -116,7 +116,8 @@ DEFAULTS = {
     "link2_tnc": "kiss_tcp", "link2_addr": "127.0.0.1:8002", "link2_serial": "", "link2_baud": 9600,
     # Phase 4: off-grid / disaster features
     "store_forward": True, "relay_enabled": False,
-    "block_list": "",            # callsigns whose hails and messages are ignored
+    "block_list": "",
+    "qsy_freqs": "144.510,144.530,144.550,144.570,144.590,145.030,145.050,145.070,145.090",   # chat channels, 20 kHz apart            # callsigns whose hails and messages are ignored
     "pin_hash": "", "pin_salt": "", "lock_settings": False,   # station PIN (v3.2)
     "kiss_addr": "127.0.0.1:8001", "kiss_serial": "", "kiss_baud": 9600,
     "rf_announce": True, "rf_path": "WIDE2-1", "rf_when": "always", "rf_modes": ["TEP"],
@@ -343,6 +344,8 @@ def load_config():
         cfg["beacon_min"] = max(BEACON_MIN_MIN, int(cfg.get("beacon_min") or 30))
     except (TypeError, ValueError):
         cfg["interval"], cfg["beacon_min"] = 10, 30
+    if cfg.get("qsy_freqs") == "145.030,145.050,145.070,145.090":
+        cfg["qsy_freqs"] = DEFAULTS["qsy_freqs"]      # v3.4: 144.5 MHz channels added first
     cfg["cfg_ver"] = 3
     return cfg
 
@@ -410,6 +413,9 @@ def validate(cfg):
     call = cfg.get("call", "").upper().strip()
     if not CALL_RE.match(call) or call.split("-")[0] in ("N0CALL", "NOCALL", "MYCALL", "CALL", "TEST", "AB1CD"):
         errs.append("Enter your own callsign (with optional -SSID, e.g. 8P6XX-10).")
+    bad = [f.strip() for f in str(cfg.get("qsy_freqs") or "").split(",") if f.strip() and not tncmod.qsy_freq_ok(f.strip())]
+    if bad:
+        errs.append(f"Chat (QSY) frequencies must be in 2 m or 70 cm, away from APRS, 145.010 and satellites: {', '.join(bad)}")
     perr = check_path(cfg.get("rf_path"))
     if perr:
         errs.append(perr)
@@ -482,6 +488,7 @@ class Station:
         self.prop_off = False
         self.heard = {}               # callsign -> stations heard on RF (works with no internet)
         self.kiss_srv = None          # KISS TCP server for other APRS apps
+        self.qsy_hz = None            # set while a chat has moved off the APRS frequency
         self.igate_tx_times = collections.deque()
         self.igate_seen = {}          # (src, info) -> last gated, to skip duplicates
         self.tw_users = load_tw_users()   # Tradewind stations heard: call -> {first, last, via}
@@ -890,8 +897,8 @@ class Station:
 
     def rf_live(self, mode=None):
         """Is RF transmission switched on right now (for this message's mode)?"""
-        if not self.rf_possible():
-            return False
+        if not self.rf_possible() or self.qsy_hz:
+            return False            # moved to a chat channel: beacons and alerts wait (APRS-IS still works)
         if self.cfg.get("rf_when", "always") == "always":
             return True
         chosen = set(self.cfg.get("rf_modes") or [])
@@ -977,6 +984,11 @@ class Station:
         self.chat.on_tw = lambda call: self._tw_seen(call, "chat")
         self.chat.links = self.linkctl
         robust = self.cfg.get("tnc") == "sound" and self.cfg.get("modem") == "robust"
+        self.chat.on_qsy = None if self.commercial else self._on_qsy   # a licensed commercial channel never moves
+        self.chat.qsy_channels = [f.strip() for f in str(self.cfg.get("qsy_freqs") or "").split(",")
+                                  if tncmod.qsy_freq_ok(f.strip())] or tncmod.QSY_DEFAULT.split(",")
+        self.chat.qsy_delay = 60 if robust else 6
+        self.qsy_hz = None
         self.chat.retry = (90, 150, 240) if robust else tncmod.RETRY_S
         self.commlog = []
         try:
@@ -1091,6 +1103,17 @@ class Station:
             return route[5:]
         return "A" if route in ("rf", "rf_is") else None
 
+    def _on_qsy(self, mhz):
+        """Retune for a chat QSY (mhz) or back to the APRS frequency (None). Beacons and RF alerts pause meanwhile."""
+        self.qsy_hz = int(round(float(mhz) * 1e6)) if mhz else None
+        target = self.qsy_hz or tncmod.aprs_freq_hz(self.cfg)
+        tnc = self.tnc
+        if tnc and hasattr(tnc, "tune") and getattr(getattr(tnc, "ptt", None), "can_tune", False) and target:
+            tnc.tune(target)
+            self.add_log("SYS", f"Radio tuned to {target / 1e6:.3f} MHz for " + ("chat (QSY)" if mhz else "APRS"))
+        else:
+            self.add_log("SYS", f"Set the radio to {target / 1e6:.3f} MHz" if target else "Set the radio back to the APRS frequency")
+
     def _tx_tnc(self):
         """The radio that transmits: the main TNC, or link B when the main one is a receive-only SDR."""
         if isinstance(self.tnc, tncmod.SdrTNC):
@@ -1128,7 +1151,10 @@ class Station:
         c, sent = self.cfg, []
         link = self._pick_link(call, route)
         if link:
-            path = [p.strip() for p in (c.get("rf_path") or "").split(",") if p.strip()]
+            h = self.heard.get(tncmod.norm_call(call))
+            direct = self.qsy_hz or (h and h.get("direct") and time.time() - h["last"] < LOCAL_HEARD_S)
+            # stations that hear each other (or a QSY'd simplex chat) need no digipeater: half the airtime
+            path = [] if direct else [p.strip() for p in (c.get("rf_path") or "").split(",") if p.strip()]
             self._link_send(link, c["call"], eng.TOCALL, path, info)
             sent.append("RF" if link == "A" else f"RF:{link}")
         if route in ("rf_is", "is") and self.isc and self.isc.verified:
@@ -1361,6 +1387,8 @@ class Station:
             "op_mode": "commercial" if self.commercial else c.get("op_mode", "amateur"),
             "heard": sorted(self.heard.values(), key=lambda h: -h["last"])[:40],
             "tw": self.tw_summary(),
+            "qsy_hz": self.qsy_hz,
+            "qsy_freqs": [f.strip() for f in str(c.get("qsy_freqs") or "").split(",") if tncmod.qsy_freq_ok(f.strip())],
             "kiss_clients": len(self.kiss_srv.clients) if self.kiss_srv else None,
             "links": ([{"link": l, **v} for l, v in sorted(self.linkctl.links.items())] if self.linkctl else []),
             "link2": None if not self.tnc2 else {"kind": self.tnc2.kind, "error": self.tnc2.error,
@@ -1621,6 +1649,12 @@ class Handler(BaseHTTPRequestHandler):
                                       tries=int(tries) if str(tries).isdigit() else None,
                                       interval=int(b["interval"]) if str(b.get("interval", "")).isdigit() else None,
                                       forever=tries == "forever")
+                elif act == "qsy":
+                    STATION.chat.qsy(call, str(b.get("freq") or ""))
+                elif act in ("qsy_yes", "qsy_no"):
+                    STATION.chat.qsy_answer(call, act == "qsy_yes")
+                elif act == "qsy_back":
+                    STATION.chat.qsy_back(call)
                 elif act in ("block", "unblock"):
                     STATION.set_block(call, act == "block")
                 elif act == "probe":

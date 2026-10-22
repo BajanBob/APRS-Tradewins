@@ -72,6 +72,8 @@ def main():
     test_chat()
     test_limits()
     test_v33()
+    test_qsy()
+    test_replyack()
     if not tnc.crypto_available():
         test_secure()
     else:
@@ -132,6 +134,7 @@ def test_secure():
     assert u1._peer("RC02")["status"] == tnc.OPEN and u2._peer("RC01")["status"] == tnc.OPEN
     u2.send("RC01", "Road to Oistins blocked, use Highway 7")
     deliver()
+    clock[0] += 9; u1.tick(); deliver()          # held ack released
     assert [m["text"] for m in u1._peer("RC02")["messages"] if m["dir"] == "in"] == ["Road to Oistins blocked, use Highway 7"]
     assert all(m["state"] == "delivered" for m in u2._peer("RC01")["messages"] if m["dir"] == "out")
 
@@ -176,6 +179,7 @@ def test_chat():
     assert a._peer("8P6XX-9")["status"] == chat.OPEN and b._peer("8P5AB-10")["status"] == chat.OPEN
     a.send("8P6XX-9", "Hearing you 5x9 via TEP")
     deliver()
+    clock[0] += 9; b.tick(); deliver()          # no quick reply: the held ack goes on its own
     msgs = b._peer("8P5AB-10")["messages"]
     assert msgs[-1]["dir"] == "in" and msgs[-1]["text"] == "Hearing you 5x9 via TEP"
     out = [x for x in a._peer("8P6XX-9")["messages"] if x["dir"] == "out"]
@@ -187,6 +191,7 @@ def test_chat():
     b.tick()
     deliver()
     assert [x["text"] for x in a._peer("8P6XX-9")["messages"] if x["dir"] == "in"] == ["QSL 73"]
+    clock[0] += 9; a.tick(); deliver()          # held ack released
     assert not b.pending, "retry acked"
     a.end("8P6XX-9")
     deliver()
@@ -481,6 +486,99 @@ def test_v33():
     assert len(sent) == 1, "duplicate not gated twice"
     gate(st, "K4ABC>APDR16,TCPIP*,qAC,T2USA::W1FAR    :not local{1")
     assert len(sent) == 1, "station not heard locally: not gated"
+
+
+def test_qsy():
+    """v3.4: move a chat off the APRS frequency and back; fall back when there is no contact."""
+    clock = [20000.0]
+    now = lambda: clock[0]  # noqa: E731
+    air, tuned = [], {"A": [], "B": []}
+    freq = {"A": "aprs", "B": "aprs"}
+    A = tnc.ChatManager("8P5AB-10", lambda to, info, r: air.append(("A", info)), now)
+    B = tnc.ChatManager("8P6XX-9", lambda to, info, r: air.append(("B", info)), now)
+    def tuner(who):
+        def f(mhz):
+            tuned[who].append(mhz); freq[who] = mhz or "aprs"
+        return f
+    A.on_qsy, B.on_qsy = tuner("A"), tuner("B")
+    def deliver():
+        while air:
+            src, info = air.pop(0)
+            dst, mgr = ("B", B) if src == "A" else ("A", A)
+            if freq[src] == freq[dst]:               # only heard on the same frequency
+                mgr.on_packet(f"{(A if src == 'A' else B).mycall}>APZPRP:{info}", "RF")
+    def run(secs):
+        for _ in range(secs):
+            clock[0] += 1; A.tick(); B.tick(); deliver()
+    A.hail("8P6XX-9"); deliver(); B.accept("8P5AB-10"); deliver(); A.accept("8P6XX-9"); deliver()
+    assert A._peer("8P6XX-9")["status"] == tnc.OPEN
+    for bad in ("144.390", "145.010", "145.900", "146", "abc"):
+        try:
+            A.qsy("8P6XX-9", bad); raise AssertionError(f"{bad} must be refused")
+        except ValueError:
+            pass
+    A.qsy("8P6XX-9", "145.050"); deliver()
+    assert B._peer("8P5AB-10")["qsy"]["state"] == "incoming" and any(e["kind"] == "qsy" for e in B.events)
+    B.qsy_answer("8P5AB-10", True); deliver()
+    run(15)
+    assert tuned["A"] == ["145.050"] and tuned["B"] == ["145.050"], tuned
+    assert A._peer("8P6XX-9")["qsy"]["state"] == "on" and B._peer("8P5AB-10")["qsy"]["state"] == "on"
+    B.send("8P5AB-10", "Much better here"); deliver()
+    assert [m["text"] for m in A._peer("8P6XX-9")["messages"] if m["dir"] == "in"][-1] == "Much better here"
+    A.qsy_back("8P6XX-9"); deliver(); run(10)
+    assert tuned["A"][-1] is None and tuned["B"][-1] is None and A.qsy_active is None and B.qsy_active is None
+    # no contact on the new frequency: both go back on their own
+    B.on_qsy = lambda mhz: tuned["B"].append(mhz)    # B's radio fails to retune (stays on APRS)
+    A.qsy("8P6XX-9", "145.070"); deliver(); B.qsy_answer("8P5AB-10", True); deliver()
+    run(tnc.QSY_WAIT_S + 20)
+    assert tuned["A"][-1] is None and tuned["B"][-1] is None, tuned
+    assert any(e["kind"] == "qsy_fail" for e in A.events + B.events)
+    assert tnc.qsy_freq_ok("145.030") and tnc.qsy_freq_ok("433.010") and not tnc.qsy_freq_ok("144.390")
+    # automatic channel: a third station hears A and B take 144.510 and offers the next free one
+    C = tnc.ChatManager("8P6RR", lambda *x: None, now)
+    assert C.free_channel() == "144.510"
+    C.on_packet("8P6XX-9>APZPRP::8P5AB-10 :TW-QSY-OK 144.510{9}", "RF")
+    assert C.free_channel() == "144.530"
+    C.on_packet("8P5AB-10>APZPRP::8P6XX-9  :TW-LINK END 73{4}", "RF")
+    assert C.free_channel() == "144.510", "freed when they end"
+    for bad in ("144.200", "144.490", "144.390"):
+        assert not tnc.qsy_freq_ok(bad), bad
+
+
+def test_replyack():
+    """v3.4: APRS 1.1 reply-acks - an ack rides inside a quick reply instead of its own packet."""
+    m = tnc.parse_message("8P6XX-9>APZPRP::8P5AB-10 :Roger{7}3")
+    assert m["msgno"] == "7" and m["replyack"] == "3" and m["ra"]
+    assert tnc.parse_message("8P6XX-9>APZPRP::8P5AB-10 :hi{7}")["ra"] and tnc.parse_message("X>Y::8P5AB-10 :hi{7")["ra"] is False
+    assert tnc.format_message("8P6XX-9", "QSL", "12", "5") == ":8P6XX-9  :QSL{12}5"
+    clock = [30000.0]
+    now = lambda: clock[0]  # noqa: E731
+    air = []
+    A = tnc.ChatManager("8P5AB-10", lambda to, info, r: air.append(("8P5AB-10", info)), now)
+    B = tnc.ChatManager("8P6XX-9", lambda to, info, r: air.append(("8P6XX-9", info)), now)
+    def deliver():
+        n = 0
+        while air:
+            src, info = air.pop(0); n += 1
+            for st in (A, B):
+                st.on_packet(f"{src}>APZPRP:{info}", "RF")
+        return n
+    A.hail("8P6XX-9"); deliver(); B.accept("8P5AB-10"); deliver(); A.accept("8P6XX-9"); deliver()
+    clock[0] += 40; A.tick(); B.tick(); deliver()
+    A.send("8P6XX-9", "How copy?")
+    sent = deliver()
+    assert sent == 1, "ack held, not sent yet"
+    clock[0] += 3
+    B.send("8P5AB-10", "5 by 9")                    # quick reply carries the ack
+    sent = deliver()
+    assert [x["state"] for x in A._peer("8P6XX-9")["messages"] if x["dir"] == "out" and x["text"] == "How copy?"] == ["delivered"]
+    clock[0] += 9; A.tick(); B.tick(); sent += deliver()
+    assert sent == 2, f"reply + one ack for it, no separate ack for the first message ({sent} packets)"
+    # no reply in time: the ack goes on its own after 8 s
+    clock[0] += 31; A.tick(); B.tick(); deliver()    # respect the 30 s gap between messages
+    A.send("8P6XX-9", "73"); deliver()
+    clock[0] += 9; B.tick(); deliver()
+    assert [x["state"] for x in A._peer("8P6XX-9")["messages"] if x["text"] == "73"] == ["delivered"]
 
 
 class FakeIcom:

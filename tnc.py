@@ -1108,6 +1108,29 @@ CHAT_CALL_RE = re.compile(r"^[A-Z0-9]{1,6}(-([0-9]|1[0-5]))?$")
 T_REQ, T_OK, T_CONF, T_NO, T_END = "TW-LINK?", "TW-LINK OK", "TW-LINK CONFIRMED", "TW-LINK NO", "TW-LINK END"
 
 # link states
+T_QSY, T_QSY_OK, T_QSY_NO, T_QSY_CHK, T_QSY_BACK = "TW-QSY", "TW-QSY-OK", "TW-QSY-NO", "TW-QSY-CHECK", "TW-QSY-BACK"
+QSY_WAIT_S = 120          # no contact on the new frequency within this time: both go back
+QSY_SUGGEST_AFTER = 5     # suggest moving after this many messages on the APRS frequency
+# IARU Region 2: 145.000-145.100 MHz = data (ACDS), 10 kHz channels, 12 kHz max; 145.010 protected for
+# Caribbean APRS. A 1200-baud FM signal is ~10-12 kHz wide, so chat channels sit 20 kHz apart.
+# 144.500-144.600 is a local-option segment (agree it nationally); 145.000-145.100 is the data segment.
+QSY_DEFAULT = "144.510,144.530,144.550,144.570,144.590,145.030,145.050,145.070,145.090"
+QSY_NEVER = ((144.0, 144.400), (144.400, 144.500), (145.005, 145.015), (145.790, 146.000), (435.0, 438.0))
+# weak-signal CW/SSB and APRS, beacons + ISS uplink 144.490, Caribbean APRS 145.010, satellites
+QSY_BUSY_S = 30 * 60      # a channel another pair moved to counts as busy this long (or until they leave)
+
+
+def qsy_freq_ok(mhz):
+    """A chat QSY frequency must be in 2 m or 70 cm, and not on APRS, protected or satellite segments."""
+    try:
+        f = float(mhz)
+    except (TypeError, ValueError):
+        return False
+    if not (144.0 <= f <= 148.0 or 420.0 <= f <= 450.0):
+        return False
+    return not any(lo <= f <= hi for lo, hi in QSY_NEVER)
+
+
 IDLE, HAILING, AWAIT_CONFIRM, INCOMING, ACCEPTED, OPEN, DECLINED, ENDED, EXPIRED = (
     "idle", "hailing", "await_confirm", "incoming", "accepted", "open", "declined", "ended", "expired")
 STATUS_TEXT = {
@@ -1127,9 +1150,12 @@ def valid_call(c):
     return bool(CHAT_CALL_RE.match(norm_call(c)))
 
 
-def format_message(addressee, text, msgno=None):
-    """APRS message info field: ':ADDRESSEE:text{NN'"""
-    t = text.replace("|", "/").replace("~", "-").replace("{", "(")[:MAX_TEXT]
+def format_message(addressee, text, msgno=None, replyack=None):
+    """APRS message info field: ':ADDRESSEE:text{NN', or with an APRS 1.1 reply-ack ':ADDRESSEE:text{NN}AA'
+    (AA = their message we acknowledge inside this one; '' = just say we understand reply-acks)."""
+    t = text.replace("|", "/").replace("~", "-").replace("{", "(").replace("}", ")")[:MAX_TEXT]
+    if msgno and replyack is not None:
+        return f":{norm_call(addressee):<9}:{t}{{{msgno}}}{replyack}"
     return f":{norm_call(addressee):<9}:{t}" + (f"{{{msgno}" if msgno else "")
 
 
@@ -1147,11 +1173,15 @@ def parse_message(line):
         return {"src": src, "to": to, "text": "", "msgno": None, "path": path,
                 "ack": m.group(2) if m.group(1) == "ack" else None,
                 "rej": m.group(2) if m.group(1) == "rej" else None}
-    msgno = None
+    msgno, replyack, ra = None, None, False
     if "{" in body:
         body, _, tail = body.rpartition("{")
         msgno = tail.split("}")[0][:5] or None
-    return {"src": src, "to": to, "text": body, "msgno": msgno, "ack": None, "rej": None, "path": path}
+        if "}" in tail:                      # APRS 1.1 reply-ack: {MM}AA
+            ra = True
+            replyack = tail.split("}", 1)[1].strip()[:5] or None
+    return {"src": src, "to": to, "text": body, "msgno": msgno, "ack": None, "rej": None, "path": path,
+            "replyack": replyack, "ra": ra}
 
 
 def split_text(text):
@@ -1287,6 +1317,12 @@ class ChatManager:
         self.is_ok = None             # callable() -> True when APRS-IS can carry a message
         self.relay_wait = []          # RF-first: relayed messages waiting for "RELAY OK delivered"
         self.on_tw = None             # callable(call): a station spoke the Tradewind handshake
+        self.on_qsy = None            # callable(mhz or None): retune the radio for a QSY / back to APRS
+        self.qsy_delay = 6            # seconds to let the last ack go out before retuning
+        self.qsy_active = None        # the peer we moved off the APRS frequency with
+        self.qsy_channels = [f for f in QSY_DEFAULT.split(",")]   # the club's chat channels, in order
+        self.qsy_busy = {}            # freq -> {"pair": (a, b), "t": time} heard taken by others on 144.390
+        self.ack_hold_s = 8           # reply-acks: hold an ack this long hoping to ride in our reply (0 = off)
 
     # ---- helpers
     def _peer(self, call):
@@ -1446,7 +1482,15 @@ class ChatManager:
         if o.get("link") and self.links:
             self.links.lost(o["call"], o["link"])       # the previous try was not acked
         try:
-            link = self.send_fn(o["call"], format_message(o["call"], o["text"], no), o["route"])
+            q = self.peers.get(o["call"]) or {}
+            ra = None
+            if q.get("ra") and not o.get("probe"):
+                hold = q.get("ack_hold")
+                if hold and o["tries"] == 0:
+                    o["ra_embed"] = hold["no"]       # their message's ack rides in this one
+                    q["ack_hold"] = None
+                ra = o.get("ra_embed") or ""
+            link = self.send_fn(o["call"], format_message(o["call"], o["text"], no, ra), o["route"])
             o["entry"]["error"] = ""
             o["link"], o["t"] = (link if isinstance(link, str) else None), self.now()
             if o["link"]:
@@ -1486,6 +1530,12 @@ class ChatManager:
             self.seq += 1
         else:
             o["next"] = self.now() + delay
+
+    def _flush_ack(self, p):
+        h = p.get("ack_hold")
+        if h:
+            p["ack_hold"] = None
+            self._ack(p["call"], h["no"], h["route"])
 
     def _ack(self, src, msgno, route):
         try:
@@ -1545,6 +1595,7 @@ class ChatManager:
     def end(self, call):
         with self.lock:
             p = self._peer(call)
+            self._flush_ack(p)
             for n in [n for n, o in self.pending.items() if o["call"] == p["call"]]:
                 self.pending[n]["entry"]["state"] = "cancelled"
                 del self.pending[n]
@@ -1555,6 +1606,8 @@ class ChatManager:
             if p["status"] in (OPEN, HAILING, ACCEPTED, AWAIT_CONFIRM):
                 self._send(p, f"{T_END} 73 de {self.mycall}", kind="hs")
             self._set(p, ENDED, "Link ended")
+            if (p.get("qsy") or {}).get("state") in ("moving", "on"):
+                p["qsy"].update(state="returning", tune_at=self.now() + self.qsy_delay)
 
     def send(self, call, text):
         with self.lock:
@@ -1567,6 +1620,10 @@ class ChatManager:
             for part in parts:
                 self._send(p, part)
             p["unread"] = 0
+            if not p.get("qsy") and p["status"] == OPEN and not str(p["route"]).startswith(("is",)):
+                p["sent_here"] = p.get("sent_here", 0) + len(parts)
+                if p["sent_here"] == QSY_SUGGEST_AFTER and self.on_qsy:
+                    self._event("qsy_hint", p["call"], "Long chat - consider QSY to a chat frequency to keep APRS clear")
 
     def relay(self, relay_call, dest, text, route=None):
         """Ask another Tradewind station to pass a message on to a station you cannot reach."""
@@ -1582,6 +1639,97 @@ class ChatManager:
             for part in split_text(text):
                 for chunk in [part[i:i + room] for i in range(0, len(part), room)]:
                     self._send(p, f"RELAY {dest} {chunk}")
+
+    # ---- QSY: move a long chat off the APRS frequency to a chat channel, then back
+    def qsy(self, call, mhz):
+        with self.lock:
+            p = self._peer(call)
+            if not self.on_qsy:
+                raise ValueError("QSY is for amateur chats; a commercial channel stays where it is licensed.")
+            if p["status"] != OPEN:
+                raise ValueError("Open a chat link first, then QSY.")
+            if str(mhz).strip().lower() in ("", "auto"):
+                mhz = self.free_channel()
+            if not qsy_freq_ok(mhz):
+                raise ValueError("Choose a chat frequency in 2 m or 70 cm, away from APRS (144.390, 145.010) and satellites.")
+            if self.qsy_active and self.qsy_active != p["call"]:
+                raise ValueError(f"Already moved with {self.qsy_active} - end that chat first.")
+            f = f"{float(mhz):.3f}"
+            p["qsy"] = {"freq": f, "state": "offered", "t": self.now()}
+            self._log(p, "sys", f"Asking {p['call']} to move to {f} MHz...")
+            self._send(p, f"{T_QSY} {f} - {self.mycall} asks to move this chat", kind="hs")
+
+    def free_channel(self):
+        """First chat channel nobody else is using (others' moves are heard on the APRS frequency)."""
+        now = self.now()
+        self.qsy_busy = {f: b for f, b in self.qsy_busy.items() if now - b["t"] < QSY_BUSY_S}
+        mine = {(q.get("qsy") or {}).get("freq") for q in self.peers.values() if q.get("qsy")}
+        for f in self.qsy_channels:
+            f = f"{float(f):.3f}"
+            if f not in self.qsy_busy and f not in mine:
+                return f
+        raise ValueError("All chat channels are busy - keep messages short on APRS, or try again shortly.")
+
+    def overheard(self, m):
+        """A message between OTHER stations: note chat channels they move to and leave."""
+        up = (m.get("text") or "").upper()
+        pair = tuple(sorted((m["src"], m["to"])))
+        if up.startswith(T_QSY_OK):
+            parts = up.split()
+            if len(parts) > 1 and qsy_freq_ok(parts[1]):
+                self.qsy_busy[f"{float(parts[1]):.3f}"] = {"pair": pair, "t": self.now()}
+        elif up.startswith(T_QSY_BACK) or up.startswith(T_END):
+            for f in [f for f, b in self.qsy_busy.items() if b["pair"] == pair]:
+                del self.qsy_busy[f]
+
+    def qsy_answer(self, call, yes):
+        with self.lock:
+            p = self._peer(call)
+            q = p.get("qsy") or {}
+            if q.get("state") != "incoming":
+                raise ValueError("There is no frequency change to answer.")
+            if yes:
+                q["state"] = "accepting"
+                self._log(p, "sys", f"Moving to {q['freq']} MHz once they have your answer...")
+                self._send(p, f"{T_QSY_OK} {q['freq']}", kind="hs")
+            else:
+                p["qsy"] = None
+                self._log(p, "sys", "You chose to stay on this frequency")
+                self._send(p, f"{T_QSY_NO} staying here", kind="hs")
+            self.seq += 1
+
+    def qsy_back(self, call, tell=True):
+        with self.lock:
+            p = self._peer(call)
+            q = p.get("qsy") or {}
+            if q.get("state") not in ("moving", "on"):
+                raise ValueError("This chat is already on the APRS frequency.")
+            if tell:
+                self._send(p, f"{T_QSY_BACK} returning to APRS", kind="hs")
+            q.update(state="returning", tune_at=self.now() + self.qsy_delay)
+            self._log(p, "sys", "Going back to the APRS frequency...")
+
+    def _qsy_tune(self, p, mhz):
+        try:
+            if self.on_qsy:
+                self.on_qsy(mhz)
+        except Exception as e:
+            self._log(p, "sys", f"Could not retune the radio: {e}")
+        if mhz:
+            self.qsy_active = p["call"]
+            self._log(p, "sys", f"Now on {mhz} MHz - set the radio by hand if it has no CAT control")
+        else:
+            self.qsy_active = None
+            p["qsy"] = None
+            self._log(p, "sys", "Back on the APRS frequency")
+        self.seq += 1
+
+    def _qsy_heard(self, p):
+        q = p.get("qsy") or {}
+        if q.get("state") == "moving":
+            q["state"] = "on"
+            self._log(p, "sys", f"Contact on {q['freq']} MHz - chat continues here")
+            self._event("qsy_on", p["call"], f"{p['call']}: chat moved to {q['freq']} MHz")
 
     def on_heard(self, call):
         """A station was heard again: resend anything stored for it."""
@@ -1625,57 +1773,82 @@ class ChatManager:
     # ---- incoming packets (from RF or APRS-IS)
     def on_packet(self, line, via="RF"):
         m = parse_message(line)
+        if m and m["to"] != self.mycall and m["src"] != self.mycall and m["text"]:
+            try:
+                self.overheard(m)
+            except Exception:
+                pass
         if not m or m["to"] != self.mycall or m["src"] == self.mycall:
             return False
         if m["src"] in self.blocked or self.muted.get(m["src"], 0) > self.now():
             return True                     # blocked / muted: ignored completely (not even acked)
         with self.lock:
             if m["ack"] or m["rej"]:
-                no = m["ack"] or m["rej"]
-                o = self.pending.pop(no, None)
-                if o and o["call"] == m["src"]:
-                    if self.links and o.get("link"):
-                        self.links.acked(o["call"], o["link"], self.now() - o.get("t", self.now()), len(o["text"]) + 30)
-                    if o.get("probe"):
-                        rtt = self.now() - o.get("t", self.now())
-                        info = (self.links.links.get(o["probe"], {}) if self.links else {})
-                        self._log(self._peer(m["src"]), "sys", f"Probe on link {o['probe']} ({info.get('name', '')}): "
-                                  f"reply in {rtt:.1f} s via {via}")
-                    o["entry"]["state"] = "delivered" if m["ack"] else "rejected"
-                    if o.get("kind") == "relay_req":
-                        if m["ack"]:            # the relay has it; now wait for "RELAY OK delivered"
-                            o["orig_entry"]["state"] = "relayed"
-                            self.relay_wait.append({"relay": o["call"], "dest": o["smart"]["dest"],
-                                                    "until": self.now() + SMART_RELAY_WAIT_S, "o": o})
-                        else:
-                            self._smart_relay_failed(o)
-                        self.seq += 1
-                        return True
-                    if o.get("kind") == "relay" and o.get("orig") and m["ack"]:
-                        self._send(self._peer(o["orig"]), f"RELAY OK delivered to {o['call']}", show=False, kind="sys")
-                    o["entry"]["via"] = via
-                    self._peer(m["src"])["via"] = via
-                    self._on_delivered(o)
-                    self.seq += 1
-                return True
+                return self._got_ack(m["src"], m["ack"] or m["rej"], bool(m["ack"]), via)
             p = self._peer(m["src"])
             p["via"] = via
+            if m.get("ra"):
+                p["ra"] = True                 # they understand reply-acks
+            if m.get("replyack"):
+                self._got_ack(m["src"], m["replyack"], True, via)
             if m["msgno"]:      # ack the way it arrived, so the ack can get back
-                self._ack(m["src"], m["msgno"], route_from_via(via))
-                if self.links and via.upper().startswith("RF"):
-                    self.links.heard(m["src"], via.split(":")[1] if ":" in via else "A")
                 key = (m["src"], m["msgno"])
                 now = self.now()
                 for k in [k for k, t in self.seen.items() if now - t > 1800]:
                     del self.seen[k]
-                if key in self.seen:
+                dup = key in self.seen
+                hold = (not dup and self.ack_hold_s and p.get("ra") and p["status"] == OPEN
+                        and not m["text"].upper().startswith("TW-"))
+                if hold:                       # wait a moment: the ack can ride in our reply
+                    self._flush_ack(p)
+                    p["ack_hold"] = {"no": m["msgno"], "route": route_from_via(via), "until": now + self.ack_hold_s}
+                else:
+                    self._ack(m["src"], m["msgno"], route_from_via(via))
+                if self.links and via.upper().startswith("RF"):
+                    self.links.heard(m["src"], via.split(":")[1] if ":" in via else "A")
+                if dup:
                     return True        # a retry we already have
                 self.seen[key] = now
             self._handle_text(p, m["text"].strip(), via)
             return True
 
+    def _got_ack(self, src, no, ok, via):
+        """An ack (or rej) for our message no, as its own packet or riding in a reply (reply-ack)."""
+        o = self.pending.pop(no, None)
+        if src in self.peers:
+            self._qsy_heard(self.peers[src])
+        if o and o["call"] == src:
+            if self.links and o.get("link"):
+                self.links.acked(o["call"], o["link"], self.now() - o.get("t", self.now()), len(o["text"]) + 30)
+            if o.get("probe"):
+                rtt = self.now() - o.get("t", self.now())
+                info = (self.links.links.get(o["probe"], {}) if self.links else {})
+                self._log(self._peer(src), "sys", f"Probe on link {o['probe']} ({info.get('name', '')}): "
+                          f"reply in {rtt:.1f} s via {via}")
+            o["entry"]["state"] = "delivered" if ok else "rejected"
+            if o.get("kind") == "relay_req":
+                if ok:            # the relay has it; now wait for "RELAY OK delivered"
+                    o["orig_entry"]["state"] = "relayed"
+                    self.relay_wait.append({"relay": o["call"], "dest": o["smart"]["dest"],
+                                            "until": self.now() + SMART_RELAY_WAIT_S, "o": o})
+                else:
+                    self._smart_relay_failed(o)
+                self.seq += 1
+                return True
+            if o.get("kind") == "relay" and o.get("orig") and ok:
+                self._send(self._peer(o["orig"]), f"RELAY OK delivered to {o['call']}", show=False, kind="sys")
+            o["entry"]["via"] = via
+            self._peer(src)["via"] = via
+            self._on_delivered(o)
+            self.seq += 1
+        return True
+
     def _on_delivered(self, o):
         p = self.peers.get(o["call"])
+        if p and o["text"].startswith(T_QSY_OK) and (p.get("qsy") or {}).get("state") == "accepting":
+            p["qsy"].update(state="moving", tune_at=self.now() + 2, check_until=self.now() + 2 + QSY_WAIT_S)
+        if p and o["text"].startswith(T_QSY_BACK) and (p.get("qsy") or {}).get("state") == "returning":
+            p["qsy"]["tune_at"] = self.now()
         if p and p["status"] == HAILING and o["text"].startswith(T_REQ):
             self._log(p, "sys", f"{p['call']} received the call - waiting for them to accept")
 
@@ -1738,6 +1911,36 @@ class ChatManager:
                     self._send(q, part, kind="relay", orig=p["call"])
                 self._event("relay", p["call"], f"Relaying {p['call']} -> {dest}")
                 return
+        self._qsy_heard(p)
+        if up.startswith("TW-"):
+            p["ra"] = True                     # another Tradewind station: reply-acks are understood
+        if up.startswith("TW-QSY"):
+            parts = text.split()
+            q = p.get("qsy") or {}
+            if up.startswith(T_QSY_OK):
+                if q.get("state") == "offered":
+                    q.update(state="moving", tune_at=self.now() + self.qsy_delay,
+                             check_until=self.now() + self.qsy_delay + QSY_WAIT_S, initiator=True)
+                    self._log(p, "sys", f"{p['call']} agreed - moving to {q['freq']} MHz")
+            elif up.startswith(T_QSY_NO):
+                p["qsy"] = None
+                self._log(p, "sys", f"{p['call']} prefers to stay on this frequency")
+            elif up.startswith(T_QSY_BACK):
+                if q.get("state") in ("moving", "on"):
+                    q.update(state="returning", tune_at=self.now() + self.qsy_delay)
+                    self._log(p, "sys", f"{p['call']} is going back to the APRS frequency - you follow")
+            elif up.startswith(T_QSY_CHK):
+                pass                                     # the ack is the answer; contact noted above
+            elif len(parts) > 1 and p["status"] == OPEN and qsy_freq_ok(parts[1]) and not self.qsy_active:
+                p["qsy"] = {"freq": f"{float(parts[1]):.3f}", "state": "incoming", "t": self.now()}
+                self._set(p, OPEN, f"{p['call']} asks to move this chat to {p['qsy']['freq']} MHz")
+                self._event("qsy", p["call"], f"{p['call']} asks to move the chat to {p['qsy']['freq']} MHz - Move or Stay")
+            if self.on_tw:
+                try:
+                    self.on_tw(p["call"])
+                except Exception:
+                    pass
+            return
         if up.startswith("TW-") and self.on_tw:
             try:
                 self.on_tw(p["call"])
@@ -1777,6 +1980,8 @@ class ChatManager:
             self._event("declined", p["call"], f"{p['call']} declined")
             return
         if up.startswith(T_END):
+            if (p.get("qsy") or {}).get("state") in ("moving", "on"):
+                p["qsy"].update(state="returning", tune_at=self.now() + self.qsy_delay)
             self._set(p, ENDED, f"{p['call']} ended the link")
             self._event("ended", p["call"], f"{p['call']} ended the link")
             return
@@ -1798,6 +2003,26 @@ class ChatManager:
             for no, o in list(self.pending.items()):
                 if now >= o["next"]:
                     self._transmit(no)
+            for p in list(self.peers.values()):
+                if p.get("ack_hold") and now >= p["ack_hold"]["until"]:
+                    self._flush_ack(p)             # no reply in time: send the ack on its own
+                q = p.get("qsy")
+                if not q:
+                    continue
+                if q.get("tune_at") and now >= q["tune_at"]:
+                    q["tune_at"] = None
+                    if q["state"] == "returning":
+                        self._qsy_tune(p, None)
+                        continue
+                    self._qsy_tune(p, q["freq"])
+                    if q.get("initiator"):          # say hello on the new frequency
+                        self._send(p, f"{T_QSY_CHK} {q['freq']}", kind="hs", delays=[20, 20, 20])
+                elif q["state"] == "moving" and now >= q.get("check_until", now + 1):
+                    self._log(p, "sys", f"No contact on {q['freq']} MHz - back to the APRS frequency")
+                    self._event("qsy_fail", p["call"], f"No contact with {p['call']} on {q['freq']} MHz - back on APRS")
+                    self._qsy_tune(p, None)
+                elif q["state"] in ("offered", "incoming") and now - q["t"] > 300:
+                    p["qsy"] = None                    # an unanswered offer lapses after 5 minutes
             for w in [w for w in self.relay_wait if now >= w["until"]]:
                 self.relay_wait.remove(w)
                 self._log(self._peer(w["dest"]), "sys", f"{w['relay']} did not confirm delivery to {w['dest']}")
@@ -1833,6 +2058,8 @@ class ChatManager:
                 if p.get("status") in (HAILING, ACCEPTED, AWAIT_CONFIRM, INCOMING):
                     p["status"] = EXPIRED
                 p.setdefault("unread", 0)
+                p["qsy"] = None
+                p["ack_hold"] = None
                 p.setdefault("via", "")
                 self.peers[norm_call(c)] = p
             self.seq += 1
@@ -1850,6 +2077,7 @@ class ChatManager:
             peers = sorted(self.peers.values(), key=lambda p: -max([p["since"]] + [m["t"] for m in p["messages"]]))
             return {"seq": self.seq, "mycall": self.mycall, "events": list(self.events),
                     "outbox": len(self.outbox), "relay": self.relay_enabled, "held": len(self.held),
+                    "qsy_busy": sorted(f for f, b in self.qsy_busy.items() if self.now() - b["t"] < QSY_BUSY_S),
                     "blocked": sorted(self.blocked),
                     "muted": sorted(c for c, t in self.muted.items() if t > self.now()),
                     "roster": sorted(({k: v for k, v in r.items() if k != "parts"} for r in self.roster.values()),
@@ -1858,6 +2086,7 @@ class ChatManager:
                                "route": p["route"], "via": p["via"], "unread": p["unread"],
                                "can_send": p["status"] == OPEN or bool(p.get("direct")),
                                "forever": bool(p.get("forever")),
+                               "qsy": {k: v for k, v in (p.get("qsy") or {}).items() if k in ("freq", "state")} or None,
                                "links": self.links.summary(p["call"]) if self.links else [],
                                "messages": [{k: v for k, v in m.items() if k != "kind"} for m in p["messages"][-100:]]}
                               for p in peers]}

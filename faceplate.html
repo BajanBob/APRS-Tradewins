@@ -423,6 +423,9 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
   font-size:14px;transition:transform .25s,opacity .25s;opacity:0;visibility:hidden;z-index:5;box-shadow:0 10px 30px rgba(0,0,0,.6)}
 .toast.ok{background:#0f2420;color:#c8fff4;border-color:#1f6a5f}
 .toast.show{transform:translateX(-50%) translateY(0);opacity:1;visibility:visible}
+@media (max-width:700px){ .toast{bottom:auto;top:12px;transform:translateX(-50%) translateY(-140%);z-index:50} .toast.show{transform:translateX(-50%) translateY(0)} }
+.qsy-chip{display:inline-block;padding:2px 8px;border-radius:6px;background:#052e16;color:#86efac;border:1px solid #166534;font-family:var(--mono);font-size:12px;margin-left:6px}
+.acts select.inset{min-height:40px;width:auto}
 
 @media (max-width:820px){
   .main{grid-template-columns:1fr}
@@ -702,6 +705,7 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
       <div class="set wide"><label>Beacon comment</label><input class="inset" data-k="beacon_comment" maxlength="43"></div>
       <div class="set"><label class="chk"><input type="checkbox" data-k="store_forward"> Store and forward: keep undelivered messages and resend when the station is heard again</label></div>
       <div class="set"><label class="chk"><input type="checkbox" data-k="relay_enabled"> Act as a relay: pass messages on for stations that cannot reach each other</label></div>
+      <div class="set wide"><label>Chat frequencies for QSY (MHz, comma separated)</label><input class="inset" data-k="qsy_freqs" placeholder="144.510,144.530,144.550,144.570,144.590,145.030,145.050,145.070,145.090"></div>
       <div class="set wide" id="pin-box"><label>Station PIN <span class="note" id="pin-state"></span></label>
         <div class="pin-row"><input class="inset" id="pin-old" type="password" inputmode="numeric" placeholder="current PIN" autocomplete="off">
         <input class="inset" id="pin-new" type="password" inputmode="numeric" placeholder="new PIN (4-8 digits)" autocomplete="off">
@@ -911,6 +915,7 @@ const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAl
 const REG = {NA:'N.AMER', EU:'EUROPE', LA:'LAT.AM'};
 let cfg = {}, presets = [], logSince = 0, running = false, dirty = false, lastState = null;
 
+document.addEventListener('click', e=>{ if (e.target && e.target.id==='toast') e.target.className='toast'; });
 function toast(msg, ok, ms){ const t=$('#toast'); t.textContent=msg; t.className='toast show'+(ok?' ok':'');
   clearTimeout(t._h); t._h=setTimeout(()=>t.className='toast'+(ok?' ok':''), ms||4200); }
 let stationPin = '';
@@ -1419,6 +1424,9 @@ function chatAlert(ev){
   else if (ev.kind==='accepted'){ toast('✅ ' + ev.text, true, 15000); if (soundReady) dispatchTone(); say1('Your chat request was accepted. Press accept to confirm.'); }
   else if (ev.kind==='open'){ toast(ev.text, true); if (soundReady) chime(); }
   else if (ev.kind==='message'){ toast(ev.text, true, 8000); if (soundReady) chime(); }
+  else if (ev.kind==='qsy'){ toast('↔ ' + ev.text, true, 15000); if (soundReady) dispatchTone(); chatSel = ev.call; }
+  else if (ev.kind==='qsy_on' || ev.kind==='qsy_hint'){ toast(ev.text, true, 10000); if (soundReady) chime(); }
+  else if (ev.kind==='qsy_fail'){ toast(ev.text, false, 12000); }
   else toast(ev.text);
   addAlert('CHAT', ev.text, ev.t);
   try { if (document.hidden && 'Notification' in window && Notification.permission==='granted') new Notification('Tradewind chat', {body: ev.text}); } catch(e){}
@@ -1449,6 +1457,14 @@ function drawChat(){
   if (p.status==='incoming') acts = `<button class="btn accent" data-act="accept">ACCEPT</button><button class="btn" data-act="decline">DECLINE</button>`;
   else if (p.status==='await_confirm') acts = `<button class="btn accent" data-act="accept">ACCEPT</button><button class="btn" data-act="end">CANCEL</button>`;
   else if (['open','hailing','accepted'].includes(p.status)) acts = `<button class="btn" data-act="end">${p.status==='open'?'END LINK':'CANCEL'}</button>`;
+  const Q = p.qsy || null, QF = (lastState && lastState.qsy_freqs) || [];
+  if (p.status==='open'){
+    if (Q && Q.state==='incoming') acts = `<button class="btn accent" data-act="qsy_yes">MOVE TO ${esc(Q.freq)}</button><button class="btn" data-act="qsy_no">STAY</button>` + acts;
+    else if (Q && ['moving','on','returning'].includes(Q.state)) acts = `<button class="btn" data-act="qsy_back" title="Both stations go back to the APRS frequency">BACK TO APRS</button>` + acts;
+    else if (Q && ['offered','accepting'].includes(Q.state)) acts = `<span class="note">moving to ${esc(Q.freq)}…</span>` + acts;
+    else if (QF.length && p.route!=='is') acts = `<select class="inset" id="qsy-f" aria-label="Chat frequency"><option value="auto">Auto - first free</option>${QF.map(f=>`<option ${(chatData&&chatData.qsy_busy||[]).includes(Number(f).toFixed(3))?'disabled':''}>${esc(f)}</option>`).join('')}</select><button class="btn" data-act="qsy" title="Move this chat off the APRS frequency to a chat channel">QSY</button>` + acts;
+  }
+  if (Q && Q.state==='on') p.status_text += ` · on ${Q.freq} MHz`;
   else acts = `<button class="btn" data-act="hail">HAIL AGAIN</button>`;
   acts += `<button class="btn" data-act="block" title="Ignore all calls and messages from this station">BLOCK</button>`;
   if ((p.links || []).length > 1) acts += `<button class="btn" data-act="probe" title="Send a short test on each radio link and time the replies">PROBE</button>`;
@@ -1478,6 +1494,7 @@ function drawChat(){
     unlockAudio();
     const body = {action: b.dataset.act, call: p.call};
     if (body.action==='hail') body.route = p.route;
+    if (body.action==='qsy') body.freq = $('#qsy-f').value;
     const r = await api('/api/chat', body);
     if (r.errors && r.errors.length) toast(r.errors[0]);
     else if (body.action==='block'){ toast(p.call + ' blocked - unblock it under the chat', true); chatSel = null; }
@@ -1774,6 +1791,7 @@ const HELP = {
   link2_speed:'Air speed of the second link. Used to choose links: faster links are preferred while they deliver.',
   link2_name:'A short name shown in the chat, e.g. "70cm 9600".', link1_name:'A short name for the main radio link, e.g. "2m 1200".',
   link1_speed:'Air speed of the main link when it is an external KISS TNC (the built-in modem sets this itself).',
+  qsy_freqs:'Chats start on the APRS frequency, then move (QSY) to the first free channel here. Default: 144.510-144.590 (IARU Region 2 local-option segment - confirm with your national society) then 145.030-145.090 (data segment), 20 kHz apart because a 1200-baud FM signal is about 12 kHz wide. 145.010 is skipped: it is protected for Caribbean APRS.',
   igate_tx:'Messages from the internet for stations your radio hears locally are passed on to them on RF, as a standard iGate does. Limited to 30 an hour.',
   kiss_server:'Other APRS programs on this computer can connect to Tradewind on this port as if it were a hardware TNC. Packets they send must use your callsign.',
   sdr_gain:'Leave blank for automatic gain. Try 30-40 dB if the SDR hears too little or too much noise.',

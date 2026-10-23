@@ -70,13 +70,15 @@ The result is `dist\Tradewind.exe`.
 
 ## First run
 
-1. Type your **callsign-SSID** (e.g. `8P6XX-10`) and **grid square** (e.g. `GK03fd`).
-2. Pick your **radio / interface**. A note under it shows the radio menu settings to make.
-3. Press **MENU**, then **RADIO / TNC**, and choose the audio in/out devices and PTT port.
-4. Press **SAVE**, then the **power button**.
+A **setup wizard** opens the first time (and any time from MENU > SETUP WIZARD):
+1. Callsign-SSID (e.g. `8P6XX-10`) and grid square (e.g. `GK03fd`).
+2. How your radio is connected (sound-card interface, radio with built-in TNC, Direwolf/UZ7HO, RTL-SDR, or internet only).
+3. Radio model, audio devices and PTT.
+4. Frequencies picked from your grid square, and the 70 cm range on your licence.
+5. Save - then press the **power button**.
 
-To reach the face plate from a phone on the same Wi-Fi, run `python3 app.py --host 0.0.0.0`.
-Only do this on a trusted network: anyone who can open the page can key your transmitter.
+To reach the face plate from a phone on the same Wi-Fi, run `python3 app.py --host 0.0.0.0` and set a **station PIN**
+(MENU > STATION). Open it by IP address (e.g. `http://192.168.1.20:8073`) or a `.local` name; other host names are refused.
 
 ## TNC options
 
@@ -213,6 +215,34 @@ The **FORMS** button in the chat sends short structured reports, styled on Winli
 - general message (ICS-213 style)
 
 Each form becomes one or more numbered messages of up to 67 characters, e.g. `WXOBS 201225L 1/3 Ocean City, St Philip. Wind ENE 35 G50kt...`. Each message is acknowledged like any other chat message.
+
+## New in v3.8: Wolf auto-call on 2m RF
+
+Wolf Mode watches PSKReporter in the background. When a long-distance station is spotted on 2m **and** is active on APRS,
+Tradewind can now **call it automatically on 2m RF** while the path is open:
+
+- **Auto-call** (opt in): Wolf panel or MENU > PROPAGATION. Off by default.
+- It only calls on RF when: the PSKReporter spot is fresh (default within 15 minutes - the path is open now), the spot is on the
+  same band as your APRS radio, and the DX station uses the **same APRS frequency** as you (e.g. Puerto Rico 144.390 yes,
+  Brazil 145.570 no). Otherwise it can send the call by internet instead (can be switched off).
+- Message (editable, max 67 characters): `8P5AB GK03: 2m DX via APRS on Tradewind! 1060km TROPO. QSL? 73`
+- Limits stay: each station once a day, your hourly ping limit, STOP replies honoured, never on satellite frequencies, never while on a chat channel.
+- Manual: the Wolf list shows **CALL ON 2M** when the path is open now, or **PING** (internet) when it isn't.
+- **Proof**: when the DX station's ack comes back over RF, the **I MADE IT** card shows "APRS message sent on 2m RF and
+  ACKNOWLEDGED", with the round-trip time and the PSKReporter path - two-way APRS DX evidence.
+
+The I MADE IT card now names the station's APRS software (e.g. APRSdroid) instead of the raw packet header, and the map keeps true proportions.
+
+## New in v3.7: setup wizard, sharing, DX cards, field-test report
+
+- **Setup wizard** - five steps from callsign to on the air.
+- **I MADE IT** (home screen) - a picture card with the proof of a 2m / 70cm DX contact: callsigns, grid squares, distance, UTC time and the evidence - a PSKReporter reception report (independent), or an APRS packet heard **direct** on RF (no digipeater) with any two-way chat. Contacts added by hand are labelled "logged by operator". Save the picture or share it.
+- **SHARE** - invite a ham (message plus a QR code), an opening alert, or the net check-in list. Passwords, PIN, exact position and private chats are never included.
+- **Opening alerts to WhatsApp, Facebook and email - opt in.** All off until ticked under MENU > PROPAGATION. When 2m / 70cm opens, the alert shows a button for each ticked app; nothing is posted by itself. (Facebook can't take pre-filled text, so the alert text is copied for you to paste.)
+- **Field test report** (MENU) - messages sent and delivered, median and worst delivery time, by route and by station, stations heard, recent errors. No positions or message text. Send it to 8P5AB / 8P5DG after a test session.
+- **Delivery time** on every delivered message ("✓ delivered in 4 s").
+- **Safeguards**: 70 cm limited to the range on your licence (default 430-440 MHz; Europe/Japan 2 m limited to 144-146); the face plate refuses unknown host names (stops hostile web pages reaching the station); the KISS server only accepts this computer and the local network; **licences and credits** page (footer link).
+- Fixed: the callsign box didn't turn upper-case or show red on an error (two elements shared one id).
 
 ## New in v3.6: frequencies follow your grid square
 

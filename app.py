@@ -32,7 +32,7 @@ import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.6"
+APP_VERSION = "3.8"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -78,6 +78,38 @@ def mail_tls_context(host):
         ctx = ssl.create_default_context()
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     return ctx
+
+
+def aprs_position(info):
+    """(lat, lon) from an uncompressed or compressed APRS position report, or None."""
+    if not info:
+        return None
+    t = info[0]
+    body = info[1:] if t in "!=" else (info[8:] if t in "/@" else None)
+    if body is None:
+        return None
+    m = re.match(r"(\d{2})(\d{2}\.\d{2})([NS]).(\d{3})(\d{2}\.\d{2})([EW])", body)
+    if m:
+        lat = int(m.group(1)) + float(m.group(2)) / 60
+        lon = int(m.group(4)) + float(m.group(5)) / 60
+        lat, lon = (-lat if m.group(3) == "S" else lat), (-lon if m.group(6) == "W" else lon)
+        return (lat, lon) if abs(lat) <= 90 and abs(lon) <= 180 else None
+    if len(body) >= 9 and body[0] in "/\\" or (len(body) >= 9 and body[0].isalpha()):
+        try:
+            y = sum((ord(ch) - 33) * 91 ** (3 - i) for i, ch in enumerate(body[1:5]))
+            x = sum((ord(ch) - 33) * 91 ** (3 - i) for i, ch in enumerate(body[5:9]))
+            lat, lon = 90 - y / 380926, -180 + x / 190463
+            return (lat, lon) if abs(lat) <= 90 and abs(lon) <= 180 else None
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def latlon_to_grid(lat, lon):
+    """6-character Maidenhead square."""
+    lon, lat = lon + 180, lat + 90
+    return (chr(65 + int(lon // 20)) + chr(65 + int(lat // 10)) + str(int(lon % 20 // 2)) + str(int(lat % 10))
+            + chr(97 + int(lon % 2 * 12)) + chr(97 + int(lat % 1 * 24)))
 
 
 def _web_get(url, timeout=15):
@@ -146,7 +178,12 @@ DEFAULTS = {
     "mail_allowed_calls": "",                 # empty = any amateur callsign
     "mail_per_day": 10, "mail_session_min": 10,
     "wolf_on": False, "wolf_min_km": 500, "wolf_per_hour": 5, "wolf_qth": "", "wolf_stop": "",
+    # v3.8 Wolf auto-call: when PSKReporter shows the path open NOW and the DX station is on APRS, call it on 2m RF
+    "wolf_auto": False, "wolf_auto_fallback": True, "wolf_open_min": 15,
+    "wolf_msg": "{me} {grid}: 2m DX via APRS on Tradewind! {km}km {prop}. QSL? 73",
     "disaster_on": False, "disaster_until": 0, "disaster_reason": "",
+    "share_whatsapp": False, "share_facebook": False, "share_email": False, "share_email_to": "",   # opt-in alert sharing
+    "uhf_range": "430-440", "allowed_hosts": "",     # v3.7: 70 cm range on your licence; extra face-plate host names
     "zone": "auto", "qsy_mode": "auto",     # v3.6: band-plan zone from the grid square; chat channels auto or manual
     "qsy_freqs": "144.510,144.530,144.550,144.570,144.590,145.030,145.050,145.070,145.090",   # chat channels, 20 kHz apart            # callsigns whose hails and messages are ignored
     "pin_hash": "", "pin_salt": "", "lock_settings": False,   # station PIN (v3.2)
@@ -451,6 +488,9 @@ def validate(cfg):
     if cfg.get("mail_gw_enabled") and cfg.get("smtp_host") and not cfg.get("smtp_tls", True) \
             and int(cfg.get("smtp_port") or 587) != 465 and str(cfg["smtp_host"]).strip().lower() not in LOCAL_MAIL_HOSTS:
         errs.append("Tick 'Use STARTTLS' (or use port 465) so the mail password is never sent unencrypted.")
+    if not tncmod.set_uhf(cfg.get("uhf_range") or "430-440"):
+        errs.append("70 cm licence range must look like 430-440 (MHz, inside 420-450).")
+    tncmod.set_zone(tncmod.zone_of(cfg))
     zone = tncmod.zone_of(cfg)
     if str(cfg.get("zone") or "auto") not in ("auto", *tncmod.ZONES):
         errs.append("Choose a band-plan zone, or Automatic.")
@@ -531,6 +571,9 @@ class Station:
         self.last_id = 0
         self.prop_off = False
         self.heard = {}               # callsign -> stations heard on RF (works with no internet)
+        self.wolf_log = {}            # v3.8 DX stations we called (kept for the "I made it" evidence)
+        self.my_dx = {}               # v3.7 "I made it": PSKReporter spots of my own signal (evidence for DX cards)
+        self.msg_stats = []           # v3.7 field test: delivery time of every chat message
         self.kiss_srv = None          # KISS TCP server for other APRS apps
         self.qsy_hz = None            # set while a chat has moved off the APRS frequency
         self.mail_count = {}          # gateway: (callsign, date) -> emails sent today
@@ -701,6 +744,12 @@ class Station:
             if c0.get("mail_gw_enabled") and c0.get("imap_host") and now >= self.mail_next_poll and not self.commercial:
                 self.mail_next_poll = now + max(2, int(c0.get("mail_poll_min") or 5)) * 60
                 threading.Thread(target=self._imap_poll, daemon=True).start()
+            if c0.get("wolf_auto") and now >= getattr(self, "wolf_auto_next", 0):
+                self.wolf_auto_next = now + 30
+                try:
+                    self._wolf_auto()
+                except Exception as e:
+                    self.add_log("ERR", f"Wolf auto-call: {e}")
             if c0.get("disaster_on") and now > float(c0.get("disaster_until") or 0):
                 self.set_disaster(False, reason="session expired")
             if self.cfg.get("tc_enabled") and now >= self.tc_next:
@@ -893,6 +942,7 @@ class Station:
                         break
             self.local = sorted(self.local, key=lambda x: -x["km"])[:8]
         self.map_paths = self._map_paths(spots)
+        self._my_dx_update(spots)
         if c.get("wolf_on"):
             try:
                 self._wolf_update(spots)
@@ -1046,6 +1096,7 @@ class Station:
         robust = self.cfg.get("tnc") == "sound" and self.cfg.get("modem") == "robust"
         self.chat.on_qsy = None if self.commercial else self._on_qsy   # a licensed commercial channel never moves
         tncmod.set_zone(tncmod.zone_of(self.cfg))
+        tncmod.set_uhf(self.cfg.get("uhf_range") or "430-440")
         self.chat.qsy_channels = tncmod.zone_qsy(self.cfg)     # empty: chats stay on the APRS frequency
         home = tncmod.aprs_freq_hz(self.cfg)
         self.chat.rf_block = ("Hails and email are never sent on a satellite / ISS frequency (145.800-146.000, 435-438). "
@@ -1120,6 +1171,14 @@ class Station:
         h = self.heard.setdefault(call, {"call": call, "count": 0, "first": time.time()})
         h.update(last=time.time(), via=("via " + digi[-1]) if digi else "direct", direct=not digi)
         h["count"] += 1
+        pos = aprs_position(line.partition(":")[2])
+        me = eng.grid_to_latlon(self.cfg.get("grid", ""))
+        if pos:
+            h["grid"] = latlon_to_grid(*pos)
+            if me:
+                h["km"] = round(eng.haversine_km(me, pos))
+            if me and not digi and h["km"] >= h.get("best_km", 0):   # best DIRECT contact = DX evidence
+                h.update(best_km=h["km"], best_t=time.time(), best_pkt=line[:200])
         dst = head.split(">", 1)[1].split(",")[0].upper()
         if dst == eng.TOCALL or call in self.tw_users:
             h["tw"] = True
@@ -1127,6 +1186,80 @@ class Station:
         if len(self.heard) > 300:
             oldest = min(self.heard.values(), key=lambda x: x["last"])
             self.heard.pop(oldest["call"], None)
+
+    def _my_dx_update(self, spots):
+        """Spots where my own call was heard or heard someone: independent evidence for an "I made it" card."""
+        me = self.cfg.get("call", "").split("-")[0].upper()
+        now = time.time()
+        for sp in spots:
+            for mine, other, ogrid, mgrid, heard_by in ((sp.tx, sp.rx, sp.rx_grid, sp.tx_grid, True),
+                                                       (sp.rx, sp.tx, sp.tx_grid, sp.rx_grid, False)):
+                if mine.split("/")[0].split("-")[0].upper() != me or sp.km < 100:
+                    continue
+                key = (other.upper(), sp.band, sp.mode)
+                old = self.my_dx.get(key)
+                if not old or sp.km > old["km"]:
+                    self.my_dx[key] = {"call": other.upper(), "grid": ogrid, "my_grid": mgrid, "km": round(sp.km),
+                                       "band": sp.band, "mode": sp.mode, "snr": sp.snr, "ts": sp.ts,
+                                       "prop": sp.prop_mode or "", "heard_me": heard_by, "freq": sp.freq}
+        self.my_dx = {k: v for k, v in self.my_dx.items() if now - v["ts"] < 7 * 86400}
+
+    def field_report(self):
+        """A summary friends can send back after a test session: how well messages got through, and how fast."""
+        c = self.cfg
+        st = list(self.chat.stats) if self.chat else []
+        def summ(rows):
+            ok = [r for r in rows if r["result"] == "delivered"]
+            secs = sorted(r["secs"] for r in ok)
+            return {"sent": len(rows), "delivered": len(ok), "pct": round(100 * len(ok) / len(rows)) if rows else 0,
+                    "median_s": secs[len(secs) // 2] if secs else None, "worst_s": secs[-1] if secs else None,
+                    "avg_tries": round(sum(r["tries"] for r in rows) / len(rows), 1) if rows else 0}
+        by_route = {}
+        for r in st:
+            key = "RF" if r["via"].upper().startswith("RF") or r["route"] in ("rf", "rf_only") else \
+                  ("Internet" if r["via"].upper().startswith("IS") or r["route"].startswith("is") else (r["route"] or "auto"))
+            by_route.setdefault(key, []).append(r)
+        return {"app": APP_NAME, "version": APP_VERSION, "call": c.get("call", ""), "grid": c.get("grid", "")[:4],
+                "tnc": getattr(self.tnc, "kind", "") if self.tnc else c.get("tnc", ""),
+                "zone": tncmod.zone_of(c), "aprs_mhz": (tncmod.aprs_freq_hz(c) or 0) / 1e6,
+                "since": min([r["t"] for r in st]) if st else None, "generated": time.time(),
+                "all": summ(st), "by_route": {k: summ(v) for k, v in by_route.items()},
+                "by_station": {k: summ([r for r in st if r["call"] == k]) for k in sorted({r["call"] for r in st})},
+                "heard_rf": len(self.heard), "heard_direct": sum(1 for h in self.heard.values() if h.get("direct")),
+                "tradewind_heard": sum(1 for h in self.heard.values() if h.get("tw")),
+                "best_direct_km": max([h.get("best_km", 0) for h in self.heard.values()] or [0]),
+                "errors": [l for l in list(self.log)[-200:] if l.get("kind") == "ERR"][-15:] if hasattr(self, "log") else []}
+
+    def dx_evidence(self):
+        """Candidates for an "I made it" card: PSKReporter spots of my signal, and stations I heard DIRECT on RF."""
+        c = self.cfg
+        def sw_of(pkt):
+            dst = pkt.partition(":")[0].split(">", 1)[-1].split(",")[0].upper()
+            return "Tradewind" if dst == eng.TOCALL else next((n for k, n in self.SW.items() if dst.startswith(k)), "APRS")
+        rf = [{"call": h["call"], "grid": h.get("grid", ""), "km": h.get("best_km", 0), "t": h.get("best_t", 0),
+               "packet": h.get("best_pkt", ""), "sw": sw_of(h.get("best_pkt", "")), "tw": bool(h.get("tw"))}
+              for h in self.heard.values() if h.get("best_km", 0) >= 50]
+        aprs_dx = []                      # Wolf calls answered over RF: an APRS message and its ack both crossed the path
+        for r in (self.chat.stats if self.chat else []):
+            w = self.wolf.get(r["call"].split("-")[0]) or self.wolf_log.get(r["call"].split("-")[0])
+            if w and r["result"] == "delivered" and str(r["via"]).upper().startswith("RF"):
+                aprs_dx.append({"call": r["call"], "grid": w.get("grid", ""), "km": w.get("km", 0), "band": w.get("band", "2m"),
+                                "prop": w.get("prop", ""), "t": r["t"], "secs": r["secs"], "snr": w.get("snr", ""),
+                                "mode": w.get("mode", "")})
+        chats = {}
+        if self.chat:
+            for p in self.chat.peers.values():
+                ins = [m for m in p["messages"] if m["dir"] == "in" and str(m.get("via", "RF")).upper().startswith("RF")]
+                outs = [m for m in p["messages"] if m["dir"] == "out" and m.get("state") == "delivered"]
+                if ins or outs:
+                    chats[p["call"].split("-")[0]] = {"rx": len(ins), "tx_ok": len(outs),
+                                                     "last": max([m["t"] for m in ins + outs])}
+        for r in rf:
+            r["chat"] = chats.get(r["call"].split("-")[0])
+        return {"me": {"call": c.get("call", ""), "grid": c.get("grid", "")},
+                "spots": sorted(self.my_dx.values(), key=lambda x: -x["km"])[:30],
+                "rf": sorted(rf, key=lambda x: -x["km"])[:30],
+                "aprs_dx": sorted(aprs_dx, key=lambda x: -x["km"])[:20]}
 
     # ---- Wolf Mode: DX stations on PSKReporter that are also on APRS, ready to ping
     SW = {"APZPRP": "Tradewind", "APDR": "APRSdroid", "APK": "Kenwood", "APY": "Yaesu", "APDW": "Direwolf",
@@ -1166,7 +1299,40 @@ class Station:
     def wolf_stopped(self):
         return {x.strip().upper() for x in str(self.cfg.get("wolf_stop") or "").split(",") if x.strip()}
 
-    def wolf_ping(self, base, text=""):
+    WOLF_SPOT_FRESH_S = 15 * 60
+
+    def _wolf_text(self, w, text=""):
+        c = self.cfg
+        qth = (c.get("wolf_qth") or c.get("grid", "")[:4]).strip()
+        tpl = text or c.get("wolf_msg") or DEFAULTS["wolf_msg"]
+        try:
+            out = tpl.format(me=c["call"].split("-")[0], grid=qth, km=w["km"], band=w.get("band", "2m"),
+                             prop=(w.get("prop") or w.get("mode") or "path"), mode=w.get("mode", ""), call=w["call"])
+        except (KeyError, IndexError, ValueError):
+            out = tpl
+        return " ".join(out.split())[:tncmod.MAX_TEXT]
+
+    def wolf_rf_check(self, w):
+        """Can this DX station be called on RF right now? Returns (ok, reason)."""
+        c, now = self.cfg, time.time()
+        if self.commercial or c.get("tnc") not in ("sound", "kiss_tcp", "kiss_serial") or not self.tnc:
+            return False, "no transmitting radio"
+        if self.chat and self.chat.rf_block:
+            return False, "radio is on a satellite frequency"
+        if self.qsy_hz:
+            return False, "radio is on a chat channel"
+        if now - w.get("t", 0) > int(c.get("wolf_open_min") or 15) * 60:
+            return False, "no fresh PSKReporter spot - the path may be closed"
+        my_hz = tncmod.aprs_freq_hz(c)
+        band = "70cm" if my_hz and my_hz > 400e6 else "2m"
+        if w.get("band") != band:
+            return False, f"path is open on {w.get('band')}, your APRS radio is on {band}"
+        theirs = tncmod.ZONES[tncmod.zone_for_grid(w.get("grid", ""))]["aprs"]
+        if my_hz and abs(float(theirs) * 1e6 - my_hz) > 5000:
+            return False, f"they use {theirs} MHz for APRS, you use {my_hz / 1e6:.3f}"
+        return True, ""
+
+    def wolf_ping(self, base, text="", auto=False):
         c, now = self.cfg, time.time()
         w = self.wolf.get(str(base).upper())
         if not w or not w.get("aprs_call") or now - w["aprs_t"] > 7200:
@@ -1179,15 +1345,44 @@ class Station:
             self.wolf_pings.popleft()
         if len(self.wolf_pings) >= int(c.get("wolf_per_hour") or 5):
             raise ValueError("Ping limit reached for this hour - try later.")
-        if not (self.isc and self.isc.verified and self.chat):
-            raise ValueError("Wolf pings go by internet: APRS-IS must be connected.")
-        qth = (c.get("wolf_qth") or c.get("grid", "")[:4]).strip()
-        text = (text or f"{c['call'].split('-')[0]} {qth}: {w['band']} open to you now, {w['km']} km. QSO? 73").strip()
-        self.chat.open_direct(w["aprs_call"], "is")
-        self.chat.send(w["aprs_call"], text[:tncmod.MAX_TEXT])
-        w["pinged"] = now
+        if not self.chat:
+            raise ValueError("Turn the station ON first.")
+        rf_ok, why = self.wolf_rf_check(w)
+        is_ok = bool(self.isc and self.isc.verified)
+        if rf_ok:            # 2m RF first: a reply heard on RF is real DX proof; internet only as a fallback
+            route, how = ("smart" if c.get("wolf_auto_fallback", True) and is_ok else "rf"), "2m RF"
+        elif is_ok and (not auto or c.get("wolf_auto_fallback", True)):
+            route, how = "is", "internet"
+        else:
+            raise ValueError(f"Can't reach {w['call']}: {why or 'no radio path'}" + ("" if is_ok else ", and APRS-IS is not connected"))
+        text = self._wolf_text(w, text)
+        self.chat.open_direct(w["aprs_call"], route)
+        self.chat.send(w["aprs_call"], text)
+        w.update(pinged=now, ping_route=how, ping_why=why if not rf_ok else "")
+        self.wolf_log[w["call"]] = dict(w)
         self.wolf_pings.append(now)
-        self.add_log("SYS", f"Wolf ping to {w['aprs_call']} ({w['km']} km)")
+        self.add_log("SYS", f"Wolf {'auto-call' if auto else 'ping'} to {w['aprs_call']} by {how} ({w['km']} km): {text}")
+        return how
+
+    def _wolf_auto(self):
+        """Wolf auto-call: call a DX station that PSKReporter shows open to us NOW and that is on APRS."""
+        c, now = self.cfg, time.time()
+        if not (c.get("wolf_on") and c.get("wolf_auto") and self.chat and self.wolf):
+            return
+        stop = self.wolf_stopped()
+        for w in sorted(self.wolf.values(), key=lambda w: -w["km"]):
+            if not w.get("aprs_call") or now - w.get("aprs_t", 0) > 7200 or w["call"] in stop:
+                continue
+            if now - w.get("pinged", 0) < 86400 or now - w.get("t", 0) > int(c.get("wolf_open_min") or 15) * 60:
+                continue
+            if not self.wolf_rf_check(w)[0] and not c.get("wolf_auto_fallback", True):
+                continue
+            try:
+                self.wolf_ping(w["call"], auto=True)
+            except ValueError as e:
+                w["pinged"] = now          # don't retry every loop; it can be pinged by hand
+                w["ping_why"] = str(e)
+            return                         # at most one auto-call per loop pass
 
     def _on_stop(self, call):
         base = tncmod.norm_call(call).split("-")[0]
@@ -1217,8 +1412,10 @@ class Station:
             on_aprs = bool(w.get("aprs_call")) and now - w["aprs_t"] < 7200
             rows.append({k: w.get(k) for k in ("call", "km", "band", "mode", "snr", "prop", "grid", "aprs_call", "sw")} |
                         {"aprs_ago": int(now - w["aprs_t"]) if on_aprs else None, "stopped": w["call"] in stop,
-                         "pinged": bool(now - w.get("pinged", 0) < 86400)})
-        return {"on": bool(self.cfg.get("wolf_on")), "rows": rows[:40],
+                         "pinged": bool(now - w.get("pinged", 0) < 86400), "ping_route": w.get("ping_route", ""),
+                         "ping_why": w.get("ping_why", ""), "spot_ago": int(now - w.get("t", now)),
+                         "rf_ok": self.wolf_rf_check(w)[0] if on_aprs else False})
+        return {"on": bool(self.cfg.get("wolf_on")), "auto": bool(self.cfg.get("wolf_auto")), "rows": rows[:40],
                 "on_aprs": sum(1 for r in rows if r["aprs_ago"] is not None),
                 "pings_left": max(0, int(self.cfg.get("wolf_per_hour") or 5) - len(self.wolf_pings))}
 
@@ -1712,6 +1909,32 @@ class Station:
 STATION = Station()
 
 
+NOTICES_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tradewind - licences</title><style>body{margin:0;background:#0b0f14;color:#e5e7eb;font:15px/1.5 system-ui,sans-serif}
+main{max-width:760px;margin:0 auto;padding:20px 16px}h1{font-size:20px}h2{font-size:16px;margin:22px 0 4px}a{color:#60a5fa}td{padding:4px 10px 4px 0;vertical-align:top}</style></head>
+<body><main><h1>Tradewind licences and credits</h1>
+<p>Tradewind &copy; 2026 Brandon St Rose (8P5DG) and Kammie Holder (8P5AB). Released under the MIT License: free to use, copy, change and share,
+provided this notice is kept. The software is provided "as is", without warranty of any kind.</p>
+<h2>Software Tradewind is built with</h2><table>
+<tr><td>Python</td><td>Python Software Foundation License</td></tr>
+<tr><td>NumPy</td><td>BSD 3-Clause</td></tr>
+<tr><td>python-sounddevice / PortAudio</td><td>MIT</td></tr>
+<tr><td>pySerial</td><td>BSD 3-Clause</td></tr>
+<tr><td>cryptography (commercial mode)</td><td>Apache 2.0 or BSD 3-Clause</td></tr>
+<tr><td>certifi</td><td>Mozilla Public License 2.0</td></tr>
+<tr><td>Leaflet (map)</td><td>BSD 2-Clause</td></tr>
+<tr><td>PyInstaller (Windows build)</td><td>GPL 2.0 with bootloader exception</td></tr>
+<tr><td>python-for-android / Buildozer (Android build)</td><td>MIT</td></tr>
+<tr><td>Barlow Condensed, Share Tech Mono fonts</td><td>SIL Open Font License 1.1</td></tr></table>
+<h2>Data and services</h2><table>
+<tr><td>Spots</td><td>PSKReporter (Philip Gladstone, N1DQ) - used within its query limits</td></tr>
+<tr><td>Map tiles</td><td>&copy; OpenStreetMap contributors (ODbL); Esri base maps</td></tr>
+<tr><td>APRS-IS</td><td>The APRS-IS network and its server operators</td></tr>
+<tr><td>EMAIL-2</td><td>The APRS EMAIL-2 service (javAPRSSrvr)</td></tr>
+<tr><td>APRS</td><td>APRS is a registered trademark of the late Bob Bruninga, WB4APR</td></tr></table>
+<p>Full licence texts are available from each project's website. Tradewind's source: <a href="https://github.com/BajanBob/APRS-Tradewins">github.com/BajanBob/APRS-Tradewins</a></p>
+</main></body></html>"""
+
 LOCAL_ADDRS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 LOGIN_FAILS = collections.deque()      # wrong PIN attempts (5 in 5 minutes locks logins out)
 LOCKED_PATHS = ("/api/config", "/api/comkey", "/api/mailpass", "/api/disaster")   # need the PIN when the settings are locked
@@ -1739,6 +1962,29 @@ class Handler(BaseHTTPRequestHandler):
 
     def _local(self):
         return self.client_address[0] in LOCAL_ADDRS
+
+    def _host_ok(self):
+        """DNS-rebinding guard: a web page on another site that points its name at this computer
+        sends its own name as Host - refuse it. Allowed: localhost, IP addresses, *.local, this computer's name."""
+        import ipaddress
+        import socket
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host.startswith("["):
+            name = host[1:host.find("]")] if "]" in host else host
+        else:
+            name = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+        if not name:
+            return False
+        if name in ("localhost", "localhost.") or name.endswith((".local", ".localhost")):
+            return True
+        try:
+            ipaddress.ip_address(name)
+            return True
+        except ValueError:
+            pass
+        me = socket.gethostname().lower()
+        extra = [h.strip().lower() for h in str(STATION.cfg.get("allowed_hosts") or "").split(",") if h.strip()]
+        return name in (me, me.split(".")[0]) or name in extra
 
     def _authed(self):
         if self._local():
@@ -1792,7 +2038,11 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def do_GET(self):
+        if not self._host_ok():
+            return self._json({"error": "unknown host name refused - use the IP address, or add the name under MENU > STATION"}, 403)
         path = self.path.split("?")[0]
+        if path == "/notices":
+            return self._html(NOTICES_PAGE)
         if path == "/manifest.json":          # iPhone / Android "Add to Home Screen"
             return self._bytes(json.dumps({
                 "name": APP_NAME, "short_name": APP_NAME, "start_url": "/", "display": "standalone",
@@ -1857,6 +2107,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(STATION.chat.state() if STATION.chat else {"seq": 0, "peers": [], "events": [], "off": True})
         elif path == "/api/freqs":
             self._json([{"value": v, "label": l} for v, l in tncmod.APRS_FREQS])
+        elif path == "/api/dx":
+            self._json(STATION.dx_evidence())
+        elif path == "/api/fieldtest":
+            self._json(STATION.field_report())
         elif path == "/api/zones":
             self._json([{"key": k, "name": z["name"], "aprs": z["aprs"], "qsy": z["qsy"], "note": z["note"]}
                         for k, z in tncmod.ZONES.items()])
@@ -1864,6 +2118,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
     def do_POST(self):
+        if not self._host_ok():
+            return self._json({"error": "unknown host name refused"}, 403)
         # Basic CSRF guard: browsers send Origin on cross-site POSTs
         origin = self.headers.get("Origin")
         host = self.headers.get("Host", "")
@@ -1944,7 +2200,12 @@ class Handler(BaseHTTPRequestHandler):
             b = self._body()
             try:
                 if b.get("action") == "ping":
-                    STATION.wolf_ping(str(b.get("call") or ""), str(b.get("text") or ""))
+                    how = STATION.wolf_ping(str(b.get("call") or ""), str(b.get("text") or ""))
+                    return self._json({"ok": True, "how": how})
+                elif b.get("action") == "auto":
+                    with STATION.lock:
+                        STATION.cfg["wolf_auto"] = bool(b.get("on"))
+                        save_config(STATION.cfg)
                 elif b.get("action") == "toggle":
                     with STATION.lock:
                         STATION.cfg["wolf_on"] = bool(b.get("on"))

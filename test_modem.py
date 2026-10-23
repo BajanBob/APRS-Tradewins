@@ -76,6 +76,7 @@ def main():
     test_replyack()
     test_v35()
     test_v36()
+    test_v37()
     if not tnc.crypto_available():
         test_secure()
     else:
@@ -583,6 +584,45 @@ def test_replyack():
     assert [x["state"] for x in A._peer("8P6XX-9")["messages"] if x["text"] == "73"] == ["delivered"]
 
 
+def test_v37():
+    """v3.7: licence 70 cm range, KISS LAN-only, host-name guard, position decoding, delivery timing."""
+    import app
+    import types
+    assert tnc.set_uhf("430-440") and not tnc.qsy_freq_ok("445.000") and tnc.qsy_freq_ok("432.500")
+    assert tnc.aprs_freq_hz({"aprs_freq": "custom", "aprs_freq_custom": "445.925", "grid": "GK03"}) is None
+    assert tnc.set_uhf("420-450") and tnc.qsy_freq_ok("445.000")
+    assert not tnc.set_uhf("400-470") and not tnc.set_uhf("abc")
+    tnc.set_uhf("430-440")
+    assert not tnc.qsy_freq_ok("147.000", "r1") and tnc.qsy_freq_ok("147.000", "r2"), "Europe 2 m ends at 146"
+    assert tnc.kiss_peer_ok("127.0.0.1") and tnc.kiss_peer_ok("192.168.1.20") and tnc.kiss_peer_ok("10.0.0.5")
+    assert not tnc.kiss_peer_ok("8.8.8.8") and not tnc.kiss_peer_ok("junk")
+    def host_ok(h):
+        return app.Handler._host_ok(types.SimpleNamespace(headers={"Host": h}))
+    for h in ("127.0.0.1:8073", "localhost:8073", "192.168.1.20:8073", "[::1]:8073", "shack.local:8073"):
+        assert host_ok(h), h
+    for h in ("evil.example.com:8073", "attacker.net", ""):
+        assert not host_ok(h), "DNS rebinding: " + h
+    lat, lon = app.aprs_position("=1311.50N/05936.20W-Test")
+    assert abs(lat - 13.1917) < 0.001 and abs(lon + 59.6033) < 0.001 and app.latlon_to_grid(lat, lon).startswith("GK03")
+    lat, lon = app.aprs_position("!/5L!!<*e7>7P[")
+    assert abs(lat - 49.5) < 0.001 and abs(lon + 72.75) < 0.001, "compressed position"
+    assert app.aprs_position(":8P6XX    :hello") is None
+    # delivery timing + field-test stats
+    clock = [5000.0]
+    sent = []
+    A = tnc.ChatManager("8P5AB-10", lambda to, info, r: sent.append((to, info, r)), lambda: clock[0])
+    A.open_direct("8P6XX-9", "rf")
+    A.send("8P6XX-9", "Radio check")
+    no = list(A.pending)[0]
+    clock[0] += 4.2
+    A._got_ack("8P6XX-9", no, True, "RF")
+    st = A.stats[-1]
+    assert st["result"] == "delivered" and st["secs"] == 4.2 and st["call"] == "8P6XX-9"
+    m = [m for m in A.peers["8P6XX-9"]["messages"] if m["dir"] == "out"][-1]
+    assert m["secs"] == 4.2, "delivery time shown on the message"
+    print("  v3.7 safeguards + delivery timing OK")
+
+
 def test_v36():
     """v3.6: band-plan zone from the grid square, zone chat channels, manual override, no hails on satellites."""
     z = tnc.zone_for_grid
@@ -630,12 +670,14 @@ def test_v36():
 def _tls_impostor_test(app):
     """A server with a self-signed certificate (an impostor) must be refused before any password is sent."""
     import shutil, socket, ssl, subprocess, tempfile, threading
-    if not shutil.which("openssl"):
-        return
+    if not shutil.which("openssl") or sys.platform.startswith("win"):
+        return                       # needs a working openssl; the Linux build runs it
     d = tempfile.mkdtemp()
     key, crt = os.path.join(d, "k.pem"), os.path.join(d, "c.pem")
-    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", crt,
-                    "-days", "1", "-subj", "/CN=smtp.gmail.com"], check=True, capture_output=True)
+    r = subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", crt,
+                        "-days", "1", "-subj", "/CN=smtp.gmail.com"], capture_output=True)
+    if r.returncode or not os.path.exists(crt):
+        return
     sctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); sctx.load_cert_chain(crt, key)
     ls = socket.socket(); ls.bind(("127.0.0.2", 0)); ls.listen(1); port = ls.getsockname()[1]
     def serve():
@@ -739,8 +781,11 @@ def test_v35():
                                    "wolf_qth": "Barbados", "wolf_stop": ""},
                               wolf={}, wolf_pings=__import__("collections").deque(), chat=chat,
                               isc=types.SimpleNamespace(verified=True, set_filter=lambda f: msgs.append(("FILTER", f, ""))),
-                              add_log=lambda *a: None, lock=__import__("threading").RLock(), SW=app.Station.SW)
-    for name in ("_wolf_update", "_wolf_heard", "wolf_ping", "wolf_stopped", "wolf_state", "_on_stop"):
+                              add_log=lambda *a: None, lock=__import__("threading").RLock(), SW=app.Station.SW,
+                              commercial=False, tnc=None, qsy_hz=None, wolf_log={},
+                              WOLF_SPOT_FRESH_S=app.Station.WOLF_SPOT_FRESH_S)
+    for name in ("_wolf_update", "_wolf_heard", "wolf_ping", "wolf_stopped", "wolf_state", "_on_stop",
+                 "wolf_rf_check", "_wolf_text", "_wolf_auto"):
         setattr(W, name, getattr(app.Station, name).__get__(W))
     sp = lambda tx, rx, km: eng.Spot(tx=tx, tx_grid="GK03", rx=rx, rx_grid="HI21", freq=144174000, mode="FT8",  # noqa: E731
                                      snr="-14", ts=0, band="2m", km=km, prop_mode="TEP")
@@ -763,6 +808,27 @@ def test_v35():
     chat.on_stop = W._on_stop
     chat.on_packet("PY7ZZ-9>APDR16,TCPIP*::8P5AB-10 :STOP{5", "IS")
     assert "PY7ZZ" in W.wolf_stopped()
+    # v3.8 auto-call on 2m RF: path open now (fresh spot), station on APRS, same APRS frequency
+    W.cfg.update(tnc="sound", aprs_freq="auto", wolf_on=True, wolf_auto=True, wolf_per_hour=5)
+    W.tnc = object()
+    W._wolf_update([sp("8P5AB", "KP4AA", 1060)])
+    W.wolf["KP4AA"]["grid"] = "FK68"                      # Puerto Rico: also 144.390
+    W._wolf_heard("KP4AA-7>APK004,WIDE2-1:=1820.00N/06600.00W>")
+    assert W.wolf_rf_check(W.wolf["KP4AA"])[0], W.wolf_rf_check(W.wolf["KP4AA"])
+    msgs.clear()
+    W._wolf_auto()
+    assert any(m[0] == "KP4AA-7" and m[2] == "rf" and "2m DX via APRS on Tradewind" in m[1] for m in msgs), msgs
+    assert W.wolf["KP4AA"]["ping_route"] == "2m RF" and len(msgs[0][1].split(":", 2)[2]) <= 75
+    msgs.clear(); W._wolf_auto(); assert not msgs, "only once a day"
+    # Brazil uses 145.570 for APRS: RF can't reach it, so it falls back to the internet
+    W.cfg["wolf_stop"] = ""
+    W.wolf["PY7ZZ"].update(pinged=0, t=time.time())
+    ok, why = W.wolf_rf_check(W.wolf["PY7ZZ"])
+    assert not ok and "145.570" in why
+    W.cfg["wolf_auto_fallback"] = False
+    msgs.clear(); W._wolf_auto(); assert not msgs, "no internet fallback when switched off"
+    W.wolf["KP4AA"]["t"] = time.time() - 3600
+    assert "closed" in W.wolf_rf_check(W.wolf["KP4AA"])[1], "old spot: path may be closed"
     # three queued messages to one station all go out, in order (v3.2 queue jam fixed)
     q, rx = [], []
     S = tnc.ChatManager("8P5AB-10", lambda to, info, r: q.append(info), now)

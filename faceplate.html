@@ -295,7 +295,7 @@ body[data-fp="console"] .map-wrap,body[data-fp="console"] .chat-wrap,body[data-f
 .f-slot{margin:0 14px}
 .f-slot .map-box{height:260px}
 .f-actions{position:sticky;bottom:0;margin-top:4px;background:#fff;border-top:1px solid #d5dde5;padding:12px 14px 16px;
-  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;z-index:600}
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;z-index:600}
 .f-actions button{min-height:52px;border-radius:12px;border:1px solid #c3cfda;background:#f8fafc;color:#0f172a;font:700 15px system-ui,sans-serif;cursor:pointer}
 .f-actions button.pri{background:#0e7490;border-color:#0e7490;color:#fff}
 body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;background:#111827;border-radius:12px;padding:12px}
@@ -473,6 +473,29 @@ details.more summary::-webkit-details-marker{display:none}
   .cell .det{font-size:11px;white-space:normal}
   .power{width:64px;height:64px}
 }
+
+/* v3.7 setup wizard + share */
+.wiz{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;padding:16px}
+.wiz.open{display:flex}
+.wiz-card{width:min(520px,100%);max-height:92vh;overflow:auto;background:var(--panel2);border:1px solid var(--edge);border-radius:16px;padding:18px;color:#e6edf3;font-family:system-ui,sans-serif}
+.wiz-card h2{margin:0 0 4px;font-size:20px}.wiz-step{font-size:12px;letter-spacing:.2em;color:var(--engrave)}
+.wiz-card p{color:#c9d1d9;font-size:15px;line-height:1.45;margin:8px 0}
+.wiz-card label{display:block;font-size:13px;color:var(--engrave-hi);margin:12px 0 4px}
+.wiz-card input,.wiz-card select{width:100%;box-sizing:border-box;min-height:44px;font-size:16px}
+.wiz-choices{display:grid;gap:8px;margin-top:10px}
+.wiz-choice{text-align:left;min-height:56px;padding:10px 14px;border-radius:12px;border:1px solid var(--edge);background:#0e1114;color:#e6edf3;font:15px system-ui,sans-serif;cursor:pointer}
+.wiz-choice b{display:block;font-size:16px}.wiz-choice span{color:#9aa3ad;font-size:13px}
+.wiz-choice[aria-pressed="true"]{border-color:#38dcc8;background:#0b2622}
+.wiz-nav{display:flex;gap:8px;justify-content:space-between;margin-top:18px}
+.wiz-err{color:#fca5a5;font-size:14px;min-height:18px;margin-top:8px}
+.share-list{display:grid;gap:8px;margin-top:10px}
+.open-share{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:55;display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+  max-width:calc(100% - 32px);box-sizing:border-box;padding:10px 12px;border-radius:14px;background:#052e16;border:1px solid #16a34a;color:#dcfce7;font:600 15px system-ui,sans-serif}
+.open-share .os-btns{display:flex;gap:6px;flex-wrap:wrap}
+.os-app{min-height:40px;padding:0 14px;border-radius:10px;border:0;font:700 14px system-ui,sans-serif;cursor:pointer;color:#fff;text-decoration:none;display:inline-flex;align-items:center}
+.os-wa{background:#16a34a}.os-fb{background:#1d4ed8}.os-em{background:#475569}
+.share-prev{white-space:pre-wrap;background:#0e1114;border:1px solid var(--edge);border-radius:10px;padding:10px;font:14px/1.4 var(--mono);color:#dbeafe;margin-top:10px}
+#share-qr{display:block;margin:10px auto 0;background:#fff;padding:8px;border-radius:8px}
 </style>
 </head>
 <body>
@@ -498,6 +521,8 @@ details.more summary::-webkit-details-marker{display:none}
         <a href="#c-slot-chat"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/></svg>Two-way chat</a>
         <a href="#c-alerts"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v4l-2 3h16l-2-3V9a6 6 0 0 0-6-6zM10 19a2 2 0 0 0 4 0"/></svg>Alert center</a>
         <a href="#c-slot-log"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Packet log</a>
+        <button type="button" data-click="#b-made"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/></svg>I made it</button>
+        <button type="button" data-click="#b-share"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg>Share</button>
         <button type="button" id="c-settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>Settings</button>
       </div>
       <div class="c-foot">Spot data: PSKReporter<br>by 8P5DG &amp; 8P5AB · MIT</div>
@@ -530,7 +555,7 @@ details.more summary::-webkit-details-marker{display:none}
 
   <section class="fp f-root" id="fp-field" aria-label="Field face plate">
     <header class="f-head">
-      <div><div class="t">TRADEWIND</div><div class="c" id="f-call">NOCALL</div><div class="s" id="f-sub">----</div></div>
+      <div><div class="t">TRADEWIND</div><div class="c" id="fld-call">NOCALL</div><div class="s" id="f-sub">----</div></div>
       <button type="button" class="f-pwr" id="f-power" aria-label="Station power"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg><span id="f-pwr-t">OFF</span></button>
     </header>
     <div class="f-tiles">
@@ -546,6 +571,7 @@ details.more summary::-webkit-details-marker{display:none}
     <div class="f-slot" id="f-slot-chat"></div>
     <nav class="f-actions" aria-label="Actions">
       <button type="button" data-click="#b-bcn">Beacon</button>
+      <button type="button" data-click="#b-made">I made it</button>
       <button type="button" id="f-menu">Menu</button>
       <button type="button" class="pri" data-click="#b-chk">Check</button>
     </nav>
@@ -601,6 +627,8 @@ details.more summary::-webkit-details-marker{display:none}
           <button class="btn" id="b-bcn" title="Send position beacon now">BCN</button>
           <button class="btn" id="b-test" title="Send a test bulletin">TEST</button>
           <button class="btn" id="b-chk" title="Check PSKReporter now">CHECK</button>
+          <button class="btn" id="b-made" title="Make an &quot;I made it&quot; DX card with the evidence">I MADE IT</button>
+          <button class="btn" id="b-share" title="Share an invite, an opening or the net list">SHARE</button>
           <button class="btn accent" id="b-menu" aria-expanded="false" title="Settings">MENU</button>
         </div>
       </div>
@@ -736,6 +764,8 @@ details.more summary::-webkit-details-marker{display:none}
         <select class="inset" data-k="qsy_mode" id="f-qsymode"><option value="auto">Automatic for my zone</option><option value="manual">Manual override - my own list</option></select></div>
       <div class="set wide note" id="zone-note"></div>
       <div class="set wide m-qsyman"><label>My chat frequencies for QSY (MHz, comma separated, in order)</label><input class="inset" data-k="qsy_freqs" id="f-qsyfreqs" placeholder="144.510,144.530,144.550"></div>
+      <div class="set"><label>70 cm range on my licence (MHz)</label><input class="inset" data-k="uhf_range" placeholder="430-440"></div>
+      <div class="set"><label>Extra face-plate host names (comma separated)</label><input class="inset" data-k="allowed_hosts" placeholder="shack-pc.home"></div>
       <div class="set wide" id="pin-box"><label>Station PIN <span class="note" id="pin-state"></span></label>
         <div class="pin-row"><input class="inset" id="pin-old" type="password" inputmode="numeric" placeholder="current PIN" autocomplete="off">
         <input class="inset" id="pin-new" type="password" inputmode="numeric" placeholder="new PIN (4-8 digits)" autocomplete="off">
@@ -746,6 +776,12 @@ details.more summary::-webkit-details-marker{display:none}
     </div>
 
     <div class="pane" id="p-prop">
+      <div class="set wide"><label>Share 2m / 70cm opening alerts (opt in - all off until you tick them)</label><div class="chips">
+        <label class="chk"><input type="checkbox" data-k="share_whatsapp"> WhatsApp</label>
+        <label class="chk"><input type="checkbox" data-k="share_facebook"> Facebook</label>
+        <label class="chk"><input type="checkbox" data-k="share_email"> Email</label></div></div>
+      <div class="set wide"><label>Email alerts to (optional, comma separated)</label><input class="inset" data-k="share_email_to" placeholder="club-list@example.com" autocomplete="off"></div>
+      <div class="set wide note">When an opening starts, the alert shows a button for each ticked app. Nothing is ever posted by itself - you press the button and check the message before it goes.</div>
       <div class="set"><label>Bands</label><div class="chips">
         <label class="chk"><input type="checkbox" data-list="bands" value="2m"> 2m</label>
         <label class="chk"><input type="checkbox" data-list="bands" value="70cm"> 70cm</label></div></div>
@@ -778,6 +814,10 @@ details.more summary::-webkit-details-marker{display:none}
       <div class="set"><label>Wolf: only stations at least (km)</label><input class="inset" data-k="wolf_min_km" data-num type="number" min="100" max="20000"></div>
       <div class="set"><label>Wolf: pings per hour (max)</label><input class="inset" data-k="wolf_per_hour" data-num type="number" min="1" max="10"></div>
       <div class="set"><label>Wolf: your location in pings</label><input class="inset" data-k="wolf_qth" placeholder="Barbados" maxlength="20"></div>
+      <div class="set wide"><label class="chk"><input type="checkbox" data-k="wolf_auto"> Wolf auto-call: when PSKReporter shows 2m open to a station that is on APRS, call it on 2m RF automatically</label></div>
+      <div class="set wide"><label class="chk"><input type="checkbox" data-k="wolf_auto_fallback"> If 2m RF can't reach them (path closed, or they use another APRS frequency), send the call by internet instead</label></div>
+      <div class="set"><label>Wolf: spot must be newer than (minutes)</label><input class="inset" data-k="wolf_open_min" data-num type="number" min="5" max="60"></div>
+      <div class="set wide"><label>Wolf call message (max 67 characters; {me} {grid} {km} {prop} {band} {mode} {call} are filled in)</label><input class="inset" data-k="wolf_msg" maxlength="90"></div>
     </div>
 
     <div class="pane" id="p-net">
@@ -874,6 +914,8 @@ details.more summary::-webkit-details-marker{display:none}
     </div>
     <div class="drawer-foot">
       <div class="note" id="save-note">Saving restarts the station if it's on.</div>
+      <button class="btn" id="b-wizard">SETUP WIZARD</button>
+      <button class="btn" id="b-field">FIELD TEST REPORT</button>
       <button class="btn" id="b-close">CLOSE</button>
       <button class="btn accent" id="b-save">SAVE</button>
     </div>
@@ -963,6 +1005,7 @@ details.more summary::-webkit-details-marker{display:none}
     <details class="heard" id="wolf-box">
       <summary>WOLF MODE - DX ON APRS <span id="wolf-n"></span></summary>
       <label class="chk" style="margin:8px 0"><input type="checkbox" id="wolf-on"> Hunt: check long-distance stations from PSKReporter for APRS activity</label>
+      <label class="chk" style="margin:0 0 8px"><input type="checkbox" id="wolf-auto"> Auto-call on 2m RF when the path is open (once a day per station, STOP honoured)</label>
       <div class="note" id="wolf-note"></div>
       <div id="wolf-list"><div class="chat-empty">Turn Wolf Mode on. After the next propagation check, DX stations working 2 m / 70 cm appear here; those also active on APRS can be pinged.</div></div>
     </details>
@@ -997,6 +1040,60 @@ details.more summary::-webkit-details-marker{display:none}
 </div>
 <datalist id="serial-list"></datalist>
 <div class="toast" id="toast" role="status"></div>
+<div class="wiz" id="wiz" role="dialog" aria-modal="true" aria-labelledby="wiz-title">
+  <div class="wiz-card">
+    <div class="wiz-step" id="wiz-step">STEP 1 OF 5</div>
+    <h2 id="wiz-title">Welcome to Tradewind</h2>
+    <div id="wiz-body"></div>
+    <div class="wiz-err" id="wiz-err" role="alert"></div>
+    <div class="wiz-nav"><button class="btn" id="wiz-back">BACK</button>
+      <span style="display:flex;gap:8px"><button class="btn" id="wiz-skip">CLOSE</button><button class="btn accent" id="wiz-next">NEXT</button></span></div>
+  </div>
+</div>
+<div class="open-share hide" id="open-share" role="region" aria-label="Share this opening">
+  <span id="open-share-t">2m opening</span>
+  <span class="os-btns" id="open-share-btns"></span>
+  <button class="btn" id="open-share-x" aria-label="Close">✕</button>
+</div>
+<div class="wiz" id="made" role="dialog" aria-modal="true" aria-labelledby="made-title">
+  <div class="wiz-card">
+    <h2 id="made-title">I made it! - DX card</h2>
+    <p>Pick a contact. The card shows the proof: who heard whom, when (UTC), how far, and where the evidence comes from.</p>
+    <div class="share-list" id="made-list"></div>
+    <details style="margin-top:10px"><summary>Add a contact by hand (e.g. FM simplex or SSB)</summary>
+      <label>Their callsign</label><input class="inset" id="mk-call" placeholder="PY7ZZ" autocomplete="off">
+      <label>Their grid square</label><input class="inset" id="mk-grid" placeholder="HI21" autocomplete="off">
+      <label>Band / mode</label><select class="inset" id="mk-band"><option>2m</option><option>70cm</option></select>
+      <input class="inset" id="mk-mode" placeholder="FM, SSB, FT8, APRS..." style="margin-top:6px">
+      <button class="btn" id="mk-go" style="margin-top:8px">MAKE CARD</button>
+      <div class="note">Cards made by hand are marked "logged by operator", so nobody mistakes them for third-party evidence.</div>
+    </details>
+    <canvas id="made-card" width="1080" height="1080" class="hide" style="width:100%;border-radius:10px;margin-top:10px"></canvas>
+    <div class="wiz-nav"><button class="btn" id="made-close">CLOSE</button>
+      <span style="display:flex;gap:8px"><button class="btn hide" id="made-save">SAVE PICTURE</button><button class="btn accent hide" id="made-share">SHARE</button></span></div>
+  </div>
+</div>
+<div class="wiz" id="field" role="dialog" aria-modal="true" aria-labelledby="field-title">
+  <div class="wiz-card">
+    <h2 id="field-title">Field test report</h2>
+    <p>How messages got through on this station. After a test session, send this to 8P5AB / 8P5DG. It holds no passwords, positions or message text.</p>
+    <div class="share-prev" id="field-text"></div>
+    <div class="wiz-nav"><button class="btn" id="field-close">CLOSE</button>
+      <span style="display:flex;gap:8px"><button class="btn" id="field-copy">COPY</button><button class="btn accent" id="field-share">SHARE</button></span></div>
+  </div>
+</div>
+<div class="wiz" id="share" role="dialog" aria-modal="true" aria-labelledby="share-title">
+  <div class="wiz-card">
+    <h2 id="share-title">Share</h2>
+    <p>Only what you see below is shared. Passwords, your PIN, your exact position and private chats are never included.</p>
+    <div class="share-list" id="share-list"></div>
+    <div class="share-prev hide" id="share-prev"></div>
+    <canvas id="share-card" width="1080" height="1080" class="hide" style="width:100%;border-radius:10px;margin-top:10px"></canvas>
+    <div class="wiz-nav"><button class="btn" id="share-close">CLOSE</button>
+      <span style="display:flex;gap:8px"><button class="btn hide" id="share-copy">COPY</button><button class="btn accent hide" id="share-go">SHARE</button></span></div>
+  </div>
+</div>
+
 
 <script>
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -1173,6 +1270,403 @@ async function save(){
   $('#f-grid').classList.toggle('bad', (r.errors||[]).some(e=>e.includes('grid')));
 }
 
+/* Small QR code encoder (byte mode, error correction M, versions 1-10) - no internet needed */
+function qrMatrix(text){
+  const data = Array.from(new TextEncoder().encode(text));
+  const ECC = [0,10,16,26,18,24,16,18,22,22,26], BLK = [0,1,1,1,2,2,4,4,4,5,5];
+  const raw = v => { let r=(16*v+128)*v+64; if (v>=2){ const n=Math.floor(v/7)+2; r-=(25*n-10)*n-55; if (v>=7) r-=36; } return r; };
+  let ver = 0;
+  for (let v=1; v<=10; v++){ const cap=(Math.floor(raw(v)/8)-ECC[v]*BLK[v])*8; if (4+(v<10?8:16)+8*data.length <= cap){ ver=v; break; } }
+  if (!ver) throw new Error('text too long for QR');
+  const size = ver*4+17, M = [], F = [];
+  for (let y=0;y<size;y++){ M.push(new Array(size).fill(false)); F.push(new Array(size).fill(false)); }
+  const set = (x,y,d)=>{ M[y][x]=d; F[y][x]=true; };
+  for (let i=0;i<size;i++){ set(6,i,i%2===0); set(i,6,i%2===0); }
+  for (const [cx,cy] of [[3,3],[size-4,3],[3,size-4]])
+    for (let dy=-4;dy<=4;dy++) for (let dx=-4;dx<=4;dx++){
+      const d=Math.max(Math.abs(dx),Math.abs(dy)), x=cx+dx, y=cy+dy;
+      if (x>=0&&x<size&&y>=0&&y<size) set(x,y,d!==2&&d!==4); }
+  const al=[];
+  if (ver>1){ const n=Math.floor(ver/7)+2, step=Math.ceil((ver*4+4)/(n*2-2))*2; al.push(6);
+    for (let p=ver*4+10; al.length<n; p-=step) al.splice(1,0,p); }
+  for (let i=0;i<al.length;i++) for (let j=0;j<al.length;j++){
+    if ((i===0&&j===0)||(i===0&&j===al.length-1)||(i===al.length-1&&j===0)) continue;
+    for (let dy=-2;dy<=2;dy++) for (let dx=-2;dx<=2;dx++) set(al[i]+dx,al[j]+dy,Math.max(Math.abs(dx),Math.abs(dy))!==1); }
+  const fmt = mask=>{
+    const d=(0<<3)|mask; let r=d; for (let i=0;i<10;i++) r=(r<<1)^((r>>>9)*0x537);
+    const b=((d<<10)|r)^0x5412, g=i=>((b>>>i)&1)!==0;
+    for (let i=0;i<=5;i++) set(8,i,g(i)); set(8,7,g(6)); set(8,8,g(7)); set(7,8,g(8));
+    for (let i=9;i<15;i++) set(14-i,8,g(i));
+    for (let i=0;i<8;i++) set(size-1-i,8,g(i)); for (let i=8;i<15;i++) set(8,size-15+i,g(i));
+    set(8,size-8,true); };
+  fmt(0);
+  if (ver>=7){ let r=ver; for (let i=0;i<12;i++) r=(r<<1)^((r>>>11)*0x1F25); const b=(ver<<12)|r;
+    for (let i=0;i<18;i++){ const bit=((b>>>i)&1)!==0, a=size-11+i%3, c=Math.floor(i/3); set(a,c,bit); set(c,a,bit); } }
+  // data bits
+  const bits=[], put=(v,n)=>{ for (let i=n-1;i>=0;i--) bits.push((v>>>i)&1); };
+  put(4,4); put(data.length, ver<10?8:16); data.forEach(b=>put(b,8));
+  const cap=(Math.floor(raw(ver)/8)-ECC[ver]*BLK[ver])*8;
+  put(0, Math.min(4, cap-bits.length)); while (bits.length%8) bits.push(0);
+  for (let p=0xEC; bits.length<cap; p^=0xEC^0x11) put(p,8);
+  const cw=[]; for (let i=0;i<bits.length;i+=8) cw.push(parseInt(bits.slice(i,i+8).join(''),2));
+  // Reed-Solomon
+  const mul=(x,y)=>{ let z=0; for (let i=7;i>=0;i--){ z=(z<<1)^((z>>>7)*0x11D); z^=((y>>>i)&1)*x; } return z; };
+  const deg=ECC[ver], div=new Array(deg).fill(0); div[deg-1]=1;
+  for (let i=0, root=1; i<deg; i++){ for (let j=0;j<deg;j++){ div[j]=mul(div[j],root); if (j+1<deg) div[j]^=div[j+1]; } root=mul(root,2); }
+  const rem=d=>{ const r=new Array(deg).fill(0); for (const b of d){ const f=b^r.shift(); r.push(0); for (let i=0;i<deg;i++) r[i]^=mul(div[i],f); } return r; };
+  const nb=BLK[ver], rawCw=Math.floor(raw(ver)/8), nShort=nb-rawCw%nb, shortLen=Math.floor(rawCw/nb), blocks=[];
+  for (let i=0,k=0;i<nb;i++){ const d=cw.slice(k,k+shortLen-deg+(i<nShort?0:1)); k+=d.length; const e=rem(d); if (i<nShort) d.push(0); blocks.push(d.concat(e)); }
+  const out=[]; for (let i=0;i<blocks[0].length;i++) for (let j=0;j<nb;j++) if (i!==shortLen-deg||j>=nShort) out.push(blocks[j][i]);
+  let i=0;
+  for (let right=size-1; right>=1; right-=2){ if (right===6) right=5;
+    for (let v=0; v<size; v++) for (let j=0;j<2;j++){
+      const x=right-j, up=((right+1)&2)===0, y=up?size-1-v:v;
+      if (!F[y][x] && i<out.length*8){ M[y][x]=((out[i>>>3]>>>(7-(i&7)))&1)!==0; i++; } } }
+  const MASKS=[(x,y)=>(x+y)%2===0,(x,y)=>y%2===0,(x,y)=>x%3===0,(x,y)=>(x+y)%3===0,(x,y)=>(Math.floor(x/3)+Math.floor(y/2))%2===0,
+    (x,y)=>x*y%2+x*y%3===0,(x,y)=>(x*y%2+x*y%3)%2===0,(x,y)=>((x+y)%2+x*y%3)%2===0];
+  const apply=m=>{ for (let y=0;y<size;y++) for (let x=0;x<size;x++) if (!F[y][x] && MASKS[m](x,y)) M[y][x]=!M[y][x]; };
+  const penalty=()=>{ let p=0, dark=0;
+    for (let a=0;a<2;a++) for (let y=0;y<size;y++){ let run=1;
+      for (let x=1;x<size;x++){ const c=a?M[x][y]:M[y][x], pc=a?M[x-1][y]:M[y][x-1];
+        if (c===pc){ run++; if (run===5) p+=3; else if (run>5) p++; } else run=1; } }
+    for (let y=0;y<size-1;y++) for (let x=0;x<size-1;x++){ const c=M[y][x]; if (c===M[y][x+1]&&c===M[y+1][x]&&c===M[y+1][x+1]) p+=3; }
+    for (let y=0;y<size;y++) for (let x=0;x<size;x++) if (M[y][x]) dark++;
+    return p + Math.floor(Math.abs(dark*20-size*size*10)/(size*size))*10; };
+  let best=0, bestP=Infinity;
+  for (let m=0;m<8;m++){ apply(m); fmt(m); const p=penalty(); if (p<bestP){ bestP=p; best=m; } apply(m); }
+  apply(best); fmt(best);
+  return M;
+}
+function qrDraw(canvas, text, px){
+  const M=qrMatrix(text), n=M.length, s=px||6, q=4;
+  canvas.width=canvas.height=(n+q*2)*s; const g=canvas.getContext('2d');
+  g.fillStyle='#fff'; g.fillRect(0,0,canvas.width,canvas.height); g.fillStyle='#000';
+  for (let y=0;y<n;y++) for (let x=0;x<n;x++) if (M[y][x]) g.fillRect((x+q)*s,(y+q)*s,s,s);
+}
+
+
+/* ---------- v3.7: sharing helpers ---------- */
+const REPO = 'https://github.com/BajanBob/APRS-Tradewins';
+const INVITE_URL = REPO + '/releases';
+function copyText(t){
+  try { if (navigator.clipboard && window.isSecureContext){ navigator.clipboard.writeText(t); return true; } } catch(e){}
+  const a=document.createElement('textarea'); a.value=t; a.style.position='fixed'; a.style.opacity='0'; document.body.appendChild(a); a.select();
+  let ok=false; try { ok=document.execCommand('copy'); } catch(e){} a.remove(); return ok;
+}
+async function shareText(title, text){
+  if (navigator.share){ try { await navigator.share({title, text}); return; } catch(e){ if (e && e.name==='AbortError') return; } }
+  toast(copyText(text) ? 'Copied - paste it into WhatsApp, Facebook or email' : 'Select the text and copy it', true);
+}
+function canvasBlob(cv){ return new Promise(r=>cv.toBlob(r,'image/png')); }
+async function shareCanvas(cv, name, text){
+  const blob = await canvasBlob(cv);
+  try {
+    const file = new File([blob], name, {type:'image/png'});
+    if (navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({files:[file], text}); return; }
+  } catch(e){ if (e && e.name==='AbortError') return; }
+  saveCanvas(cv, name);
+}
+function saveCanvas(cv, name){
+  const a=document.createElement('a'); a.download=name; a.href=cv.toDataURL('image/png'); document.body.appendChild(a); a.click(); a.remove();
+  toast('Picture saved to your Downloads', true);
+}
+const utc = t => { const d=new Date(t*1000); return d.toISOString().slice(0,10)+' '+d.toISOString().slice(11,16)+' UTC'; };
+const dlg = id => ({open(){ $(id).classList.add('open'); }, close(){ $(id).classList.remove('open'); }});
+
+/* ---------- SHARE ---------- */
+function shareOptions(){
+  const s = lastState || {}, c = cfg || {}, me = c.call || 'my station';
+  const opts = [];
+  opts.push({k:'invite', b:'Invite a ham to Tradewind', d:'A short message with the download link and a QR code to scan'});
+  const open = (s.matrix||[]).filter(x=>x.open);
+  if (open.length) opts.push({k:'open', b:`Opening alert - ${open.map(x=>x.band).join(', ')} open now`, d:'Tell other hams to get on the air'});
+  else opts.push({k:'open', b:'Opening alert', d:'No opening right now - this lights up when 2m / 70cm is open', off:true});
+  const R = (chatData && chatData.roster) || [];
+  opts.push({k:'net', b:`Net check-in list (${R.length})`, d:R.length ? 'Who checked in and their status - for net control or NEMS' : 'No check-ins yet', off:!R.length});
+  opts.push({k:'made', b:'I made it - DX card', d:'A picture with the proof of a 2m / 70cm DX contact'});
+  return opts;
+}
+let shareCur = null;
+function openShare(){
+  $('#share-prev').classList.add('hide'); $('#share-card').classList.add('hide'); $('#share-go').classList.add('hide'); $('#share-copy').classList.add('hide');
+  $('#share-list').innerHTML = shareOptions().map(o=>`<button class="wiz-choice" data-sh="${o.k}" ${o.off?'disabled style="opacity:.5"':''}><b>${esc(o.b)}</b><span>${esc(o.d)}</span></button>`).join('');
+  dlg('#share').open();
+}
+function shareBuild(k){
+  const s = lastState || {}, c = cfg || {}, me = c.call || '', base = me.split('-')[0];
+  $$('#share-list .wiz-choice').forEach(b=>b.setAttribute('aria-pressed', b.dataset.sh===k));
+  let text = '', qr = false;
+  if (k==='made'){ dlg('#share').close(); return openMade(); }
+  if (k==='invite'){
+    text = `Try Tradewind - a free APRS app for 2m / 70cm: two-way chat by radio, email by radio, propagation alerts (TEP / ducting) and emergency nets. `+
+           `Windows, Android and Linux. By 8P5DG & 8P5AB, Barbados.\n${INVITE_URL}\n73 de ${base || 'Tradewind'}`;
+    qr = true;
+  } else if (k==='open'){
+    const o = (s.matrix||[]).filter(x=>x.open);
+    text = o.map(x=>`${x.band} ${x.mode_name || x.prop_mode || 'opening'} open now: ${x.tx} (${x.tx_grid}) to ${x.rx} (${x.rx_grid}), ${x.km} km`).join('\n') +
+           `\nSeen from ${(c.grid||'').slice(0,4)} at ${utc(Date.now()/1000)}. Get on ${(s.zone && s.zone.aprs) || '144.390'} APRS or FT8 144.174!\n- ${base} via Tradewind`;
+  } else if (k==='net'){
+    const R = (chatData && chatData.roster) || [];
+    text = `Net check-ins at ${utc(Date.now()/1000)} (${R.length}) - from ${me} (Tradewind)\n` +
+           R.map(r=>`${r.call}: ${r.status || '-'}${r.text ? ' - ' + r.text : ''}`).join('\n') +
+           `\nFull ICS-309 log: MENU > download log on the net control station.`;
+  }
+  shareCur = {k, text};
+  if (k==='open'){ openShareText = text; const btns = shareAppButtons(text, 'Tradewind: opening now');
+    if ($('#share-apps')) $('#share-apps').remove();
+    $('#share-prev').insertAdjacentHTML('afterend', `<div class="os-btns" id="share-apps" style="margin-top:8px">${btns || '<span class="note">Tick WhatsApp, Facebook or Email under MENU &gt; PROPAGATION to get buttons here.</span>'}</div>`);
+  } else if ($('#share-apps')) $('#share-apps').remove();
+  $('#share-prev').textContent = text; $('#share-prev').classList.remove('hide');
+  $('#share-go').classList.remove('hide'); $('#share-copy').classList.remove('hide');
+  const cv = $('#share-card');
+  if (qr){ qrDraw(cv, INVITE_URL, 8); cv.style.width='60%'; cv.style.display='block'; cv.style.margin='10px auto 0'; cv.classList.remove('hide'); }
+  else cv.classList.add('hide');
+}
+$('#b-share').onclick = openShare;
+$('#share-list').addEventListener('click', e=>{ const b=e.target.closest('[data-sh]'); if (b && !b.disabled) shareBuild(b.dataset.sh); });
+$('#share-close').onclick = ()=>dlg('#share').close();
+$('#share-copy').onclick = ()=>{ if (shareCur) toast(copyText(shareCur.text) ? 'Copied' : 'Could not copy', true); };
+$('#share-go').onclick = ()=>{ if (shareCur) shareText('Tradewind', shareCur.text); };
+
+
+/* ---------- v3.7: first-run setup wizard ---------- */
+const WZ = {step:0, kind:''};
+const realEl = k => $(`[data-k="${k}"]`);
+function wzSet(k, v){ const el = realEl(k); if (!el) return; if (el.type==='checkbox') el.checked=!!v; else el.value=v;
+  el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); }
+const optsOf = sel => [...$(sel).options].map(o=>`<option value="${esc(o.value)}"${o.selected?' selected':''}>${esc(o.textContent)}</option>`).join('');
+const WZ_KINDS = [
+  {k:'sound', b:'Radio + sound-card interface', d:'Digirig, SignaLink, a cable to the radio data port - Tradewind is the modem'},
+  {k:'kiss_serial', b:'Radio with a built-in TNC', d:'Kenwood TH-D74/D75, TM-D710, Mobilinkd - USB or Bluetooth serial'},
+  {k:'kiss_tcp', b:'Direwolf or UZ7HO on this computer', d:'Another program is the modem; Tradewind connects to it'},
+  {k:'sdr', b:'RTL-SDR dongle (listen only)', d:'Hear and gate packets; never transmits'},
+  {k:'none', b:'No radio - internet only (APRS-IS)', d:'Chat, alerts and Wolf Mode over the internet; good on a phone'}];
+function wzRender(){
+  const n = 5, s = WZ.step, B = $('#wiz-body');
+  $('#wiz-step').textContent = `STEP ${s+1} OF ${n}`; $('#wiz-err').textContent = '';
+  $('#wiz-back').classList.toggle('hide', s===0); $('#wiz-next').textContent = s===n-1 ? 'SAVE AND FINISH' : 'NEXT';
+  if (s===0){
+    $('#wiz-title').textContent = 'Welcome to Tradewind';
+    B.innerHTML = `<p>Five quick steps to get on the air. You can change everything later under MENU.</p>
+      <label for="wz-call">Your callsign (add -SSID for this station, e.g. 8P6XX-10)</label><input class="inset" id="wz-call" value="${esc(realEl('call').value)}" autocomplete="off" spellcheck="false">
+      <label for="wz-grid">Your grid square (4 or 6 characters, e.g. GK03fd)</label><input class="inset" id="wz-grid" value="${esc(realEl('grid').value)}" autocomplete="off" spellcheck="false">
+      <p class="note">Don't know it? Search "Maidenhead grid locator" and click your home on the map.</p>`;
+    $('#wz-call').oninput = e=>{ e.target.value = e.target.value.toUpperCase(); };
+  } else if (s===1){
+    $('#wiz-title').textContent = 'How is your radio connected?';
+    WZ.kind = WZ.kind || realEl('tnc').value || 'sound';
+    B.innerHTML = `<div class="wiz-choices">${WZ_KINDS.map(o=>`<button class="wiz-choice" data-wk="${o.k}" aria-pressed="${o.k===WZ.kind}"><b>${o.b}</b><span>${o.d}</span></button>`).join('')}</div>`;
+    B.querySelectorAll('[data-wk]').forEach(b=>b.onclick=()=>{ WZ.kind=b.dataset.wk; B.querySelectorAll('[data-wk]').forEach(x=>x.setAttribute('aria-pressed', x===b)); });
+  } else if (s===2){
+    $('#wiz-title').textContent = 'Your radio';
+    const pre = (presets||[]).filter(p=>(p.tnc||'sound')===WZ.kind || (WZ.kind==='none' && p.tnc==='none'));
+    let h = pre.length ? `<label for="wz-preset">Radio model</label><select class="inset" id="wz-preset"><option value="">Choose...</option>${pre.map(p=>`<option value="${esc(p.id)}"${p.id===realEl('preset').value?' selected':''}>${esc(p.label)}</option>`).join('')}</select><p class="note" id="wz-pnote"></p>` : '';
+    if (WZ.kind==='sound') h += `<label>Audio from the radio (input)</label><select class="inset" id="wz-ain">${optsOf('#f-ain')}</select>
+      <label>Audio to the radio (output)</label><select class="inset" id="wz-aout">${optsOf('#f-aout')}</select>
+      <label>How Tradewind keys the transmitter (PTT)</label><select class="inset" id="wz-ptt">${optsOf('#f-ptt')}</select>
+      <label>PTT / CAT port (leave blank for VOX)</label><input class="inset" id="wz-pport" list="serial-list" value="${esc(realEl('ptt_port').value)}" placeholder="COM3 or /dev/ttyUSB0">`;
+    if (WZ.kind==='kiss_serial') h += `<label>Serial / Bluetooth port</label><input class="inset" id="wz-kser" list="serial-list" value="${esc(realEl('kiss_serial').value)}" placeholder="COM5 or /dev/rfcomm0">`;
+    if (WZ.kind==='kiss_tcp') h += `<label>Direwolf / UZ7HO address</label><input class="inset" id="wz-ktcp" value="${esc(realEl('kiss_addr').value || '127.0.0.1:8001')}">`;
+    if (WZ.kind==='none') h += `<p>No radio settings needed. Tradewind will use the internet (APRS-IS) for messages.</p>`;
+    if (WZ.kind==='sdr') h += `<p>Plug in the dongle. Tradewind listens on your zone's APRS frequency and never transmits.</p>`;
+    B.innerHTML = h;
+    const ps = $('#wz-preset'); if (ps){ const show=()=>{ const p=(presets||[]).find(x=>x.id===ps.value); $('#wz-pnote').textContent = p ? p.note : ''; }; ps.onchange=show; show(); }
+  } else if (s===3){
+    $('#wiz-title').textContent = 'Frequencies and licence';
+    wzSet('grid', WZ.grid || realEl('grid').value); zoneNote();
+    B.innerHTML = `<p>Tradewind picked these from your grid square:</p><div class="share-prev" style="font-family:system-ui">${$('#zone-note').innerHTML}</div>
+      <label for="wz-uhf">70 cm range on your licence (MHz)</label><input class="inset" id="wz-uhf" value="${esc(realEl('uhf_range').value || '430-440')}">
+      <p class="note">Barbados: 430-440. USA: 420-450. Tradewind never transmits outside your range. Change the zone or chat channels later under MENU &gt; RADIO / TNC.</p>
+      <label class="chk" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="wz-beacon" style="width:auto;min-height:0" ${realEl('beacon').checked?'checked':''}> Send my position every ${esc(realEl('beacon_min').value||30)} minutes (lets others see and message you)</label>`;
+  } else {
+    $('#wiz-title').textContent = 'Ready';
+    B.innerHTML = `<p><b>${esc(WZ.call || realEl('call').value)}</b> at <b>${esc(WZ.grid || realEl('grid').value)}</b> · ${esc((WZ_KINDS.find(x=>x.k===WZ.kind)||{}).b || '')}</p>
+      <p>Press <b>SAVE AND FINISH</b>, then the round <b>power button</b> to turn the station on. Try the <b>TEST</b> button, then hail a friend from the chat.</p>
+      <p class="note">Using the face plate from a phone? Set a station PIN under MENU &gt; STATION first.</p>`;
+  }
+}
+function wzNext(){
+  const s = WZ.step, err = t=>{ $('#wiz-err').textContent = t; return false; };
+  if (s===0){
+    const call = $('#wz-call').value.trim().toUpperCase(), grid = $('#wz-grid').value.trim();
+    if (!/^[A-Z0-9]{1,2}[0-9][A-Z0-9]{0,4}(-\d{1,2})?$/.test(call) || /^(N0CALL|NOCALL|MYCALL)/.test(call)) return err('Enter your own callsign, e.g. 8P6XX-10.');
+    if (!gridLL(grid)) return err('Enter a 4 or 6 character grid square, e.g. GK03 or GK03fd.');
+    WZ.call = call; WZ.grid = grid.slice(0,4).toUpperCase() + grid.slice(4).toLowerCase(); wzSet('call', WZ.call); wzSet('grid', WZ.grid);
+  } else if (s===1){
+    if (!WZ.kind) return err('Choose one.');
+  } else if (s===2){
+    const ps = $('#wz-preset'); if (ps && ps.value){ wzSet('preset', ps.value); applyPreset(ps.value); }
+    wzSet('tnc', WZ.kind);
+    if (WZ.kind==='sound'){ wzSet('audio_in', $('#wz-ain').value); wzSet('audio_out', $('#wz-aout').value); wzSet('ptt', $('#wz-ptt').value); wzSet('ptt_port', $('#wz-pport').value.trim());
+      if ($('#wz-ptt').value!=='VOX' && !$('#wz-pport').value.trim()) return err('Enter the PTT / CAT port, or choose VOX.'); }
+    if (WZ.kind==='kiss_serial'){ if (!$('#wz-kser').value.trim()) return err('Enter the serial or Bluetooth port.'); wzSet('kiss_serial', $('#wz-kser').value.trim()); }
+    if (WZ.kind==='kiss_tcp') wzSet('kiss_addr', $('#wz-ktcp').value.trim());
+    if (WZ.kind==='none') wzSet('aprsis', true);
+    updateVisibility();
+  } else if (s===3){
+    if (!/^\s*4[2-5]\d(\.\d+)?\s*-\s*4[2-5]\d(\.\d+)?\s*$/.test($('#wz-uhf').value)) return err('Use a range like 430-440.');
+    wzSet('uhf_range', $('#wz-uhf').value.replace(/\s/g,'')); wzSet('beacon', $('#wz-beacon').checked);
+  } else {
+    markDirty(); save().then(()=>{ lsSet('tw_wizard_done', '1'); dlg('#wiz').close(); });
+    return true;
+  }
+  WZ.step++; wzRender(); return true;
+}
+function openWizard(){ WZ.step = 0; WZ.kind = ''; if ($('#drawer').classList.contains('open')) $('#b-close').click(); wzRender(); dlg('#wiz').open(); $('#wz-call') && $('#wz-call').focus(); }
+$('#wiz-next').onclick = wzNext;
+$('#wiz-back').onclick = ()=>{ if (WZ.step>0){ WZ.step--; wzRender(); } };
+$('#wiz-skip').onclick = ()=>{ lsSet('tw_wizard_done', '1'); dlg('#wiz').close(); };
+$('#b-wizard').onclick = openWizard;
+
+/* ---------- opt-in opening alerts to WhatsApp / Facebook / email ---------- */
+function openingText(cells){
+  const c = cfg || {}, base = (c.call||'').split('-')[0], s = lastState || {};
+  return cells.map(x=>`${x.band} ${x.mode_name || x.prop_mode || 'opening'} OPEN: ${x.tx} (${x.tx_grid}) to ${x.rx} (${x.rx_grid}), ${x.km} km`).join('\n') +
+    `\nSeen from ${(c.grid||'').slice(0,4)} at ${utc(Date.now()/1000)}. Get on the air - APRS ${(s.zone && s.zone.aprs) || '144.390'}, FT8 144.174.\n- ${base} via Tradewind ${INVITE_URL}`;
+}
+function shareAppButtons(text, subject){
+  const c = cfg || {}, enc = encodeURIComponent, b = [];
+  if (c.share_whatsapp) b.push(`<a class="os-app os-wa" target="_blank" rel="noopener" href="https://wa.me/?text=${enc(text)}">WhatsApp</a>`);
+  if (c.share_facebook) b.push(`<a class="os-app os-fb" target="_blank" rel="noopener" data-fbcopy="1" href="https://www.facebook.com/sharer/sharer.php?u=${enc(INVITE_URL)}">Facebook</a>`);
+  if (c.share_email) b.push(`<a class="os-app os-em" href="mailto:${enc((c.share_email_to||'').replace(/\s/g,''))}?subject=${enc(subject)}&body=${enc(text)}">Email</a>`);
+  return b.join('');
+}
+document.addEventListener('click', e=>{          // Facebook can't take pre-filled text: copy it so it can be pasted
+  const a = e.target.closest('[data-fbcopy]'); if (!a) return;
+  if (copyText(a.dataset.text || openShareText)) toast('Alert text copied - paste it into your Facebook post', true);
+});
+let openShareText = '', openShareTimer = null;
+function offerOpeningShare(cells){
+  const c = cfg || {};
+  if (!(c.share_whatsapp || c.share_facebook || c.share_email)) return;     // opt in only
+  openShareText = openingText(cells);
+  $('#open-share-t').textContent = `${[...new Set(cells.map(x=>x.band))].join(' + ')} open - share it?`;
+  $('#open-share-btns').innerHTML = shareAppButtons(openShareText, `Tradewind: ${cells.map(x=>x.band).join(' + ')} opening now`);
+  $('#open-share').classList.remove('hide');
+  clearTimeout(openShareTimer); openShareTimer = setTimeout(()=>$('#open-share').classList.add('hide'), 5*60*1000);
+}
+$('#open-share-x').onclick = ()=>$('#open-share').classList.add('hide');
+
+/* ---------- I MADE IT: DX evidence card ---------- */
+let madeData = null, madeCur = null;
+async function openMade(){
+  $('#made-card').classList.add('hide'); $('#made-save').classList.add('hide'); $('#made-share').classList.add('hide');
+  $('#made-list').innerHTML = '<div class="note">Loading...</div>'; dlg('#made').open();
+  try { madeData = await api('/api/dx'); } catch(e){ madeData = {me:{}, spots:[], rf:[]}; }
+  const rows = [];
+  (madeData.spots||[]).forEach((x,i)=>rows.push(`<button class="wiz-choice" data-mk="s${i}"><b>${esc(x.call)} · ${x.km.toLocaleString()} km · ${esc(x.band)} ${esc(x.mode)}</b>`+
+    `<span>PSKReporter: ${x.heard_me ? esc(x.call)+' heard you' : 'you heard '+esc(x.call)} at ${esc(x.snr)} dB · ${utc(x.ts)}${x.prop ? ' · '+esc(x.prop) : ''}</span></button>`));
+  (madeData.aprs_dx||[]).forEach((x,i)=>rows.push(`<button class="wiz-choice" data-mk="a${i}"><b>${esc(x.call)} · ${Number(x.km).toLocaleString()} km · ${esc(x.band)} APRS by RF ✓</b>`+
+    `<span>Wolf call delivered over RF and acknowledged · ${utc(x.t)}${x.prop ? ' · '+esc(x.prop) : ''}</span></button>`));
+  (madeData.rf||[]).forEach((x,i)=>rows.push(`<button class="wiz-choice" data-mk="r${i}"><b>${esc(x.call)} · ${x.km.toLocaleString()} km · heard direct on RF</b>`+
+    `<span>${esc(x.sw || 'APRS')} · ${utc(x.t)}${x.chat ? ` · chat: ${x.chat.rx} received, ${x.chat.tx_ok} delivered` : ''}</span></button>`));
+  $('#made-list').innerHTML = rows.join('') || '<div class="note">No DX evidence yet. It appears here when PSKReporter spots your signal (or you spot theirs) on 2m / 70cm, or when you hear a station DIRECT on APRS (no digipeater) that sends its position. You can also add a contact by hand below.</div>';
+}
+function gcKm(a, b){ const r=Math.PI/180, d=Math.sin((b[0]-a[0])*r/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin((b[1]-a[1])*r/2)**2; return 6371*2*Math.asin(Math.sqrt(d)); }
+function drawMade(ev){
+  const cv = $('#made-card'), g = cv.getContext('2d'), W = 1080;
+  const bg = g.createLinearGradient(0,0,0,W); bg.addColorStop(0,'#0b1d2a'); bg.addColorStop(1,'#04090d');
+  g.fillStyle = bg; g.fillRect(0,0,W,W);
+  g.fillStyle = '#38dcc8'; g.font = '700 34px system-ui,sans-serif'; g.fillText('TRADEWIND · APRS', 60, 90);
+  g.fillStyle = '#fde68a'; g.font = '800 104px system-ui,sans-serif'; g.fillText('I MADE IT!', 60, 210);
+  g.fillStyle = '#ffffff'; g.font = '700 76px ui-monospace,monospace';
+  g.fillText(`${ev.me}  ⇄  ${ev.them}`, 60, 330);
+  g.fillStyle = '#93c5fd'; g.font = '600 48px system-ui,sans-serif';
+  g.fillText(`${ev.km ? ev.km.toLocaleString()+' km · ' : ''}${ev.band}${ev.mode ? ' · '+ev.mode : ''}${ev.prop ? ' · '+ev.prop : ''}`, 60, 410);
+  // path panel: a simple lat/lon grid with both stations
+  const px=60, py=450, pw=960, ph=330; g.fillStyle='#071521'; g.fillRect(px,py,pw,ph); g.strokeStyle='#1f3b4d'; g.lineWidth=1;
+  const a=ev.a, b=ev.b;
+  if (a && b){
+    const lat0=Math.min(a[0],b[0]), lat1=Math.max(a[0],b[0]), lon0=Math.min(a[1],b[1]), lon1=Math.max(a[1],b[1]);
+    const span=Math.max(lat1-lat0, (lon1-lon0)*Math.cos((lat0+lat1)*Math.PI/360)*ph/pw, 4)*1.35, cy=(lat0+lat1)/2, cx=(lon0+lon1)/2;
+    const kx=Math.cos(cy*Math.PI/180), X=lon=>px+pw/2+(lon-cx)*kx/span*ph, Y=lat=>py+ph/2-(lat-cy)/span*ph;
+    const step = span>40 ? 10 : span>15 ? 5 : 1;
+    g.font='20px system-ui'; g.fillStyle='#3b5b70';
+    for (let l=Math.ceil((cy-span/2)/step)*step; l<cy+span/2; l+=step){ g.beginPath(); g.moveTo(px,Y(l)); g.lineTo(px+pw,Y(l)); g.stroke(); }
+    for (let l=Math.ceil((cx-span*pw/ph/2/kx)/step)*step; l<cx+span*pw/ph/2/kx; l+=step){ g.beginPath(); g.moveTo(X(l),py); g.lineTo(X(l),py+ph); g.stroke(); }
+    const ax=X(a[1]), ay=Y(a[0]), bx=X(b[1]), by=Y(b[0]);
+    g.strokeStyle='#fbbf24'; g.lineWidth=6; g.setLineDash([18,12]); g.beginPath(); g.moveTo(ax,ay);
+    g.quadraticCurveTo((ax+bx)/2, Math.min(ay,by)-90, bx, by); g.stroke(); g.setLineDash([]);
+    const pts = [[ax,ay,ev.me,ev.myGrid],[bx,by,ev.them,ev.theirGrid]];
+    pts.forEach(([x,y,l,gr], i)=>{
+      g.fillStyle='#38dcc8'; g.beginPath(); g.arc(x,y,14,0,7); g.fill();
+      const other = pts[1-i];
+      // label beside its own dot, on the side away from the other station (so it never sits on the path line)
+      g.font='700 30px ui-monospace,monospace'; const w = Math.max(g.measureText(l).width, 120);
+      let right = x >= other[0];
+      if (right && x+24+w > px+pw-10) right = false; if (!right && x-24-w < px+10) right = true;
+      const tx = right ? x+24 : x-24-w;
+      const above = y <= other[1];
+      const ty = Math.min(Math.max(above ? y-10 : y+30, py+34), py+ph-38);
+      g.fillStyle='#fff'; g.fillText(l, tx, ty);
+      g.fillStyle='#9fb3c2'; g.font='24px ui-monospace,monospace'; g.fillText(gr||'', tx, ty+30);
+    });
+  } else { g.fillStyle='#3b5b70'; g.font='28px system-ui'; g.fillText('(grid squares not known - no map)', px+30, py+ph/2); }
+  g.fillStyle='#e5e7eb'; g.font='600 32px system-ui,sans-serif'; let y=850;
+  for (const line of ev.proof){ g.fillText(line, 60, y); y+=46; }
+  g.fillStyle='#64748b'; g.font='24px system-ui,sans-serif';
+  g.fillText(ev.source, 60, 1000);
+  g.fillStyle='#38dcc8'; g.fillText('Made with Tradewind · github.com/BajanBob/APRS-Tradewins', 60, 1040);
+  cv.classList.remove('hide'); $('#made-save').classList.remove('hide'); $('#made-share').classList.remove('hide');
+  madeCur = ev; cv.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+function madeFrom(k){
+  const me = (madeData.me && madeData.me.call) || cfg.call || '', myGrid = (madeData.me && madeData.me.grid) || cfg.grid || '';
+  const L = gridLL;
+  if (k[0]==='a'){
+    const x = madeData.aprs_dx[+k.slice(1)];
+    drawMade({me, them:x.call, km:x.km, band:x.band, mode:'APRS', prop:x.prop, myGrid, theirGrid:x.grid, a:L(myGrid), b:L(x.grid),
+      proof:[`APRS message sent on ${x.band} RF and ACKNOWLEDGED`, `${utc(x.t)} · round trip ${x.secs} s`].concat(x.snr ? [`Path confirmed on PSKReporter: ${x.mode} ${x.snr} dB`] : []),
+      source:'Evidence: two-way APRS over RF (message + ack) and PSKReporter'});
+    return;
+  }
+  if (k[0]==='s'){
+    const x = madeData.spots[+k.slice(1)];
+    const mg = x.my_grid || myGrid;
+    drawMade({me, them:x.call, km:x.km, band:x.band, mode:x.mode, prop:x.prop, myGrid:mg, theirGrid:x.grid, a:L(mg), b:L(x.grid),
+      proof:[`${x.heard_me ? x.call+' received '+me : me+' received '+x.call} at ${x.snr} dB`, `${utc(x.ts)} · ${(x.freq/1e6).toFixed(3)} MHz`],
+      source:'Evidence: PSKReporter.info reception report (independent)'});
+  } else {
+    const x = madeData.rf[+k.slice(1)];
+    const af = parseFloat((lastState && lastState.zone && lastState.zone.aprs) || '144.39');
+    drawMade({me, them:x.call, km:x.km, band: af >= 400 ? '70cm' : '2m', mode:'APRS', prop:'', myGrid, theirGrid:x.grid, a:L(myGrid), b:L(x.grid),
+      proof:[`Heard DIRECT on RF (no digipeater) ${utc(x.t)}`, `${x.call} · ${x.sw || 'APRS'} · position from their beacon`].concat(x.chat ? [`Two-way chat: ${x.chat.rx} received, ${x.chat.tx_ok} delivered ✓`] : []),
+      source:'Evidence: APRS packet decoded by this station; position from their beacon'});
+  }
+}
+$('#b-made').onclick = openMade;
+$('#made-list').addEventListener('click', e=>{ const b=e.target.closest('[data-mk]'); if (!b) return;
+  $$('#made-list .wiz-choice').forEach(x=>x.setAttribute('aria-pressed', x===b)); madeFrom(b.dataset.mk); });
+$('#mk-go').onclick = ()=>{
+  const call=$('#mk-call').value.trim().toUpperCase(), grid=$('#mk-grid').value.trim(), me=cfg.call||'', a=gridLL(cfg.grid), b=gridLL(grid);
+  if (!call){ toast('Enter their callsign'); return; }
+  const km = a && b ? Math.round(gcKm(a,b)) : 0;
+  drawMade({me, them:call, km, band:$('#mk-band').value, mode:$('#mk-mode').value.trim(), prop:'', myGrid:cfg.grid, theirGrid:grid, a, b,
+    proof:[`Contact ${utc(Date.now()/1000)}`, 'Logged by operator'], source:'Logged by operator - not independent evidence'});
+};
+$('#made-close').onclick = ()=>dlg('#made').close();
+$('#made-save').onclick = ()=>saveCanvas($('#made-card'), `tradewind-dx-${(madeCur&&madeCur.them||'card').replace(/[^A-Z0-9-]/gi,'')}.png`);
+$('#made-share').onclick = ()=>shareCanvas($('#made-card'), `tradewind-dx-${(madeCur&&madeCur.them||'card').replace(/[^A-Z0-9-]/gi,'')}.png`,
+  madeCur ? `I made it! ${madeCur.me} - ${madeCur.them}${madeCur.km ? ', '+madeCur.km.toLocaleString()+' km' : ''} on ${madeCur.band} with Tradewind` : '');
+
+/* ---------- FIELD TEST REPORT ---------- */
+let fieldTxt = '';
+async function openField(){
+  let r; try { r = await api('/api/fieldtest'); } catch(e){ toast('Could not read the report'); return; }
+  const f = x => x && x.sent ? `${x.delivered}/${x.sent} delivered (${x.pct}%), median ${x.median_s ?? '-'} s, worst ${x.worst_s ?? '-'} s, ${x.avg_tries} tries avg` : 'no messages';
+  const lines = [`Tradewind ${r.version} field test - ${r.call} (${r.grid})`, `Report ${utc(r.generated)}${r.since ? ' · since '+utc(r.since) : ''}`,
+    `Interface: ${r.tnc || '-'} · zone ${r.zone} · APRS ${r.aprs_mhz ? r.aprs_mhz.toFixed(3) : '-'} MHz`, '', `ALL: ${f(r.all)}`];
+  for (const [k,v] of Object.entries(r.by_route||{})) lines.push(`${k}: ${f(v)}`);
+  lines.push('', 'By station:'); for (const [k,v] of Object.entries(r.by_station||{})) lines.push(`  ${k}: ${f(v)}`);
+  lines.push('', `Heard on RF: ${r.heard_rf} stations (${r.heard_direct} direct, ${r.tradewind_heard} Tradewind) · best direct ${r.best_direct_km} km`);
+  if ((r.errors||[]).length){ lines.push('', 'Recent errors:'); r.errors.forEach(e=>lines.push(`  ${utc(e.t).slice(11)} ${e.text}`)); }
+  fieldTxt = lines.join('\n'); $('#field-text').textContent = fieldTxt; dlg('#field').open();
+}
+$('#b-field').onclick = openField;
+$('#field-close').onclick = ()=>dlg('#field').close();
+$('#field-copy').onclick = ()=>toast(copyText(fieldTxt) ? 'Copied' : 'Could not copy', true);
+$('#field-share').onclick = ()=>shareText('Tradewind field test', fieldTxt);
+
 /* ---------- state poll ---------- */
 function led(id, on){ $(id).classList.toggle('on', !!on); }
 async function poll(){
@@ -1185,7 +1679,7 @@ async function poll(){
   $('#pin-lock').checked = !!cfg.lock_settings; $('#pin-lock').disabled = !s.pin_set;
   $('#pin-old').classList.toggle('hide', !s.pin_set); $('#b-pin-remove').classList.toggle('hide', !s.pin_set);
   document.title = s.app; $('#appname').textContent = s.app.toUpperCase();
-  $('#foot').textContent = `${s.app} ${s.version} · by Brandon St Rose (8P5DG) & Kammie Holder (8P5AB) · MIT License · spot data from PSKReporter`;
+  $('#foot').innerHTML = `${s.app} ${s.version} · by Brandon St Rose (8P5DG) &amp; Kammie Holder (8P5AB) · <a href="/notices" target="_blank" style="color:inherit">MIT License &amp; credits</a> · spot data from PSKReporter`;
   $('#l-call').textContent = cfg.call || 'NOCALL';
   $('#l-grid').textContent = cfg.grid || '----';
   $('#power').classList.toggle('on', running);
@@ -1301,6 +1795,7 @@ function alertOpenings(cells){
   const msg = fresh.map(c=>`${c.band==='2m'?'Two metre':'Seventy centimetre'} ${MODE_SPOKEN[c.prop_mode]||''} open to ${SPOKEN[c.region]}`.replace(/  +/g,' ')).join('. ');
   toast('🔔 ' + msg, true, 10000);
   playAlert(msg, 'open');
+  offerOpeningShare(fresh);
   try { if (document.hidden && 'Notification' in window && Notification.permission==='granted')
           new Notification('Tradewind', {body: msg}); } catch(e){}
 }
@@ -1503,7 +1998,7 @@ function renderAlt(s){
     })).join('');
     drawAlerts();
   } else if (fp==='field'){
-    $('#f-call').textContent = cfg.call || 'NOCALL';
+    $('#fld-call').textContent = cfg.call || 'NOCALL';
     $('#f-sub').textContent = (cfg.grid || '----') + (freq ? ' · ' + freq : '');
     $('#f-power').classList.toggle('on', running); $('#f-pwr-t').textContent = running ? 'ON' : 'OFF';
     $('#f-rf').textContent = s.rf || 'OFF'; $('#f-rf').style.color = s.rf==='ON' ? '#047857' : s.rf==='STBY' ? '#92400e' : '#475569';
@@ -1606,7 +2101,7 @@ function drawChat(){
   acts += `<details class="more"><summary class="btn" aria-label="More options">⋯</summary><div class="more-menu">${more}</div></details>`;
   const lstats = (p.links || []).length > 1 ? `<div class="link-stats">${p.links.map(l=>`<span class="${l.best?'best':''} ${l.failing?'bad':''}">${esc(l.link)} ${esc(l.name)}: ${l.ok}/${l.sent} ok${l.rtt?` · ${l.rtt}s`:''}${l.tput?` · ${l.tput} B/s`:''}${l.best?' · using':''}${l.failing?' · failing':''}</span>`).join('')}</div>` : '';
   const ask = ['incoming','await_confirm'].includes(p.status);
-  const icon = m => (m.dir!=='out' ? '' : m.state==='delivered' ? ' · ✓ delivered' : m.state==='failed' ? ' · ✗ not delivered' :
+  const icon = m => (m.dir!=='out' ? '' : m.state==='delivered' ? (' · ✓ delivered' + (m.secs!=null ? ` in ${m.secs<60 ? m.secs.toFixed(0)+' s' : Math.round(m.secs/60)+' min'}` : '')) : m.state==='failed' ? ' · ✗ not delivered' :
     m.state==='rejected' ? ' · ✗ rejected' : m.state==='cancelled' ? ' · cancelled' : m.state==='queued' ? ' · stored - will resend when they are heard' :
     m.state==='waiting' ? ' · waiting its turn (one message at a time)' :
     m.state==='relaying' ? ` · no direct contact - asking ${esc(m.relay||'')} to relay` :
@@ -1931,6 +2426,8 @@ const HELP = {
   link2_speed:'Air speed of the second link. Used to choose links: faster links are preferred while they deliver.',
   link2_name:'A short name shown in the chat, e.g. "70cm 9600".', link1_name:'A short name for the main radio link, e.g. "2m 1200".',
   link1_speed:'Air speed of the main link when it is an external KISS TNC (the built-in modem sets this itself).',
+  uhf_range:'Tradewind never transmits on 70 cm outside this range. Barbados licences allow 430-440 MHz; the USA allows 420-450. Check your own licence.',
+  allowed_hosts:'Phones and tablets can open the face plate by IP address (e.g. http://192.168.1.20:8073) or a .local name. If you use another name for this computer, add it here. Other names are refused, which stops hostile web pages from controlling the station.',
   zone:'Automatic uses your grid square to pick the band plan: the APRS / hail frequency (144.390 Americas, 144.800 Europe-Africa, 145.570 Brazil, 144.930 Argentina, 144.640 Japan/China, 145.175 Australia, 144.575 NZ) and the chat channels. Near a border, or where your country differs, pick the zone by hand.',
   qsy_mode:'Automatic uses the chat channels agreed for your zone. Manual override lets you type your own list, e.g. if a channel clashes with a local repeater or packet node. Channels on APRS, 145.010, weak-signal or satellite segments are refused.',
   qsy_freqs:'Chats start on the APRS frequency, then move (QSY) to the first free channel here. Default: 144.510-144.590 (IARU Region 2 local-option segment - confirm with your national society) then 145.030-145.090 (data segment), 20 kHz apart because a 1200-baud FM signal is about 12 kHz wide. 145.010 is skipped: it is protected for Caribbean APRS.',
@@ -2024,6 +2521,7 @@ $('#f-grid').addEventListener('blur', e=>{ const v=e.target.value.trim(); e.targ
         $('#f-freq').innerHTML = fr.map(f=>`<option value="${f.value}">${f.label}</option>`).join('') + '<option value="custom">Other (type below)</option>';
   } catch(e){}
   await poll(); dirty=false; $('#b-save-top').textContent='SAVE';
+  if (!(cfg.call||'').trim() && !lsGet('tw_wizard_done')) openWizard();
   tick(); setInterval(tick, 1000); setInterval(poll, 1500);
   addHelp();
   setFp(lsGet('tw_fp') || 'classic');
@@ -2127,19 +2625,24 @@ function drawMail(s, c){
 }
 
 /* ---------- v3.5: Wolf Mode ---------- */
+$('#wolf-auto').onchange = async e=>{ const r = await api('/api/wolf', {action:'auto', on:e.target.checked});
+  if (r && r.ok===false) return toast(r.errors[0]);
+  toast(e.target.checked ? 'Auto-call on: DX stations on APRS are called on 2m when the path is open' : 'Auto-call off', true); poll(); };
 $('#wolf-on').onchange = async e=>{ await api('/api/wolf', {action:'toggle', on:e.target.checked}); toast(e.target.checked ? 'Wolf Mode on - DX appears after the next propagation check' : 'Wolf Mode off', true); poll(); };
 function drawWolf(s){
   const W = s.wolf || {rows:[]};
-  $('#wolf-on').checked = !!W.on;
+  $('#wolf-on').checked = !!W.on; $('#wolf-auto').checked = !!W.auto; $('#wolf-auto').disabled = !W.on;
   $('#wolf-n').textContent = W.on ? `(${W.on_aprs||0} on APRS)` : '';
   $('#wolf-note').textContent = W.on ? `${W.rows.length} DX stations from PSKReporter · ${W.on_aprs||0} active on APRS · ${W.pings_left} pings left this hour · each station once a day · STOP replies honoured` : '';
   if (!W.on || !W.rows.length) return;
   $('#wolf-list').innerHTML = W.rows.map(r=>`<div class="wolf-row"><span><button type="button" class="callk" data-call="${esc(r.aprs_call||r.call)}">${esc(r.aprs_call||r.call)}</button><br><span class="sm">${Number(r.km).toLocaleString()} km · ${esc(r.band)}</span></span>
     <span class="sm">${esc(r.mode)} ${esc(r.snr)} dB ${esc(r.prop||'')}<br>${r.aprs_ago!=null ? `<span class="ok">On APRS (${esc(r.sw||'APRS')}) ${Math.round(r.aprs_ago/60)} min ago</span>` : 'Not seen on APRS'}</span>
-    <span>${r.stopped ? '<span class="sm">asked not to be pinged</span>' : r.pinged ? '<span class="sm">pinged today</span>' : r.aprs_ago!=null ? `<button class="btn accent" type="button" data-wping="${esc(r.call)}">PING</button>` : ''}</span></div>`).join('');
+    <span>${r.stopped ? '<span class="sm">asked not to be pinged</span>'
+      : r.pinged ? `<span class="sm">called today${r.ping_route ? ' by '+esc(r.ping_route) : ''}${r.ping_why ? '<br>'+esc(r.ping_why) : ''}</span>`
+      : r.aprs_ago!=null ? `<button class="btn accent" type="button" data-wping="${esc(r.call)}">${r.rf_ok ? 'CALL ON 2M' : 'PING'}</button><br><span class="sm">${r.rf_ok ? 'path open now - RF' : 'by internet'}</span>` : ''}</span></div>`).join('');
   $$('[data-wping]').forEach(b=>b.onclick = async ()=>{
     const r = await api('/api/wolf', {action:'ping', call:b.dataset.wping});
-    if (!r.ok) return toast(r.errors[0]); toast('Ping sent by internet', true); poll(); pollChat();
+    if (!r.ok) return toast(r.errors[0]); toast(`Call sent by ${r.how || 'internet'}`, true); poll(); pollChat();
   });
 }
 

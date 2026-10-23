@@ -372,7 +372,7 @@ def aprs_freq_hz(cfg):
         mhz = float(v.replace(",", "."))
     except ValueError:
         return None
-    if not (144.0 <= mhz <= 148.0 or 420.0 <= mhz <= 450.0):
+    if not band_ok(mhz, zone_of(cfg)):
         return None
     return int(round(mhz * 1e6))
 
@@ -830,6 +830,18 @@ class SdrTNC(BaseTNC):
         return d
 
 
+def kiss_peer_ok(ip):
+    """A KISS client may key the transmitter, so only loopback and private (LAN) addresses may connect."""
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(ip)
+        if getattr(a, "ipv4_mapped", None):
+            a = a.ipv4_mapped
+        return a.is_loopback or (a.is_private and not a.is_link_local) or a.is_link_local
+    except ValueError:
+        return False
+
+
 class KissServer:
     """Lets other APRS programs (Xastir, YAAC, APRSIS32, PinPoint...) use Tradewind's modem as a KISS TCP TNC.
     on_tx(frame) is called for each frame a client wants transmitted."""
@@ -852,9 +864,16 @@ class KissServer:
     def _accept(self):
         while not self._stop.is_set():
             try:
-                c, _ = self.sock.accept()
+                c, addr = self.sock.accept()
             except OSError:
                 break
+            if not kiss_peer_ok(addr[0]):            # only this computer and the home / club network
+                self.error = f"refused KISS connection from {addr[0]} (not a local network address)"
+                try:
+                    c.close()
+                except OSError:
+                    pass
+                continue
             with self.lock:
                 self.clients.append(c)
             threading.Thread(target=self._client, args=(c,), daemon=True).start()
@@ -1217,6 +1236,26 @@ ZONES = {
            "note": "APRS frequency differs by country here - check yours, then set it and your chat channels in the menu."},
 }
 ZONE = "r2"                    # the active zone (set by the app from config)
+ZONE_VHF = {"r1": (144.0, 146.0), "jp": (144.0, 146.0)}     # 2 m is 144-146 MHz here, 144-148 elsewhere
+UHF = [430.0, 440.0]           # 70 cm range on the operator's licence (Barbados: 430-440; set in the menu)
+
+
+def set_uhf(text):
+    """'430-440' -> the 70 cm range this licence allows (kept inside 420-450)."""
+    try:
+        lo, hi = (float(x) for x in str(text).replace(" ", "").split("-"))
+        if 420.0 <= lo < hi <= 450.0:
+            UHF[:] = [lo, hi]
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+def band_ok(mhz, zone=None):
+    """Inside 2 m for the zone, or inside the licensed 70 cm range."""
+    lo, hi = ZONE_VHF.get(zone or ZONE, (144.0, 148.0))
+    return lo <= mhz <= hi or UHF[0] <= mhz <= UHF[1]
 
 
 def grid_latlon(grid):
@@ -1294,7 +1333,7 @@ def qsy_freq_ok(mhz, zone=None):
         f = float(mhz)
     except (TypeError, ValueError):
         return False
-    if not (144.0 <= f <= 148.0 or 420.0 <= f <= 450.0):
+    if not band_ok(f, zone):
         return False
     never = ZONES.get(zone or ZONE, ZONES["r2"])["never"]
     return not any(lo <= f <= hi for lo, hi in tuple(never) + SAT_NEVER)
@@ -1499,6 +1538,7 @@ class ChatManager:
         self.mail_auto_qsy = True     # move off the APRS frequency before sending an email through a gateway
         self.on_stop = None           # callable(call): a station asked for no more messages (Wolf Mode)
         self.rf_block = None          # reason string while the radio sits on a satellite / ISS frequency
+        self.stats = []               # v3.7 field test: one row per message - delivered or not, seconds, tries, route
         self.ack_hold_s = 8           # reply-acks: hold an ack this long hoping to ride in our reply (0 = off)
 
     # ---- helpers
@@ -1649,6 +1689,19 @@ class ChatManager:
                 entry["state"] = "failed"
         self.seq += 1
 
+    def _stat(self, o, result, via):
+        """Remember how a message went (for the field-test report) and show the delivery time on it."""
+        if o.get("probe") or o.get("kind") not in ("chat", "mail", "relay", "relay_req", None):
+            return
+        e = o.get("entry") or {}
+        secs = round(self.now() - e.get("t", self.now()), 1)
+        if result == "delivered":
+            e["secs"] = secs
+        self.stats.append({"t": self.now(), "call": o["call"], "result": result, "secs": secs,
+                           "tries": o.get("tries", 0), "route": str(o.get("route") or ""), "via": via or "",
+                           "len": len(o.get("text") or ""), "kind": o.get("kind") or "chat"})
+        del self.stats[:-500]
+
     def _outbox_add(self, o):
         """Store an undelivered message - at most OUTBOX_PER_STATION per station, OUTBOX_MAX in all."""
         if sum(1 for x in self.outbox if x["call"] == o["call"]) >= OUTBOX_PER_STATION:
@@ -1706,6 +1759,7 @@ class ChatManager:
                                   "kind": o.get("kind"), "orig": o.get("orig")})
             else:
                 o["entry"]["state"] = "failed"
+            self._stat(o, "no ack", "")
             if o.get("probe"):
                 self._log(self._peer(o["call"]), "sys", f"Probe on link {o['probe']}: no reply")
             elif o.get("link") and self.links:
@@ -2155,6 +2209,7 @@ class ChatManager:
                 self._log(self._peer(src), "sys", f"Probe on link {o['probe']} ({info.get('name', '')}): "
                           f"reply in {rtt:.1f} s via {via}")
             o["entry"]["state"] = "delivered" if ok else "rejected"
+            self._stat(o, "delivered" if ok else "rejected", via)
             if o.get("kind") == "mail" and o["entry"].get("mail") in self.mail_out:
                 job = self.mail_out[o["entry"]["mail"]]
                 job["acked"] += 1

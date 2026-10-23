@@ -20,6 +20,7 @@ Back-ends
 import collections
 import os
 import queue
+import random
 import re
 import socket
 import sys
@@ -348,17 +349,23 @@ class YaesuCatPTT(_CatSerialPTT):
 
 # APRS frequencies offered on the face plate (MHz, label)
 APRS_FREQS = [
+    ("auto", "Automatic - from my grid square / zone"),
     ("144.390", "144.390 (N. America / Caribbean)"),
     ("144.800", "144.800 (Europe / Africa)"),
-    ("144.930", "144.930"),
-    ("145.570", "145.570"),
+    ("144.930", "144.930 (Argentina / Uruguay)"),
+    ("145.570", "145.570 (Brazil)"),
+    ("144.640", "144.640 (Japan / China)"),
+    ("145.175", "145.175 (Australia)"),
+    ("144.575", "144.575 (New Zealand)"),
     ("145.825", "145.825 (ISS digipeater)"),
 ]
 
 
 def aprs_freq_hz(cfg):
     """The chosen APRS frequency in Hz (custom value allowed), or None if invalid."""
-    v = str(cfg.get("aprs_freq") or "144.390")
+    v = str(cfg.get("aprs_freq") or "auto")
+    if v == "auto":
+        v = ZONES[zone_of(cfg)]["aprs"]
     if v == "custom":
         v = str(cfg.get("aprs_freq_custom") or "")
     try:
@@ -493,6 +500,7 @@ class SoundModemTNC(BaseTNC):
         self.txdelay, self.txtail, self.level = txdelay, txtail, level
         self.busy_hold = busy_hold
         self.audio_level = 0.0
+        self.noise_floor = None    # quietest recent audio level: the reference for carrier sense
         self.txq = queue.Queue()
         self.demod = afsk.RobustDemodulator(self.rate) if self.modem == "robust" else afsk.Demodulator(self.rate, self.modem)
         if self.modem == "robust":
@@ -554,6 +562,10 @@ class SoundModemTNC(BaseTNC):
                     except queue.Empty:
                         continue
                     self.audio_level = float((chunk ** 2).mean() ** 0.5)
+                    if not self.tx_active:             # follow the quiet level: down fast, up slowly
+                        nf = self.noise_floor
+                        self.noise_floor = self.audio_level if nf is None or self.audio_level < nf else \
+                            nf + (self.audio_level - nf) * 0.002
                     if self.tx_active:
                         continue  # don't decode our own transmission
                     for fr in self.demod.process(chunk):
@@ -571,10 +583,19 @@ class SoundModemTNC(BaseTNC):
                 frame = self.txq.get(timeout=0.5)
             except queue.Empty:
                 continue
-            # simple channel-busy check: wait until nothing heard for busy_hold s
+            # never transmit on a busy channel: wait for no packets AND no carrier, then a random back-off
             t0 = time.time()
-            while time.time() - self.last_rx < self.busy_hold and time.time() - t0 < 10:
+            while self.channel_busy() and time.time() - t0 < 20:
                 time.sleep(0.2)
+            if self.channel_busy():
+                self.txq.put(frame)                    # still busy after 20 s: try again later
+                self.error = "channel busy - waiting to transmit"
+                time.sleep(1)
+                continue
+            time.sleep(random.uniform(0.1, 1.2))
+            if self.channel_busy():
+                self.txq.put(frame)
+                continue
             try:
                 if self.modem == "robust":
                     np = afsk.np
@@ -605,6 +626,8 @@ class SoundModemTNC(BaseTNC):
                 self.airtime.add(dur)
                 sd.play(audio, self.rate, device=self.out_dev, blocking=True)
                 self.tx_count += 1
+                if self.error.startswith(("channel busy", "airtime limit")):
+                    self.error = ""
             except Exception as e:
                 self.error = f"transmit: {e}"
             finally:
@@ -614,6 +637,13 @@ class SoundModemTNC(BaseTNC):
                 finally:
                     self.tx_active = False
             time.sleep(0.5)
+
+    def channel_busy(self):
+        """Busy = a packet was decoded in the last busy_hold s, or audio well above the quiet level (a carrier)."""
+        if time.time() - self.last_rx < self.busy_hold:
+            return True
+        nf = self.noise_floor
+        return nf is not None and self.audio_level > max(0.02, nf * 4)
 
     def _watchdog(self):
         """Transmit timer: the radio was keyed too long - unkey it whatever the audio is doing."""
@@ -1022,6 +1052,15 @@ class AprsIsClient:
         self.connected = True
         self.error = "" if self.verified else "login not verified - check passcode"
 
+    def set_filter(self, filt):
+        """Change the server-side filter on the fly (Wolf Mode watches DX callsigns with b/CALL*)."""
+        self.filt = filt
+        if self.connected:
+            try:
+                self._send_raw("#filter " + filt)
+            except OSError:
+                pass
+
     def _send_raw(self, line):
         with self.lock:
             if self.sock and self.connected:
@@ -1108,6 +1147,37 @@ CHAT_CALL_RE = re.compile(r"^[A-Z0-9]{1,6}(-([0-9]|1[0-5]))?$")
 T_REQ, T_OK, T_CONF, T_NO, T_END = "TW-LINK?", "TW-LINK OK", "TW-LINK CONFIRMED", "TW-LINK NO", "TW-LINK END"
 
 # link states
+EMAIL2 = "EMAIL-2"            # APRS-IS email gateway service (javAPRSSrvr)
+MAIL_MAX_CHARS = 500          # longest email body Tradewind will send
+MAIL_MAX_PARTS = 14
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+CALL_LOCAL_RE = re.compile(r"^(?=.*\d)[A-Za-z0-9]{3,7}([-._][A-Za-z0-9]{1,2})?$")
+
+
+def ham_address(addr):
+    """True when an email address clearly belongs to a licensed amateur: a Winlink address,
+    or a callsign as the mailbox name (8p6xx@..., 8p6xx-9@...)."""
+    addr = (addr or "").strip().lower()
+    if not EMAIL_RE.match(addr):
+        return False
+    local, _, domain = addr.partition("@")
+    return domain in ("winlink.org", "arrl.net") or bool(CALL_LOCAL_RE.match(local))
+
+
+def _chunks(text, size):
+    text = " ".join((text or "").split())
+    out = []
+    while text:
+        if len(text) <= size:
+            out.append(text)
+            break
+        cut = text.rfind(" ", 0, size + 1)
+        cut = cut if cut > size // 2 else size
+        out.append(text[:cut].strip())
+        text = text[cut:].strip()
+    return out
+
+
 T_QSY, T_QSY_OK, T_QSY_NO, T_QSY_CHK, T_QSY_BACK = "TW-QSY", "TW-QSY-OK", "TW-QSY-NO", "TW-QSY-CHECK", "TW-QSY-BACK"
 QSY_WAIT_S = 120          # no contact on the new frequency within this time: both go back
 QSY_SUGGEST_AFTER = 5     # suggest moving after this many messages on the APRS frequency
@@ -1120,15 +1190,114 @@ QSY_NEVER = ((144.0, 144.400), (144.400, 144.500), (145.005, 145.015), (145.790,
 QSY_BUSY_S = 30 * 60      # a channel another pair moved to counts as busy this long (or until they leave)
 
 
-def qsy_freq_ok(mhz):
-    """A chat QSY frequency must be in 2 m or 70 cm, and not on APRS, protected or satellite segments."""
+# ---- v3.6: band-plan zones, picked from the grid square (manual override in settings) ----
+SAT_NEVER = ((145.790, 146.000), (435.0, 438.0))     # satellites + ISS (145.800 voice, 145.825 APRS): never chat or hail
+R1_QSY = "144.850,144.875,144.900,144.925,144.950,144.975"
+ZONES = {
+    # key: name, APRS frequency, default chat channels ("" = none known: set your own), segments chat must avoid
+    "r2": {"name": "North America & Caribbean (IARU Region 2)", "aprs": "144.390", "qsy": QSY_DEFAULT,
+           "never": QSY_NEVER, "note": "144.5 MHz channels are a local-option segment - confirm with your national society."},
+    "br": {"name": "Brazil", "aprs": "145.570", "qsy": "",
+           "never": ((144.0, 144.500), (145.555, 145.585)) + SAT_NEVER, "note": "No agreed chat channels known - add your own in the menu."},
+    "ar": {"name": "Argentina / Uruguay", "aprs": "144.930", "qsy": "",
+           "never": ((144.0, 144.500), (144.915, 144.945)) + SAT_NEVER, "note": "No agreed chat channels known - add your own in the menu."},
+    "r1": {"name": "Europe, Africa & Middle East (IARU Region 1)", "aprs": "144.800", "qsy": R1_QSY,
+           "never": ((144.0, 144.500), (144.785, 144.8125)) + SAT_NEVER,
+           "note": "Chat channels are in the Region 1 digital segment (144.8125-144.9875), 25 kHz apart and 50 kHz clear of 144.800 - some countries use them for packet; confirm locally."},
+    "jp": {"name": "Japan", "aprs": "144.640", "qsy": "",
+           "never": ((144.0, 144.500), (144.625, 144.675)) + SAT_NEVER, "note": "No agreed chat channels known - add your own in the menu."},
+    "cn": {"name": "China", "aprs": "144.640", "qsy": "",
+           "never": ((144.0, 144.500), (144.625, 144.655)) + SAT_NEVER, "note": "No agreed chat channels known - add your own in the menu."},
+    "au": {"name": "Australia", "aprs": "145.175", "qsy": "",
+           "never": ((144.0, 144.500), (145.160, 145.190)) + SAT_NEVER, "note": "No agreed chat channels known - add your own in the menu."},
+    "nz": {"name": "New Zealand", "aprs": "144.575", "qsy": "",
+           "never": ((144.0, 144.500), (144.560, 144.590)) + SAT_NEVER, "note": "No agreed chat channels known - add your own in the menu."},
+    "r3": {"name": "Other Asia-Pacific (IARU Region 3)", "aprs": "144.390", "qsy": "",
+           "never": ((144.0, 144.500), (144.375, 144.405)) + SAT_NEVER,
+           "note": "APRS frequency differs by country here - check yours, then set it and your chat channels in the menu."},
+}
+ZONE = "r2"                    # the active zone (set by the app from config)
+
+
+def grid_latlon(grid):
+    """Centre of a 4- or 6-character Maidenhead square, or None."""
+    g = (grid or "").strip()
+    if not re.match(r"^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?$", g):
+        return None
+    g = g[:2].upper() + g[2:4] + g[4:6].lower()
+    lon = (ord(g[0]) - 65) * 20 - 180 + int(g[2]) * 2
+    lat = (ord(g[1]) - 65) * 10 - 90 + int(g[3])
+    if len(g) == 6:
+        lon += (ord(g[4]) - 97) * (5 / 60) + 2.5 / 60
+        lat += (ord(g[5]) - 97) * (2.5 / 60) + 1.25 / 60
+    else:
+        lon, lat = lon + 1, lat + 0.5
+    return lat, lon
+
+
+def zone_for_grid(grid):
+    """Best-guess band-plan zone for a grid square (rough boxes; the menu override fixes border cases)."""
+    p = grid_latlon(grid)
+    if not p:
+        return "r2"
+    lat, lon = p
+    if -170 <= lon <= -25:                           # the Americas
+        if lat < -27 and lon < -53:
+            return "ar"
+        if -34 <= lat <= 5.5 and -60 <= lon <= -34:
+            return "br"
+        return "r2"
+    if 24 <= lat <= 46 and 128.5 <= lon <= 146:
+        return "jp"
+    if -48 <= lat <= -33 and 165 <= lon <= 179.9:
+        return "nz"
+    if -45 <= lat <= -10 and 112 <= lon <= 155:
+        return "au"
+    if 33 <= lat <= 39 and 124 <= lon <= 131.5:      # Korea
+        return "r3"
+    if 18 <= lat <= 54 and 73 <= lon <= 135:
+        return "cn"
+    if -25 <= lon <= 60 or (lat >= 40 and 60 < lon <= 180):
+        return "r1"                                  # Europe, Africa, Middle East, Russia
+    return "r3"
+
+
+def zone_of(cfg):
+    """The zone a config uses: its manual choice, or the one its grid square falls in."""
+    z = str(cfg.get("zone") or "auto")
+    return z if z in ZONES else zone_for_grid(cfg.get("grid", ""))
+
+
+def set_zone(z):
+    global ZONE
+    ZONE = z if z in ZONES else "r2"
+
+
+def zone_qsy(cfg):
+    """Chat channels in use: the zone's list, or the operator's own list when set to manual."""
+    z = zone_of(cfg)
+    raw = ZONES[z]["qsy"] if (cfg.get("qsy_mode") or "auto") == "auto" else str(cfg.get("qsy_freqs") or "")
+    return [f.strip() for f in raw.split(",") if f.strip() and qsy_freq_ok(f.strip(), z)]
+
+
+def on_satellite(mhz):
+    try:
+        f = float(mhz)
+    except (TypeError, ValueError):
+        return False
+    return any(lo <= f <= hi for lo, hi in SAT_NEVER)
+
+
+def qsy_freq_ok(mhz, zone=None):
+    """A chat QSY frequency must be in 2 m or 70 cm, and not on APRS, protected or satellite segments of the zone."""
     try:
         f = float(mhz)
     except (TypeError, ValueError):
         return False
     if not (144.0 <= f <= 148.0 or 420.0 <= f <= 450.0):
         return False
-    return not any(lo <= f <= hi for lo, hi in QSY_NEVER)
+    never = ZONES.get(zone or ZONE, ZONES["r2"])["never"]
+    return not any(lo <= f <= hi for lo, hi in tuple(never) + SAT_NEVER)
 
 
 IDLE, HAILING, AWAIT_CONFIRM, INCOMING, ACCEPTED, OPEN, DECLINED, ENDED, EXPIRED = (
@@ -1322,6 +1491,14 @@ class ChatManager:
         self.qsy_active = None        # the peer we moved off the APRS frequency with
         self.qsy_channels = [f for f in QSY_DEFAULT.split(",")]   # the club's chat channels, in order
         self.qsy_busy = {}            # freq -> {"pair": (a, b), "t": time} heard taken by others on 144.390
+        self.mail_counter = 0
+        self.mail_out = {}            # our emails: id -> {to, n, acked, state, entry, call}
+        self.mail_in = {}             # (from call, id) -> {parts, n, t, kind}: emails being assembled
+        self.on_mail_out = None       # gateway: callable(src, to, subject, body) -> (ok, reason)
+        self.mail_session_s = 600     # gateway: an email must arrive within this time of its first part
+        self.mail_auto_qsy = True     # move off the APRS frequency before sending an email through a gateway
+        self.on_stop = None           # callable(call): a station asked for no more messages (Wolf Mode)
+        self.rf_block = None          # reason string while the radio sits on a satellite / ISS frequency
         self.ack_hold_s = 8           # reply-acks: hold an ack this long hoping to ride in our reply (0 = off)
 
     # ---- helpers
@@ -1361,8 +1538,13 @@ class ChatManager:
         self.counter = self.counter % 999 + 1
         return str(self.counter)
 
-    def _busy(self, call):
-        """True while a chat message to this station is unanswered, or the last went out < MSG_GAP_S ago."""
+    def _busy(self, call, kind="chat"):
+        """True while a chat message to this station is unanswered, or the last went out < MSG_GAP_S ago.
+        Email parts only wait for the previous part's ack (and for a QSY in progress)."""
+        if kind == "mail":
+            q = (self.peers.get(call) or {}).get("qsy") or {}
+            return q.get("state") in ("offered", "accepting", "moving") or \
+                any(o["call"] == call and o.get("kind") == "mail" for o in self.pending.values())
         if any((o["call"] == call and o.get("kind") in ("chat", "relay")) or
                (o.get("kind") == "relay_req" and o["smart"]["dest"] == call) for o in self.pending.values()):
             return True
@@ -1371,14 +1553,15 @@ class ChatManager:
         return self.now() - self.last_msg_t.get(call, -1e9) < MSG_GAP_S
 
     def _send(self, p, text, show=True, kind="chat", delays=None, forever=False, orig=None, entry=None,
-              route=None, smart=None):
+              route=None, smart=None, released=False):
         """Send one numbered message (retried until acked).
         delays: seconds between tries (default RETRY_S); forever: keep the last delay until acked.
         Chat and relay messages wait their turn: one unanswered message per station at a time."""
         if entry is None:
             entry = self._log(p, "out", text, state="sending", kind=kind, route=p["route"]) if show else \
                 {"state": "sending", "text": text}
-        if kind in ("chat", "relay") and (self._busy(p["call"]) or any(h["call"] == p["call"] for h in self.held)):
+        if kind in ("chat", "relay", "mail") and (self._busy(p["call"], kind) or
+                                                  (not released and any(h["call"] == p["call"] for h in self.held))):
             entry["state"] = "waiting"
             self.held.append({"call": p["call"], "text": text, "kind": kind, "delays": delays,
                               "entry": entry, "orig": orig, "route": route, "smart": smart})
@@ -1402,7 +1585,7 @@ class ChatManager:
 
     def _release_held(self):
         for h in list(self.held):
-            if h not in self.held or self._busy(h["call"]):
+            if h not in self.held or self._busy(h["call"], h["kind"]):
                 continue
             if any(x["call"] == h["call"] for x in self.held[:self.held.index(h)]):
                 continue                                  # keep each station's messages in order
@@ -1410,7 +1593,7 @@ class ChatManager:
             if h["entry"].get("state") == "cancelled":
                 continue
             self._send(self._peer(h["call"]), h["text"], kind=h["kind"], delays=h["delays"],
-                       orig=h["orig"], entry=h["entry"], route=h.get("route"), smart=h.get("smart"))
+                       orig=h["orig"], entry=h["entry"], route=h.get("route"), smart=h.get("smart"), released=True)
 
     # ---- RF-first routing: direct RF -> relay through heard Tradewind stations -> APRS-IS
     def _smart_next(self, o):
@@ -1517,7 +1700,7 @@ class ChatManager:
             return
         if delay is None:
             self.pending.pop(no, None)
-            if self.store_forward and o.get("kind") in ("chat", "relay") and not o.get("probe"):
+            if self.store_forward and o.get("kind") in ("chat", "relay", "mail") and not o.get("probe"):
                 o["entry"]["state"] = "queued"          # store and forward: resend when they are heard
                 self._outbox_add({"call": o["call"], "text": o["text"], "entry": o["entry"], "t": self.now(),
                                   "kind": o.get("kind"), "orig": o.get("orig")})
@@ -1550,6 +1733,8 @@ class ChatManager:
         call = norm_call(call)
         if not valid_call(call) or call == self.mycall:
             raise ValueError("Enter the other station's callsign, e.g. 8P6XX-9")
+        if self.rf_block and route != "is":
+            raise ValueError(self.rf_block)
         with self.lock:
             if call in self.blocked:
                 raise ValueError(f"{call} is on your block list - unblock them first.")
@@ -1622,7 +1807,7 @@ class ChatManager:
             p["unread"] = 0
             if not p.get("qsy") and p["status"] == OPEN and not str(p["route"]).startswith(("is",)):
                 p["sent_here"] = p.get("sent_here", 0) + len(parts)
-                if p["sent_here"] == QSY_SUGGEST_AFTER and self.on_qsy:
+                if p["sent_here"] == QSY_SUGGEST_AFTER and self.on_qsy and self.qsy_channels:
                     self._event("qsy_hint", p["call"], "Long chat - consider QSY to a chat frequency to keep APRS clear")
 
     def relay(self, relay_call, dest, text, route=None):
@@ -1651,7 +1836,7 @@ class ChatManager:
             if str(mhz).strip().lower() in ("", "auto"):
                 mhz = self.free_channel()
             if not qsy_freq_ok(mhz):
-                raise ValueError("Choose a chat frequency in 2 m or 70 cm, away from APRS (144.390, 145.010) and satellites.")
+                raise ValueError("That frequency is not allowed for chat in your zone - pick one of the chat channels (MENU > RADIO / TNC).")
             if self.qsy_active and self.qsy_active != p["call"]:
                 raise ValueError(f"Already moved with {self.qsy_active} - end that chat first.")
             f = f"{float(mhz):.3f}"
@@ -1659,11 +1844,155 @@ class ChatManager:
             self._log(p, "sys", f"Asking {p['call']} to move to {f} MHz...")
             self._send(p, f"{T_QSY} {f} - {self.mycall} asks to move this chat", kind="hs")
 
+    # ---- email: through the EMAIL-2 service, or through a Tradewind gateway station
+    def mail_send(self, to, subject, body, via=EMAIL2, third_party_ok=False):
+        """Queue an email. via = 'EMAIL-2' or a gateway station's callsign. Returns the email id."""
+        if self.rf_block:
+            raise ValueError(self.rf_block)
+        to, subject, body = (to or "").strip(), " ".join((subject or "").split())[:60], (body or "").strip()
+        if not EMAIL_RE.match(to):
+            raise ValueError("Enter a valid email address.")
+        if not body:
+            raise ValueError("Write the email first.")
+        if len(body) > MAIL_MAX_CHARS:
+            raise ValueError(f"Keep emails to {MAIL_MAX_CHARS} characters on radio.")
+        if not (ham_address(to) or third_party_ok):
+            raise ValueError("Email to non-hams (third-party traffic) is only allowed in a disaster session - "
+                             "switch it on under EmComm, or send to a ham address such as CALL@winlink.org.")
+        via = norm_call(via) or EMAIL2
+        with self.lock:
+            self.mail_counter = self.mail_counter % 99 + 1
+            mid = str(self.mail_counter)
+            p = self._peer(via)
+            p["direct"] = True
+            if via == EMAIL2:
+                p["route"] = "is" if (self.is_ok and self.is_ok()) else "rf"
+                line = (f"[{subject}] " if subject else "") + body
+                parts = [f"{to} {c}" for c in _chunks(line, MAX_TEXT - len(to) - 1)]
+            else:
+                if p["route"] not in ("rf", "rf_is", "is", "smart") and not str(p["route"]).startswith("link:"):
+                    p["route"] = "smart"
+                payload = ["TO " + to] + (["SU " + subject] if subject else []) + ["BD " + c for c in _chunks(body, 50)]
+                parts = [f"TWM {mid} {i + 1}/{len(payload)} {x}" for i, x in enumerate(payload)]
+            if len(parts) > MAIL_MAX_PARTS:
+                raise ValueError("That email is too long for radio - shorten it.")
+            entry = self._log(p, "sys", f"Email {mid} to {to} ({len(parts)} part{'s' if len(parts) > 1 else ''}) - sending")
+            self.mail_out[mid] = {"to": to, "n": len(parts), "acked": 0, "state": "sending", "entry": entry,
+                                  "call": via, "via": via, "t": self.now()}
+            if via != EMAIL2 and self.mail_auto_qsy and self.on_qsy and p["status"] == OPEN and not p.get("qsy"):
+                try:
+                    self.qsy(via, "auto")             # move off the APRS frequency first; parts wait for it
+                except ValueError:
+                    pass
+            for part in parts:
+                e = {"state": "sending", "text": part, "mail": mid}
+                self._send(p, part, show=via == EMAIL2, kind="mail", entry=e if via != EMAIL2 else None)
+                if via == EMAIL2:                     # shown in the EMAIL-2 thread; still count its acks
+                    p["messages"][-1]["mail"] = mid
+            self._event("mail_out", via, f"Email to {to} queued via {via}")
+            return mid
+
+    def mail_deliver(self, call, frm, subject, body):
+        """Gateway: pass an incoming email to a station by radio (stored and resent if they are away)."""
+        with self.lock:
+            p = self._peer(call)
+            p["direct"] = True
+            if p["route"] == "rf":
+                p["route"] = "smart"
+            self.mail_counter = self.mail_counter % 99 + 1
+            mid = str(self.mail_counter)
+            payload = ["FR " + frm[:60]] + (["SU " + subject[:60]] if subject else []) + \
+                ["BD " + c for c in _chunks(body[:MAIL_MAX_CHARS], 50)]
+            payload = payload[:MAIL_MAX_PARTS]
+            for i, x in enumerate(payload):
+                self._send(p, f"TWI {mid} {i + 1}/{len(payload)} {x}", show=False, kind="mail")
+            self._log(p, "sys", f"Gateway: passing an email from {frm} to {call} ({len(payload)} parts)")
+
+    def _mail_part(self, p, text, via):
+        """TWM (to the gateway) / TWI (from the gateway) / TWMR (gateway result). True when handled."""
+        m = re.match(r"^(TWM|TWI|TWMR)\s+(\d{1,3})\s+(.*)$", text, re.S)
+        if not m:
+            return False
+        tag, mid, rest = m.group(1), m.group(2), m.group(3)
+        now = self.now()
+        if tag == "TWMR":
+            job = self.mail_out.get(mid)
+            if job and job["call"] == p["call"]:
+                ok = rest.upper().startswith("SENT")
+                job["state"] = "sent" if ok else "failed: " + rest[7:].strip()
+                job["entry"]["text"] = f"Email {mid} to {job['to']} - " + ("sent by the gateway" if ok else job["state"])
+                self._event("mail_sent" if ok else "mail_failed", p["call"],
+                            f"Email to {job['to']} " + ("sent" if ok else job["state"]))
+                self.seq += 1
+            return True
+        pm = re.match(r"^(\d{1,2})/(\d{1,2})\s+(..)\s?(.*)$", rest, re.S)
+        if not pm:
+            return True
+        i, n, key, val = int(pm.group(1)), int(pm.group(2)), pm.group(3).upper(), pm.group(4)
+        slot = self.mail_in.setdefault((p["call"], tag, mid), {"parts": {}, "n": n, "t": now})
+        slot["parts"][i] = (key, val)
+        if len(slot["parts"]) < slot["n"]:
+            return True
+        del self.mail_in[(p["call"], tag, mid)]
+        f = {"TO": "", "FR": "", "SU": "", "BD": []}
+        for k in sorted(slot["parts"]):
+            key, val = slot["parts"][k]
+            if key == "BD":
+                f["BD"].append(val)
+            elif key in f:
+                f[key] = val.strip()
+        body = " ".join(f["BD"])
+        if tag == "TWI":                               # an email for us, from the gateway
+            self._log(p, "in", f"Email from {f['FR']}: " + (f"[{f['SU']}] " if f["SU"] else "") + body, via=via)
+            p["unread"] += 1
+            self._event("mail_in", p["call"], f"Email from {f['FR']}: {f['SU'] or body[:40]}")
+            return True
+        # TWM: we are the gateway
+        if not self.on_mail_out:
+            self._send(p, f"TWMR {mid} FAILED this station is not an email gateway", show=False, kind="sys")
+            return True
+        if now - slot["t"] > self.mail_session_s:
+            ok, why = False, f"session time limit ({self.mail_session_s // 60} min)"
+        else:
+            try:
+                ok, why = self.on_mail_out(p["call"], f["TO"], f["SU"], body)
+            except Exception as e:
+                ok, why = False, str(e)
+        self._log(p, "sys", f"Gateway: email from {p['call']} to {f['TO']} - " + ("sent" if ok else f"refused ({why})"))
+        self._send(p, (f"TWMR {mid} SENT" if ok else f"TWMR {mid} FAILED {why}")[:MAX_TEXT], show=False, kind="sys")
+        return True
+
+    # ---- quick messages and per-chat settings (v3.5)
+    def open_direct(self, call, route="smart"):
+        """Message a station without the hail handshake (plain APRS, works with any app)."""
+        call = norm_call(call)
+        if not valid_call(call) or call == self.mycall:
+            raise ValueError("Choose another station's callsign.")
+        with self.lock:
+            p = self._peer(call)
+            p["direct"] = True
+            self.set_route(call, route)
+
+    def set_route(self, call, route):
+        with self.lock:
+            p = self._peer(call)
+            if route in ("rf", "is", "smart", "rf_is", "auto") or str(route).startswith("link:"):
+                p["route"] = route
+            self.seq += 1
+
+    def set_nogate(self, call, on):
+        with self.lock:
+            self._peer(call)["nogate"] = bool(on)
+            self.seq += 1
+
     def free_channel(self):
         """First chat channel nobody else is using (others' moves are heard on the APRS frequency)."""
         now = self.now()
         self.qsy_busy = {f: b for f, b in self.qsy_busy.items() if now - b["t"] < QSY_BUSY_S}
         mine = {(q.get("qsy") or {}).get("freq") for q in self.peers.values() if q.get("qsy")}
+        if not self.qsy_channels:
+            raise ValueError("No chat channels are set for your zone - add them under MENU > RADIO / TNC > Chat channels, "
+                             "or keep the chat short on the APRS frequency.")
         for f in self.qsy_channels:
             f = f"{float(f):.3f}"
             if f not in self.qsy_busy and f not in mine:
@@ -1826,6 +2155,13 @@ class ChatManager:
                 self._log(self._peer(src), "sys", f"Probe on link {o['probe']} ({info.get('name', '')}): "
                           f"reply in {rtt:.1f} s via {via}")
             o["entry"]["state"] = "delivered" if ok else "rejected"
+            if o.get("kind") == "mail" and o["entry"].get("mail") in self.mail_out:
+                job = self.mail_out[o["entry"]["mail"]]
+                job["acked"] += 1
+                if job["acked"] >= job["n"] and job["state"] == "sending":
+                    job["state"] = "with gateway" if job["via"] != EMAIL2 else "delivered to EMAIL-2"
+                    job["entry"]["text"] = job["entry"]["text"].split(" - ")[0] + f" - {job['state']}"
+                    self.seq += 1
             if o.get("kind") == "relay_req":
                 if ok:            # the relay has it; now wait for "RELAY OK delivered"
                     o["orig_entry"]["state"] = "relayed"
@@ -1912,6 +2248,9 @@ class ChatManager:
                 self._event("relay", p["call"], f"Relaying {p['call']} -> {dest}")
                 return
         self._qsy_heard(p)
+        if up.startswith(("TWM ", "TWI ", "TWMR ")) and self._mail_part(p, text, via):
+            p["ra"] = True
+            return
         if up.startswith("TW-"):
             p["ra"] = True                     # another Tradewind station: reply-acks are understood
         if up.startswith("TW-QSY"):
@@ -1985,6 +2324,11 @@ class ChatManager:
             self._set(p, ENDED, f"{p['call']} ended the link")
             self._event("ended", p["call"], f"{p['call']} ended the link")
             return
+        if up.strip(" .!") in ("STOP", "UNSUBSCRIBE") and self.on_stop:
+            try:
+                self.on_stop(p["call"])
+            except Exception:
+                pass
         self._log(p, "in", text, via=via)
         if p["status"] != OPEN:
             p["direct"] = True      # a plain APRS message (e.g. from APRSdroid): allow replies
@@ -2023,6 +2367,8 @@ class ChatManager:
                     self._qsy_tune(p, None)
                 elif q["state"] in ("offered", "incoming") and now - q["t"] > 300:
                     p["qsy"] = None                    # an unanswered offer lapses after 5 minutes
+            for k in [k for k, v in self.mail_in.items() if now - v["t"] > 1800]:
+                del self.mail_in[k]                    # an email that never completed
             for w in [w for w in self.relay_wait if now >= w["until"]]:
                 self.relay_wait.remove(w)
                 self._log(self._peer(w["dest"]), "sys", f"{w['relay']} did not confirm delivery to {w['dest']}")
@@ -2077,6 +2423,8 @@ class ChatManager:
             peers = sorted(self.peers.values(), key=lambda p: -max([p["since"]] + [m["t"] for m in p["messages"]]))
             return {"seq": self.seq, "mycall": self.mycall, "events": list(self.events),
                     "outbox": len(self.outbox), "relay": self.relay_enabled, "held": len(self.held),
+                    "mail": [{"id": k, "to": j["to"], "via": j["via"], "state": j["state"], "t": j["t"]}
+                             for k, j in sorted(self.mail_out.items(), key=lambda kv: -kv[1]["t"])][:20],
                     "qsy_busy": sorted(f for f, b in self.qsy_busy.items() if self.now() - b["t"] < QSY_BUSY_S),
                     "blocked": sorted(self.blocked),
                     "muted": sorted(c for c, t in self.muted.items() if t > self.now()),
@@ -2086,6 +2434,9 @@ class ChatManager:
                                "route": p["route"], "via": p["via"], "unread": p["unread"],
                                "can_send": p["status"] == OPEN or bool(p.get("direct")),
                                "forever": bool(p.get("forever")),
+                               "nogate": bool(p.get("nogate")),
+                               "last": (p["messages"][-1]["text"][:60] if p["messages"] else ""),
+                               "last_t": (p["messages"][-1]["t"] if p["messages"] else p["since"]),
                                "qsy": {k: v for k, v in (p.get("qsy") or {}).items() if k in ("freq", "state")} or None,
                                "links": self.links.summary(p["call"]) if self.links else [],
                                "messages": [{k: v for k, v in m.items() if k != "kind"} for m in p["messages"][-100:]]}

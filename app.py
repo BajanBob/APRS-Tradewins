@@ -32,7 +32,7 @@ import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.4"
+APP_VERSION = "3.6"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -57,6 +57,27 @@ VENDOR = {"leaflet.js": ("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js", "app
 TILE_SRC = {"esri": "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
             "osm": "https://tile.openstreetmap.org/{z}/{x}/{y}.png"}
 TILE_MAX_AGE = 30 * 86400
+
+
+LOCAL_MAIL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def mail_tls_context(host):
+    """TLS for the gateway's mail account. Remote servers: certificate and host name are always checked.
+    Only a mail bridge on this same computer (Proton Mail Bridge, self-signed) is accepted without a check -
+    that traffic never leaves the computer."""
+    import ssl
+    if str(host or "").strip().lower() in LOCAL_MAIL_HOSTS:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+        return ctx
+    try:
+        import certifi
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
 
 
 def _web_get(url, timeout=15):
@@ -108,7 +129,7 @@ DEFAULTS = {
     "ptt": "VOX", "ptt_port": "", "ptt_invert": False, "cm108_gpio": 3,
     "cat_baud": 9600, "civ_addr": "7C",
     # CAT tuning: put the radio on the APRS frequency in FM data mode at power-on
-    "cat_tune": False, "aprs_freq": "144.390", "aprs_freq_custom": "", "cat_restore": True,
+    "cat_tune": False, "aprs_freq": "auto", "aprs_freq_custom": "", "cat_restore": True,
     "txdelay": 300, "txtail": 50, "tx_level": 0.5, "modem": "1200",
     # Phase 2: a second radio path (Direwolf / UZ7HO / hardware TNC over KISS) and automatic link selection
     "link1_name": "", "link1_speed": 1200,
@@ -117,6 +138,16 @@ DEFAULTS = {
     # Phase 4: off-grid / disaster features
     "store_forward": True, "relay_enabled": False,
     "block_list": "",
+    # ---- email (v3.5): "EMAIL-2" service, or a Tradewind gateway station's callsign
+    "mail_via": "EMAIL-2",
+    "mail_gw_enabled": False,                 # this station is a Tradewind email gateway
+    "smtp_host": "", "smtp_port": 587, "smtp_tls": True, "smtp_user": "", "smtp_pass": "", "smtp_from": "",
+    "imap_host": "", "imap_port": 993, "imap_user": "", "imap_pass": "", "mail_poll_min": 5,
+    "mail_allowed_calls": "",                 # empty = any amateur callsign
+    "mail_per_day": 10, "mail_session_min": 10,
+    "wolf_on": False, "wolf_min_km": 500, "wolf_per_hour": 5, "wolf_qth": "", "wolf_stop": "",
+    "disaster_on": False, "disaster_until": 0, "disaster_reason": "",
+    "zone": "auto", "qsy_mode": "auto",     # v3.6: band-plan zone from the grid square; chat channels auto or manual
     "qsy_freqs": "144.510,144.530,144.550,144.570,144.590,145.030,145.050,145.070,145.090",   # chat channels, 20 kHz apart            # callsigns whose hails and messages are ignored
     "pin_hash": "", "pin_salt": "", "lock_settings": False,   # station PIN (v3.2)
     "kiss_addr": "127.0.0.1:8001", "kiss_serial": "", "kiss_baud": 9600,
@@ -142,10 +173,10 @@ DEFAULTS = {
     # Commercial / EmComm mode: encrypted chat on a licensed 148-174 MHz channel
     "op_mode": "amateur", "com_callsign": "", "com_licensee": "", "com_unit": "",
     "com_freq": "", "com_net": "", "com_key": "", "com_fp": "", "com_id_min": 30,
-    "cfg_ver": 3,
+    "cfg_ver": 4,
 }
-SECRET_KEYS = ("com_key", "pin_hash", "pin_salt")   # never sent to the face plate
-GUARDED_KEYS = SECRET_KEYS + ("lock_settings",)      # only changed through their own endpoints
+SECRET_KEYS = ("com_key", "pin_hash", "pin_salt", "smtp_pass", "imap_pass")   # never sent to the face plate
+GUARDED_KEYS = SECRET_KEYS + ("lock_settings", "disaster_on", "disaster_until", "disaster_reason")      # only changed through their own endpoints
 
 # Radio / interface presets. Fields override DEFAULTS when chosen in the UI.
 PRESETS = [
@@ -329,7 +360,7 @@ def _pin_hash(pin, salt):
 
 
 def load_config():
-    cfg = dict(DEFAULTS)
+    cfg, saved = dict(DEFAULTS), {}
     if IS_ANDROID:
         cfg.update(tnc="none", preset="aprsis_only", rf_announce=False)
     try:
@@ -346,7 +377,11 @@ def load_config():
         cfg["interval"], cfg["beacon_min"] = 10, 30
     if cfg.get("qsy_freqs") == "145.030,145.050,145.070,145.090":
         cfg["qsy_freqs"] = DEFAULTS["qsy_freqs"]      # v3.4: 144.5 MHz channels added first
-    cfg["cfg_ver"] = 3
+    if saved and int(saved.get("cfg_ver") or 0) < 4 and saved.get("aprs_freq") in (None, "144.390"):
+        cfg["aprs_freq"] = "auto"                   # v3.6: the old default follows the zone (same 144.390 in the Caribbean)
+    if saved and "qsy_mode" not in saved:          # v3.6: a hand-edited channel list stays as the manual list
+        cfg["qsy_mode"] = "auto" if cfg.get("qsy_freqs") == DEFAULTS["qsy_freqs"] else "manual"
+    cfg["cfg_ver"] = 4
     return cfg
 
 
@@ -413,9 +448,18 @@ def validate(cfg):
     call = cfg.get("call", "").upper().strip()
     if not CALL_RE.match(call) or call.split("-")[0] in ("N0CALL", "NOCALL", "MYCALL", "CALL", "TEST", "AB1CD"):
         errs.append("Enter your own callsign (with optional -SSID, e.g. 8P6XX-10).")
-    bad = [f.strip() for f in str(cfg.get("qsy_freqs") or "").split(",") if f.strip() and not tncmod.qsy_freq_ok(f.strip())]
-    if bad:
-        errs.append(f"Chat (QSY) frequencies must be in 2 m or 70 cm, away from APRS, 145.010 and satellites: {', '.join(bad)}")
+    if cfg.get("mail_gw_enabled") and cfg.get("smtp_host") and not cfg.get("smtp_tls", True) \
+            and int(cfg.get("smtp_port") or 587) != 465 and str(cfg["smtp_host"]).strip().lower() not in LOCAL_MAIL_HOSTS:
+        errs.append("Tick 'Use STARTTLS' (or use port 465) so the mail password is never sent unencrypted.")
+    zone = tncmod.zone_of(cfg)
+    if str(cfg.get("zone") or "auto") not in ("auto", *tncmod.ZONES):
+        errs.append("Choose a band-plan zone, or Automatic.")
+    if cfg.get("qsy_mode") == "manual":
+        bad = [f.strip() for f in str(cfg.get("qsy_freqs") or "").split(",")
+               if f.strip() and not tncmod.qsy_freq_ok(f.strip(), zone)]
+        if bad:
+            errs.append(f"These chat frequencies clash with APRS, protected or satellite segments in "
+                        f"{tncmod.ZONES[zone]['name']}: {', '.join(bad)}")
     perr = check_path(cfg.get("rf_path"))
     if perr:
         errs.append(perr)
@@ -489,6 +533,11 @@ class Station:
         self.heard = {}               # callsign -> stations heard on RF (works with no internet)
         self.kiss_srv = None          # KISS TCP server for other APRS apps
         self.qsy_hz = None            # set while a chat has moved off the APRS frequency
+        self.mail_count = {}          # gateway: (callsign, date) -> emails sent today
+        self.mail_next_poll = 0
+        self.mail_error = ""
+        self.wolf = {}                # Wolf Mode: base callsign -> DX station seen on PSKReporter
+        self.wolf_pings = collections.deque()
         self.igate_tx_times = collections.deque()
         self.igate_seen = {}          # (src, info) -> last gated, to skip duplicates
         self.tw_users = load_tw_users()   # Tradewind stations heard: call -> {first, last, via}
@@ -648,6 +697,12 @@ class Station:
                 self.next_beacon = time.time() + max(BEACON_MIN_MIN, self.cfg["beacon_min"]) * 60
             if self.cfg.get("wx_enabled"):
                 self._wx_schedule(now)
+            c0 = self.cfg
+            if c0.get("mail_gw_enabled") and c0.get("imap_host") and now >= self.mail_next_poll and not self.commercial:
+                self.mail_next_poll = now + max(2, int(c0.get("mail_poll_min") or 5)) * 60
+                threading.Thread(target=self._imap_poll, daemon=True).start()
+            if c0.get("disaster_on") and now > float(c0.get("disaster_until") or 0):
+                self.set_disaster(False, reason="session expired")
             if self.cfg.get("tc_enabled") and now >= self.tc_next:
                 self.tc_next = now + 20 * 60
                 threading.Thread(target=self.check_tropical, daemon=True).start()
@@ -838,6 +893,11 @@ class Station:
                         break
             self.local = sorted(self.local, key=lambda x: -x["km"])[:8]
         self.map_paths = self._map_paths(spots)
+        if c.get("wolf_on"):
+            try:
+                self._wolf_update(spots)
+            except Exception as e:
+                self.add_log("ERR", f"Wolf Mode: {e}")
         ops = eng.detect(spots, c["min_km"], c["min_paths"], c["strong_km"],
                          modes=set(c.get("watch_modes") or ALL_MODES))
         ops = {k: v for k, v in ops.items() if k[1] in c["regions"]}
@@ -962,7 +1022,7 @@ class Station:
             return
         lat, lon = latlon_to_aprs(*p)
         sym = (c.get("symbol") or "/-").ljust(2)[:2]
-        self.transmit(f"!{lat}{sym[0]}{lon}{sym[1]}{c.get('beacon_comment', '')[:43]}")
+        self.transmit(f"={lat}{sym[0]}{lon}{sym[1]}{c.get('beacon_comment', '')[:43]}")
 
     def send_test(self):
         self.transmit(f":{eng.bln_addressee('9', self.cfg['group'])}:{APP_NAME} test - no propagation alert",
@@ -985,9 +1045,17 @@ class Station:
         self.chat.links = self.linkctl
         robust = self.cfg.get("tnc") == "sound" and self.cfg.get("modem") == "robust"
         self.chat.on_qsy = None if self.commercial else self._on_qsy   # a licensed commercial channel never moves
-        self.chat.qsy_channels = [f.strip() for f in str(self.cfg.get("qsy_freqs") or "").split(",")
-                                  if tncmod.qsy_freq_ok(f.strip())] or tncmod.QSY_DEFAULT.split(",")
+        tncmod.set_zone(tncmod.zone_of(self.cfg))
+        self.chat.qsy_channels = tncmod.zone_qsy(self.cfg)     # empty: chats stay on the APRS frequency
+        home = tncmod.aprs_freq_hz(self.cfg)
+        self.chat.rf_block = ("Hails and email are never sent on a satellite / ISS frequency (145.800-146.000, 435-438). "
+                              "Change the APRS frequency, or message by internet."
+                              if home and tncmod.on_satellite(home / 1e6) else None)
         self.chat.qsy_delay = 60 if robust else 6
+        gw = bool(self.cfg.get("mail_gw_enabled")) and not self.commercial and bool(self.cfg.get("smtp_host"))
+        self.chat.on_mail_out = self._gateway_send if gw else None
+        self.chat.on_stop = self._on_stop
+        self.chat.mail_session_s = max(1, int(self.cfg.get("mail_session_min") or 10)) * 60
         self.qsy_hz = None
         self.chat.retry = (90, 150, 240) if robust else tncmod.RETRY_S
         self.commlog = []
@@ -1059,6 +1127,219 @@ class Station:
         if len(self.heard) > 300:
             oldest = min(self.heard.values(), key=lambda x: x["last"])
             self.heard.pop(oldest["call"], None)
+
+    # ---- Wolf Mode: DX stations on PSKReporter that are also on APRS, ready to ping
+    SW = {"APZPRP": "Tradewind", "APDR": "APRSdroid", "APK": "Kenwood", "APY": "Yaesu", "APDW": "Direwolf",
+          "APX": "Xastir", "APWW": "APRSIS32", "APIC": "Icom", "APLR": "LoRa", "APMI": "Mic-E", "APOT": "OpenTracker"}
+
+    def _wolf_update(self, spots):
+        c, now = self.cfg, time.time()
+        me = c["call"].split("-")[0].upper()
+        min_km = float(c.get("wolf_min_km") or 500)
+        for sp in spots:
+            if sp.km < min_km:
+                continue
+            for call, grid in ((sp.tx, sp.tx_grid), (sp.rx, sp.rx_grid)):
+                base = call.split("/")[0].split("-")[0].upper()
+                if not base or base == me or not CALL_RE.match(base):
+                    continue
+                w = self.wolf.setdefault(base, {"call": base, "km": 0, "aprs_call": "", "aprs_t": 0, "sw": "", "pinged": 0})
+                w.update(t=now, grid=grid, band=sp.band, mode=sp.mode, snr=sp.snr, prop=sp.prop_mode or "")
+                w["km"] = max(w["km"], round(sp.km))
+        for b in [b for b, w in self.wolf.items() if now - w["t"] > 7200]:
+            del self.wolf[b]
+        keep = sorted(self.wolf.values(), key=lambda w: -w["km"])[:40]
+        self.wolf = {w["call"]: w for w in keep}
+        if self.isc and self.wolf:
+            self.isc.set_filter("b/" + "/".join(f"{b}*" for b in self.wolf))
+
+    def _wolf_heard(self, line):
+        head = line.partition(":")[0]
+        if ">" not in head:
+            return
+        src, dst = head.split(">", 1)[0].upper(), head.split(">", 1)[1].split(",")[0].upper()
+        w = self.wolf.get(src.split("-")[0])
+        if w:
+            w.update(aprs_call=src, aprs_t=time.time(),
+                     sw=next((n for k, n in self.SW.items() if dst.startswith(k)), "APRS"))
+
+    def wolf_stopped(self):
+        return {x.strip().upper() for x in str(self.cfg.get("wolf_stop") or "").split(",") if x.strip()}
+
+    def wolf_ping(self, base, text=""):
+        c, now = self.cfg, time.time()
+        w = self.wolf.get(str(base).upper())
+        if not w or not w.get("aprs_call") or now - w["aprs_t"] > 7200:
+            raise ValueError("That station has not been seen on APRS recently.")
+        if w["call"] in self.wolf_stopped():
+            raise ValueError(f"{w['call']} asked not to be pinged.")
+        if now - w.get("pinged", 0) < 86400:
+            raise ValueError(f"{w['call']} was already pinged today.")
+        while self.wolf_pings and now - self.wolf_pings[0] > 3600:
+            self.wolf_pings.popleft()
+        if len(self.wolf_pings) >= int(c.get("wolf_per_hour") or 5):
+            raise ValueError("Ping limit reached for this hour - try later.")
+        if not (self.isc and self.isc.verified and self.chat):
+            raise ValueError("Wolf pings go by internet: APRS-IS must be connected.")
+        qth = (c.get("wolf_qth") or c.get("grid", "")[:4]).strip()
+        text = (text or f"{c['call'].split('-')[0]} {qth}: {w['band']} open to you now, {w['km']} km. QSO? 73").strip()
+        self.chat.open_direct(w["aprs_call"], "is")
+        self.chat.send(w["aprs_call"], text[:tncmod.MAX_TEXT])
+        w["pinged"] = now
+        self.wolf_pings.append(now)
+        self.add_log("SYS", f"Wolf ping to {w['aprs_call']} ({w['km']} km)")
+
+    def _on_stop(self, call):
+        base = tncmod.norm_call(call).split("-")[0]
+        if base in self.wolf or base in self.wolf_stopped():
+            with self.lock:
+                self.cfg["wolf_stop"] = ",".join(sorted(self.wolf_stopped() | {base}))
+                save_config(self.cfg)
+            self.add_log("SYS", f"{base} asked for no more Wolf pings - added to the do-not-ping list")
+
+    def zone_info(self, c=None):
+        c = c or self.cfg
+        z = tncmod.zone_of(c)
+        hz = tncmod.aprs_freq_hz(c)
+        return {"key": z, "name": tncmod.ZONES[z]["name"], "auto": str(c.get("zone") or "auto") == "auto",
+                "from_grid": tncmod.zone_for_grid(c.get("grid", "")), "aprs": f"{hz / 1e6:.3f}" if hz else "",
+                "zone_aprs": tncmod.ZONES[z]["aprs"], "qsy": tncmod.zone_qsy(c),
+                "qsy_mode": c.get("qsy_mode") or "auto", "note": tncmod.ZONES[z]["note"],
+                "satellite": bool(hz and tncmod.on_satellite(hz / 1e6))}
+
+    def wolf_state(self):
+        now = time.time()
+        while self.wolf_pings and now - self.wolf_pings[0] > 3600:
+            self.wolf_pings.popleft()
+        stop = self.wolf_stopped()
+        rows = []
+        for w in sorted(self.wolf.values(), key=lambda w: (-(now - w["aprs_t"] < 7200), -w["km"])):
+            on_aprs = bool(w.get("aprs_call")) and now - w["aprs_t"] < 7200
+            rows.append({k: w.get(k) for k in ("call", "km", "band", "mode", "snr", "prop", "grid", "aprs_call", "sw")} |
+                        {"aprs_ago": int(now - w["aprs_t"]) if on_aprs else None, "stopped": w["call"] in stop,
+                         "pinged": bool(now - w.get("pinged", 0) < 86400)})
+        return {"on": bool(self.cfg.get("wolf_on")), "rows": rows[:40],
+                "on_aprs": sum(1 for r in rows if r["aprs_ago"] is not None),
+                "pings_left": max(0, int(self.cfg.get("wolf_per_hour") or 5) - len(self.wolf_pings))}
+
+    # ---- disaster session: third-party (non-ham) email allowed only while it is on
+    def disaster_active(self):
+        c = self.cfg
+        return bool(c.get("disaster_on")) and time.time() < float(c.get("disaster_until") or 0)
+
+    def set_disaster(self, on, hours=24, reason=""):
+        with self.lock:
+            if on:
+                hours = max(1, min(168, int(hours or 24)))
+                self.cfg.update(disaster_on=True, disaster_until=time.time() + hours * 3600,
+                                disaster_reason=str(reason or "")[:120])
+            else:
+                self.cfg.update(disaster_on=False, disaster_until=0)
+            save_config(self.cfg)
+        msg = (f"DISASTER SESSION ON for {hours} h - third-party email allowed. Reason: {reason or '-'}" if on
+               else f"Disaster session OFF ({reason or 'by operator'}) - email to hams only")
+        self.add_log("SYS", msg)
+        self._commlog_add("out", "LOG", msg, "station")
+
+    # ---- Tradewind email gateway (this station relays radio email to the internet and back)
+    def _gateway_send(self, src, to, subject, body):
+        c = self.cfg
+        src = tncmod.norm_call(src)
+        allowed = {tncmod.norm_call(x).split("-")[0] for x in re.split(r"[,\s]+", str(c.get("mail_allowed_calls") or "")) if x.strip()}
+        if not CALL_RE.match(src) or (allowed and src.split("-")[0] not in allowed):
+            return False, "not an approved callsign"
+        if not tncmod.EMAIL_RE.match(to or ""):
+            return False, "bad address"
+        if not (tncmod.ham_address(to) or self.disaster_active()):
+            return False, "non-ham address needs a disaster session"
+        if len(body) > tncmod.MAIL_MAX_CHARS:
+            return False, "too long"
+        day = (src.split("-")[0], time.strftime("%Y-%m-%d"))
+        if self.mail_count.get(day, 0) >= int(c.get("mail_per_day") or 10):
+            return False, "daily limit reached"
+        import smtplib
+        from email.message import EmailMessage
+        m = EmailMessage()
+        m["From"] = c.get("smtp_from") or c.get("smtp_user")
+        m["To"] = to
+        m["Subject"] = f"{src}: {subject}" if subject else f"{src}: message by amateur radio"
+        m.set_content(f"{body}\n\n-- \nSent by {src} over amateur radio through the Tradewind gateway {c['call']}.\n"
+                      f"To reply, keep the subject starting with '{src}:' and keep it short (under "
+                      f"{tncmod.MAIL_MAX_CHARS} characters, plain text). Replies reach {src} by radio.")
+        try:
+            host, port = c["smtp_host"].strip(), int(c.get("smtp_port") or 587)
+            ctx = mail_tls_context(host)
+            if port == 465:                           # implicit TLS
+                srv = smtplib.SMTP_SSL(host, port, timeout=20, context=ctx)
+            else:
+                srv = smtplib.SMTP(host, port, timeout=20)
+            with srv:
+                if port != 465:
+                    if c.get("smtp_tls", True):
+                        srv.starttls(context=ctx)     # raises if the certificate is wrong: no password is sent
+                    elif host.lower() not in LOCAL_MAIL_HOSTS:
+                        raise OSError("refusing to send the mail password without encryption - tick Use STARTTLS")
+                if c.get("smtp_user"):
+                    srv.login(c["smtp_user"], c.get("smtp_pass") or "")
+                srv.send_message(m)
+        except Exception as e:
+            self.mail_error = f"SMTP: {e}"
+            self.add_log("ERR", f"Gateway email from {src} failed: {e}")
+            return False, "mail server error"
+        self.mail_count[day] = self.mail_count.get(day, 0) + 1
+        self.add_log("SYS", f"Gateway: email from {src} to {to} sent")
+        self._commlog_add("in", src, f"EMAIL to {to}: {subject} | {body}", "gateway")
+        return True, ""
+
+    def _imap_poll(self):
+        """Collect replies: subject starting 'CALL:' goes to that station by radio (ham senders, or any in a disaster)."""
+        import email
+        import imaplib
+        from email.header import decode_header, make_header
+        c = self.cfg
+        try:
+            host, port = c["imap_host"].strip(), int(c.get("imap_port") or 993)
+            ctx = mail_tls_context(host)
+            if port == 993:
+                box = imaplib.IMAP4_SSL(host, port, ssl_context=ctx, timeout=30)
+            else:                                     # e.g. Proton Mail Bridge 1143: STARTTLS
+                box = imaplib.IMAP4(host, port, timeout=30)
+                box.starttls(ssl_context=ctx)
+            box.login(c.get("imap_user") or c.get("smtp_user"), c.get("imap_pass") or c.get("smtp_pass") or "")
+            box.select("INBOX")
+            _, data = box.search(None, "UNSEEN")
+            for num in (data[0].split() if data and data[0] else [])[:20]:
+                _, msg_data = box.fetch(num, "(RFC822)")
+                box.store(num, "+FLAGS", "\\Seen")
+                msg = email.message_from_bytes(msg_data[0][1])
+                subj = str(make_header(decode_header(msg.get("Subject", "")))).strip()
+                sender = email.utils.parseaddr(msg.get("From", ""))[1]
+                mm = re.match(r"^(?:re:\s*)*([A-Za-z0-9]{3,7}(?:-\d{1,2})?)\s*:\s*(.*)$", subj, re.I)
+                if not mm or not CALL_RE.match(mm.group(1).upper()):
+                    continue
+                call, rest = mm.group(1).upper(), mm.group(2)
+                if not (tncmod.ham_address(sender) or self.disaster_active()):
+                    self.add_log("SYS", f"Gateway: email from {sender} for {call} held back - non-ham sender outside a disaster session")
+                    continue
+                text = ""
+                for part in (msg.walk() if msg.is_multipart() else [msg]):
+                    if part.get_content_type() == "text/plain":
+                        text = part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", "replace")
+                        break
+                lines = []
+                for line in text.splitlines():
+                    if line.startswith(">") or re.match(r"^On .* wrote:$", line.strip()) or line.strip() == "--":
+                        break
+                    lines.append(line.strip())
+                body = " ".join(x for x in lines if x)[:tncmod.MAIL_MAX_CHARS]
+                if self.chat and body:
+                    self.chat.mail_deliver(call, sender, rest, body)
+                    self._commlog_add("out", call, f"EMAIL from {sender}: {rest} | {body}", "gateway")
+            box.logout()
+            self.mail_error = ""
+        except Exception as e:
+            self.mail_error = f"IMAP: {e}"
+            self.add_log("ERR", f"Gateway mailbox check failed: {e}")
 
     # ---- Tradewind users heard (the "Tradewind" badge)
     def _tw_seen(self, call, via):
@@ -1155,6 +1436,9 @@ class Station:
             direct = self.qsy_hz or (h and h.get("direct") and time.time() - h["last"] < LOCAL_HEARD_S)
             # stations that hear each other (or a QSY'd simplex chat) need no digipeater: half the airtime
             path = [] if direct else [p.strip() for p in (c.get("rf_path") or "").split(",") if p.strip()]
+            peer = self.chat.peers.get(tncmod.norm_call(call)) if self.chat else None
+            if peer and peer.get("nogate"):
+                path = path + ["NOGATE"]          # ask iGates not to copy this chat to the internet
             self._link_send(link, c["call"], eng.TOCALL, path, info)
             sent.append("RF" if link == "A" else f"RF:{link}")
         if route in ("rf_is", "is") and self.isc and self.isc.verified:
@@ -1265,6 +1549,11 @@ class Station:
         return fp
 
     def on_is_line(self, line):
+        if self.wolf:
+            try:
+                self._wolf_heard(line)
+            except Exception:
+                pass
         try:
             head = line.partition(":")[0]
             if ">" in head and head.split(">", 1)[1].split(",")[0].upper() == eng.TOCALL:
@@ -1388,7 +1677,14 @@ class Station:
             "heard": sorted(self.heard.values(), key=lambda h: -h["last"])[:40],
             "tw": self.tw_summary(),
             "qsy_hz": self.qsy_hz,
-            "qsy_freqs": [f.strip() for f in str(c.get("qsy_freqs") or "").split(",") if tncmod.qsy_freq_ok(f.strip())],
+            "wolf": self.wolf_state(),
+            "disaster": {"on": self.disaster_active(), "until": c.get("disaster_until") or 0,
+                         "reason": c.get("disaster_reason") or ""},
+            "mail_error": self.mail_error,
+            "mail_gw": bool(c.get("mail_gw_enabled")),
+            "mail_pass_set": {"smtp": bool(c.get("smtp_pass")), "imap": bool(c.get("imap_pass"))},
+            "qsy_freqs": tncmod.zone_qsy(c),
+            "zone": self.zone_info(c),
             "kiss_clients": len(self.kiss_srv.clients) if self.kiss_srv else None,
             "links": ([{"link": l, **v} for l, v in sorted(self.linkctl.links.items())] if self.linkctl else []),
             "link2": None if not self.tnc2 else {"kind": self.tnc2.kind, "error": self.tnc2.error,
@@ -1418,7 +1714,7 @@ STATION = Station()
 
 LOCAL_ADDRS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 LOGIN_FAILS = collections.deque()      # wrong PIN attempts (5 in 5 minutes locks logins out)
-LOCKED_PATHS = ("/api/config", "/api/comkey")   # need the PIN when the settings are locked
+LOCKED_PATHS = ("/api/config", "/api/comkey", "/api/mailpass", "/api/disaster")   # need the PIN when the settings are locked
 
 LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Tradewind - PIN</title>
@@ -1561,6 +1857,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(STATION.chat.state() if STATION.chat else {"seq": 0, "peers": [], "events": [], "off": True})
         elif path == "/api/freqs":
             self._json([{"value": v, "label": l} for v, l in tncmod.APRS_FREQS])
+        elif path == "/api/zones":
+            self._json([{"key": k, "name": z["name"], "aprs": z["aprs"], "qsy": z["qsy"], "note": z["note"]}
+                        for k, z in tncmod.ZONES.items()])
         else:
             self._json({"error": "not found"}, 404)
 
@@ -1630,6 +1929,52 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "errors": ["Unknown bulletin type."]})
             threading.Thread(target=STATION.send_wx, args=(kind,), daemon=True).start()
             self._json({"ok": True})
+        elif path == "/api/mail":
+            if not (STATION.running and STATION.chat):
+                return self._json({"ok": False, "errors": ["Turn the station ON first."]})
+            b = self._body()
+            try:
+                mid = STATION.chat.mail_send(str(b.get("to") or ""), str(b.get("subject") or ""), str(b.get("body") or ""),
+                                             str(b.get("via") or STATION.cfg.get("mail_via") or "EMAIL-2"),
+                                             third_party_ok=STATION.disaster_active())
+            except ValueError as e:
+                return self._json({"ok": False, "errors": [str(e)]})
+            return self._json({"ok": True, "id": mid})
+        elif path == "/api/wolf":
+            b = self._body()
+            try:
+                if b.get("action") == "ping":
+                    STATION.wolf_ping(str(b.get("call") or ""), str(b.get("text") or ""))
+                elif b.get("action") == "toggle":
+                    with STATION.lock:
+                        STATION.cfg["wolf_on"] = bool(b.get("on"))
+                        save_config(STATION.cfg)
+                    if not STATION.cfg["wolf_on"]:
+                        STATION.wolf = {}
+                        if STATION.isc:
+                            STATION.isc.set_filter("")
+                    else:
+                        STATION.next_check = 0
+                        STATION._wake.set()
+                elif b.get("action") == "unstop":
+                    with STATION.lock:
+                        STATION.cfg["wolf_stop"] = ",".join(sorted(STATION.wolf_stopped() - {str(b.get("call") or "").upper()}))
+                        save_config(STATION.cfg)
+            except ValueError as e:
+                return self._json({"ok": False, "errors": [str(e)]})
+            return self._json({"ok": True})
+        elif path == "/api/disaster":
+            b = self._body()
+            STATION.set_disaster(bool(b.get("on")), b.get("hours") or 24, str(b.get("reason") or ""))
+            return self._json({"ok": True, "on": STATION.disaster_active()})
+        elif path == "/api/mailpass":
+            b = self._body()
+            with STATION.lock:
+                for k in ("smtp_pass", "imap_pass"):
+                    if k in b:
+                        STATION.cfg[k] = str(b.get(k) or "")
+                save_config(STATION.cfg)
+            return self._json({"ok": True})
         elif path == "/api/comkey":
             b = self._body()
             try:
@@ -1649,6 +1994,12 @@ class Handler(BaseHTTPRequestHandler):
                                       tries=int(tries) if str(tries).isdigit() else None,
                                       interval=int(b["interval"]) if str(b.get("interval", "")).isdigit() else None,
                                       forever=tries == "forever")
+                elif act == "direct":
+                    STATION.chat.open_direct(call, str(b.get("route") or "smart"))
+                elif act == "route":
+                    STATION.chat.set_route(call, str(b.get("route") or "smart"))
+                elif act == "nogate":
+                    STATION.chat.set_nogate(call, bool(b.get("on")))
                 elif act == "qsy":
                     STATION.chat.qsy(call, str(b.get("freq") or ""))
                 elif act in ("qsy_yes", "qsy_no"):

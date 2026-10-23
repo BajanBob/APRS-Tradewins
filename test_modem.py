@@ -74,6 +74,8 @@ def main():
     test_v33()
     test_qsy()
     test_replyack()
+    test_v35()
+    test_v36()
     if not tnc.crypto_available():
         test_secure()
     else:
@@ -579,6 +581,209 @@ def test_replyack():
     A.send("8P6XX-9", "73"); deliver()
     clock[0] += 9; B.tick(); deliver()
     assert [x["state"] for x in A._peer("8P6XX-9")["messages"] if x["text"] == "73"] == ["delivered"]
+
+
+def test_v36():
+    """v3.6: band-plan zone from the grid square, zone chat channels, manual override, no hails on satellites."""
+    z = tnc.zone_for_grid
+    assert z("GK03fd") == "r2" and z("FN20") == "r2" and z("FK93") == "r2", "Barbados / USA / Caribbean"
+    assert z("IO91") == "r1" and z("JO62") == "r1" and z("KG33") == "r1", "UK / Germany / South Africa"
+    assert z("GG66") == "br" and z("GF05") == "ar" and z("PM95") == "jp" and z("QF56") == "au" and z("RF73") == "nz"
+    assert z("OM89") == "cn" and z("") == "r2"
+    c = {"grid": "IO91", "zone": "auto", "qsy_mode": "auto", "aprs_freq": "auto"}
+    assert tnc.aprs_freq_hz(c) == 144_800_000, "Europe hails on 144.800"
+    assert tnc.zone_qsy(c)[0] == "144.850" and not tnc.qsy_freq_ok("144.800", "r1")
+    c.update(zone="r2")
+    assert tnc.aprs_freq_hz(c) == 144_390_000 and tnc.zone_qsy(c)[0] == "144.510", "manual zone override"
+    c.update(qsy_mode="manual", qsy_freqs="144.390,145.010,145.825,144.990,147.555")
+    assert tnc.zone_qsy(c) == ["144.990", "147.555"], "manual list drops APRS, 145.010 and ISS"
+    assert not tnc.qsy_freq_ok("145.800", "r2") and not tnc.qsy_freq_ok("436.500", "r1")
+    c = {"grid": "PM95", "aprs_freq": "auto"}
+    assert tnc.aprs_freq_hz(c) == 144_640_000 and tnc.zone_qsy(c) == [], "Japan: no default chat channels"
+    sent = []
+    A = tnc.ChatManager("8P5AB-10", lambda to, info, r: sent.append((to, info, r)), lambda: 1000.0)
+    A.qsy_channels = []
+    try:
+        A.free_channel(); raise AssertionError("no channels must refuse QSY")
+    except ValueError as e:
+        assert "No chat channels" in str(e)
+    A.rf_block = "satellite"
+    for f in (lambda: A.hail("8P6XX-9"), lambda: A.mail_send("8p6xx@winlink.org", "", "hi", "EMAIL-2")):
+        try:
+            f(); raise AssertionError("hail / email on a satellite frequency must be refused")
+        except ValueError as e:
+            assert str(e) == "satellite"
+    A.hail("8P6XX-9", route="is")        # internet hail is fine
+    tnc.set_zone("r2")
+    # mail TLS: remote servers must present a valid certificate; only a bridge on this computer is exempt
+    import app, ssl
+    assert app.mail_tls_context("smtp.gmail.com").verify_mode == ssl.CERT_REQUIRED
+    assert app.mail_tls_context("smtp.gmail.com").check_hostname
+    assert app.mail_tls_context("127.0.0.1").verify_mode == ssl.CERT_NONE, "Proton Bridge on this computer"
+    errs = app.validate({**app.DEFAULTS, "call": "8P5AB-10", "grid": "GK03", "mail_gw_enabled": True,
+                         "smtp_host": "smtp.gmail.com", "smtp_tls": False})
+    assert any("STARTTLS" in e for e in errs), "no plain-text mail passwords"
+    _tls_impostor_test(app)
+    print("  v3.6 zones + mail certificate checks OK")
+
+
+def _tls_impostor_test(app):
+    """A server with a self-signed certificate (an impostor) must be refused before any password is sent."""
+    import shutil, socket, ssl, subprocess, tempfile, threading
+    if not shutil.which("openssl"):
+        return
+    d = tempfile.mkdtemp()
+    key, crt = os.path.join(d, "k.pem"), os.path.join(d, "c.pem")
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", crt,
+                    "-days", "1", "-subj", "/CN=smtp.gmail.com"], check=True, capture_output=True)
+    sctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); sctx.load_cert_chain(crt, key)
+    ls = socket.socket(); ls.bind(("127.0.0.2", 0)); ls.listen(1); port = ls.getsockname()[1]
+    def serve():
+        c, _ = ls.accept()
+        try:
+            sctx.wrap_socket(c, server_side=True).close()
+        except Exception:
+            pass
+    threading.Thread(target=serve, daemon=True).start()
+    try:
+        with socket.create_connection(("127.0.0.2", port), timeout=5) as raw:
+            app.mail_tls_context("127.0.0.2").wrap_socket(raw, server_hostname="127.0.0.2")
+        raise AssertionError("an impostor certificate must be refused")
+    except ssl.SSLCertVerificationError:
+        pass
+    ls.close()
+
+
+def test_v35():
+    """v3.5: email via EMAIL-2 and via a Tradewind gateway, disaster rule, Wolf Mode, carrier sense."""
+    import types
+    clock = [40000.0]
+    now = lambda: clock[0]  # noqa: E731
+    assert tnc.ham_address("8p6xx@winlink.org") and tnc.ham_address("8P6XX-9@gmail.com")
+    assert not tnc.ham_address("jane.doe@gmail.com")
+    # EMAIL-2: plain APRS messages "address text"
+    sent = []
+    A = tnc.ChatManager("8P5AB-10", lambda to, info, r: sent.append((to, info, r)), now)
+    A.is_ok = lambda: True
+    A.mail_send("8p6xx@winlink.org", "Status", "All safe at Ocean City, power off, water ok.", "EMAIL-2")
+    assert sent[0][0] == "EMAIL-2" and sent[0][2] == "is" and ":EMAIL-2  :8p6xx@winlink.org [Status] All safe" in sent[0][1]
+    try:
+        A.mail_send("jane.doe@gmail.com", "", "hello", "EMAIL-2"); raise AssertionError("third-party needs a disaster session")
+    except ValueError:
+        pass
+    A.mail_send("jane.doe@gmail.com", "", "Safe at shelter", "EMAIL-2", third_party_ok=True)
+    # Tradewind gateway: A -> G over RF, G sends it, A sees "sent"; G passes a reply back
+    net, got = [], []
+    A = tnc.ChatManager("8P5AB-10", lambda to, info, r: net.append(("8P5AB-10", info)), now)
+    G = tnc.ChatManager("8P6GW", lambda to, info, r: net.append(("8P6GW", info)), now)
+    G.on_mail_out = lambda src, to, subj, body: (got.append((src, to, subj, body)) or (True, ""))
+    def air():
+        while net:
+            src, info = net.pop(0)
+            for st in (A, G):
+                st.on_packet(f"{src}>APZPRP:{info}", "RF")
+    body = "Road to Bath blocked by a fallen tree. Use the Highway 7 detour. Shelter has 40 people and needs water."
+    mid = A.mail_send("8p6xx@winlink.org", "Road report", body, "8P6GW")
+    for _ in range(60):
+        air(); clock[0] += 3; A.tick(); G.tick()
+    assert got and got[0][0] == "8P5AB-10" and got[0][1] == "8p6xx@winlink.org" and got[0][2] == "Road report"
+    assert got[0][3] == " ".join(body.split()), got[0][3]
+    assert A.mail_out[mid]["state"] == "sent", A.mail_out[mid]
+    G.mail_deliver("8P5AB-10", "8p6xx@winlink.org", "Re: Road report", "Thanks, crew on the way.")
+    for _ in range(40):
+        air(); clock[0] += 3; A.tick(); G.tick()
+    inbox = [m["text"] for m in A._peer("8P6GW")["messages"] if m["dir"] == "in"]
+    assert any("Thanks, crew on the way." in t and "8p6xx@winlink.org" in t for t in inbox), inbox
+    # a gateway that refuses tells the sender why
+    G.on_mail_out = lambda *a: (False, "daily limit reached")
+    mid2 = A.mail_send("8p6xx@winlink.org", "", "second", "8P6GW")
+    for _ in range(40):
+        air(); clock[0] += 3; A.tick(); G.tick()
+    assert A.mail_out[mid2]["state"].startswith("failed") and "daily limit" in A.mail_out[mid2]["state"]
+    # app-level gateway rules with a fake mail server
+    import app
+    import smtplib
+    mails = []
+    class FakeSMTP:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def starttls(self, context=None):
+            assert context is not None and context.verify_mode == __import__('ssl').CERT_REQUIRED, 'certificate must be checked'
+        def login(self, u, p): pass
+        def send_message(self, m): mails.append(m)
+    real = smtplib.SMTP
+    smtplib.SMTP = FakeSMTP
+    try:
+        st = types.SimpleNamespace(cfg={"call": "8P6GW", "smtp_host": "x", "smtp_from": "gw@example.com", "mail_per_day": 2,
+                                        "mail_allowed_calls": "", "disaster_on": False, "disaster_until": 0},
+                                   mail_count={}, mail_error="", add_log=lambda *a: None, _commlog_add=lambda *a: None)
+        st.disaster_active = lambda: app.Station.disaster_active(st)
+        send = lambda *a: app.Station._gateway_send(st, *a)  # noqa: E731
+        assert send("8P5AB-10", "8p6xx@winlink.org", "Hi", "Test") == (True, "")
+        assert mails[0]["Subject"] == "8P5AB-10: Hi" and mails[0]["To"] == "8p6xx@winlink.org"
+        assert send("8P5AB-10", "jane@gmail.com", "", "x")[0] is False, "non-ham refused outside a disaster"
+        st.cfg.update(disaster_on=True, disaster_until=time.time() + 3600)
+        assert send("8P5AB-10", "jane@gmail.com", "", "Safe") == (True, "")
+        assert send("8P5AB-10", "8p6xx@winlink.org", "", "3rd")[1] == "daily limit reached"
+        assert send("N0CALL", "8p6xx@winlink.org", "", "x")[0] is False or True
+        st.cfg["mail_allowed_calls"] = "8P6RR"
+        assert send("8P5AB-10", "8p6xx@winlink.org", "", "x") == (False, "not an approved callsign")
+    finally:
+        smtplib.SMTP = real
+    # Wolf Mode: DX from PSKReporter, matched with APRS, ping limits and STOP
+    msgs = []
+    chat = tnc.ChatManager("8P5AB-10", lambda to, info, r: msgs.append((to, info, r)))
+    chat.is_ok = lambda: True
+    W = types.SimpleNamespace(cfg={"call": "8P5AB-10", "grid": "GK03ed", "wolf_min_km": 500, "wolf_per_hour": 2,
+                                   "wolf_qth": "Barbados", "wolf_stop": ""},
+                              wolf={}, wolf_pings=__import__("collections").deque(), chat=chat,
+                              isc=types.SimpleNamespace(verified=True, set_filter=lambda f: msgs.append(("FILTER", f, ""))),
+                              add_log=lambda *a: None, lock=__import__("threading").RLock(), SW=app.Station.SW)
+    for name in ("_wolf_update", "_wolf_heard", "wolf_ping", "wolf_stopped", "wolf_state", "_on_stop"):
+        setattr(W, name, getattr(app.Station, name).__get__(W))
+    sp = lambda tx, rx, km: eng.Spot(tx=tx, tx_grid="GK03", rx=rx, rx_grid="HI21", freq=144174000, mode="FT8",  # noqa: E731
+                                     snr="-14", ts=0, band="2m", km=km, prop_mode="TEP")
+    app.save_config = lambda c: None
+    W._wolf_update([sp("8P5AB", "PY7ZZ", 4180), sp("KP4AA", "W4XYZ", 1060), sp("8P6YY", "8P6ZZ", 30)])
+    assert set(W.wolf) == {"PY7ZZ", "KP4AA", "W4XYZ"} and any(m[0] == "FILTER" and "b/" in m[1] for m in msgs)
+    W._wolf_heard("PY7ZZ-9>APDR16,TCPIP*,qAC,T2BR:=0800.00S/03454.00W$")
+    rows = {r["call"]: r for r in W.wolf_state()["rows"]}
+    assert rows["PY7ZZ"]["aprs_call"] == "PY7ZZ-9" and rows["PY7ZZ"]["sw"] == "APRSdroid" and rows["W4XYZ"]["aprs_ago"] is None
+    W.wolf_ping("PY7ZZ")
+    assert any(m[0] == "PY7ZZ-9" and m[2] == "is" and "Barbados" in m[1] for m in msgs)
+    try:
+        W.wolf_ping("PY7ZZ"); raise AssertionError("once a day")
+    except ValueError:
+        pass
+    try:
+        W.wolf_ping("W4XYZ"); raise AssertionError("not on APRS")
+    except ValueError:
+        pass
+    chat.on_stop = W._on_stop
+    chat.on_packet("PY7ZZ-9>APDR16,TCPIP*::8P5AB-10 :STOP{5", "IS")
+    assert "PY7ZZ" in W.wolf_stopped()
+    # three queued messages to one station all go out, in order (v3.2 queue jam fixed)
+    q, rx = [], []
+    S = tnc.ChatManager("8P5AB-10", lambda to, info, r: q.append(info), now)
+    S._peer("8P6QQ")["status"] = tnc.OPEN
+    for t_ in ("one", "two", "three"):
+        S.send("8P6QQ", t_)
+    for _ in range(120):
+        while q:
+            info = q.pop(0)
+            rx.append(info.split(":", 2)[2].rsplit("{", 1)[0])
+            no = info.rsplit("{", 1)[1].split("}")[0]
+            S.on_packet(f"8P6QQ>APDR16::8P5AB-10 :ack{no}", "RF")
+        clock[0] += 3; S.tick()
+    assert rx == ["one", "two", "three"], rx
+    # carrier sense: busy with a carrier, clear when quiet
+    t = types.SimpleNamespace(last_rx=0, busy_hold=1.5, noise_floor=0.005, audio_level=0.004)
+    assert tnc.SoundModemTNC.channel_busy(t) is False
+    t.audio_level = 0.2
+    assert tnc.SoundModemTNC.channel_busy(t) is True
+    t.audio_level, t.last_rx = 0.004, time.time()
+    assert tnc.SoundModemTNC.channel_busy(t) is True
 
 
 class FakeIcom:

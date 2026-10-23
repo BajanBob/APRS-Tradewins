@@ -382,6 +382,29 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
 #chat-wrap .chat-peers button{background:#0d0d0f;border-color:#2e2e33;color:#f3f4f6;min-height:42px}
 #chat-wrap .chat-peers button[aria-pressed="true"]{border-color:var(--out);background:#0a1f44}
 #chat-wrap .chat-peers .n{background:var(--in)}
+#chat-wrap .chat-peers{flex-direction:column;flex-wrap:nowrap;gap:0;border:1px solid #2e2e33;border-radius:12px;overflow:hidden;max-height:260px;overflow-y:auto}
+#chat-wrap .chat-peers .cpeer{border-radius:0;border:0;border-bottom:1px solid #2e2e33;min-height:56px;justify-content:flex-start;text-align:left;width:100%}
+.cp-main{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.cp-top{display:flex;gap:8px;align-items:center}.cp-top b{font-family:var(--mono);font-weight:500}
+.cp-chip{font-size:10px;padding:1px 6px;border-radius:4px;border:1px solid #374151;color:#cbd2d9}
+.cp-last{font-size:13px;color:#9aa3ad;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.seg{display:inline-flex;border:1px solid #374151;border-radius:10px;overflow:hidden}
+.seg button{background:none;border:0;color:#9aa3ad;font:600 11px var(--label);letter-spacing:.08em;padding:0 10px;min-height:38px;cursor:pointer}
+.seg button[aria-checked="true"]{background:#1e40af;color:#fff}
+details.more{position:relative;display:inline-block}details.more summary{list-style:none;min-width:44px;text-align:center}
+details.more summary::-webkit-details-marker{display:none}
+.more-menu{position:absolute;right:0;top:46px;z-index:20;min-width:270px;background:#111827;border:1px solid #374151;border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:8px}
+.more-row{display:flex;gap:8px;align-items:center}
+.callk{background:none;border:0;padding:0;color:inherit;font:inherit;font-family:var(--mono);cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+.callk.big{font-size:15px;font-weight:600;color:#fff}
+#callmenu{position:fixed;z-index:60;min-width:250px;max-width:92vw;background:#0f1317;border:1px solid #374151;border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px;box-shadow:0 12px 40px rgba(0,0,0,.6)}
+#callmenu h4{margin:0 0 4px;font:600 16px var(--mono);color:#fff}
+#callmenu .btn{width:100%;justify-content:flex-start}
+.wolf-row{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.4fr) auto;gap:8px;align-items:center;padding:8px 6px;border-bottom:1px solid #2a3036}
+.wolf-row .sm{font-size:12px;color:var(--engrave)}.wolf-row .ok{color:#86efac}
+.disaster{background:#450a0a;border:1px solid #b91c1c;color:#fee2e2;border-radius:10px;padding:8px 12px;margin:8px 0;font-size:13px}
+#mail-box textarea{width:100%;min-height:90px;resize:vertical}
+.mail-list{font-size:12px;color:var(--engrave);display:flex;flex-direction:column;gap:2px;margin-top:6px}
 #chat-wrap .chat-peers i.in{background:var(--in)}
 #chat-wrap .chat-status{background:#0d0d0f;border:1px solid #26262b}
 #chat-wrap .chat-status.ask{background:#2b0b0e;border:2px solid var(--in)}
@@ -453,6 +476,7 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
 </style>
 </head>
 <body>
+<div id="callmenu" class="hide" role="dialog" aria-label="Station"></div>
 <div class="wrap">
   <div class="fp-bar" role="group" aria-label="Face plate style"><span>FACE PLATE</span>
     <button type="button" data-fp-btn="classic" aria-pressed="true">Classic</button>
@@ -599,6 +623,7 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
       <button class="tab" data-p="p-net" role="tab">APRS-IS</button>
       <button class="tab" data-p="p-wx" role="tab">WEATHER</button>
       <button class="tab" data-p="p-com" role="tab">COMMERCIAL</button>
+      <button class="tab" data-p="p-mail" role="tab">EMAIL</button>
     </div>
 
     <div class="pane on" id="p-radio">
@@ -705,7 +730,12 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
       <div class="set wide"><label>Beacon comment</label><input class="inset" data-k="beacon_comment" maxlength="43"></div>
       <div class="set"><label class="chk"><input type="checkbox" data-k="store_forward"> Store and forward: keep undelivered messages and resend when the station is heard again</label></div>
       <div class="set"><label class="chk"><input type="checkbox" data-k="relay_enabled"> Act as a relay: pass messages on for stations that cannot reach each other</label></div>
-      <div class="set wide"><label>Chat frequencies for QSY (MHz, comma separated)</label><input class="inset" data-k="qsy_freqs" placeholder="144.510,144.530,144.550,144.570,144.590,145.030,145.050,145.070,145.090"></div>
+      <div class="set"><label>Band-plan zone (APRS, hail and chat frequencies)</label>
+        <select class="inset" data-k="zone" id="f-zone"><option value="auto">Automatic - from my grid square</option></select></div>
+      <div class="set"><label>Chat channels</label>
+        <select class="inset" data-k="qsy_mode" id="f-qsymode"><option value="auto">Automatic for my zone</option><option value="manual">Manual override - my own list</option></select></div>
+      <div class="set wide note" id="zone-note"></div>
+      <div class="set wide m-qsyman"><label>My chat frequencies for QSY (MHz, comma separated, in order)</label><input class="inset" data-k="qsy_freqs" id="f-qsyfreqs" placeholder="144.510,144.530,144.550"></div>
       <div class="set wide" id="pin-box"><label>Station PIN <span class="note" id="pin-state"></span></label>
         <div class="pin-row"><input class="inset" id="pin-old" type="password" inputmode="numeric" placeholder="current PIN" autocomplete="off">
         <input class="inset" id="pin-new" type="password" inputmode="numeric" placeholder="new PIN (4-8 digits)" autocomplete="off">
@@ -744,6 +774,10 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
         <label class="chk"><input type="checkbox" data-list="alert_modes" value="TROPO"> Tropo duct</label>
         <label class="chk"><input type="checkbox" data-list="alert_modes" value="ES"> Sporadic-E</label></div></div>
       <div class="set"><button class="btn" id="b-sound" type="button" style="width:100%">TEST SOUND</button></div>
+      <div class="set wide"><label>Wolf Mode (DX also on APRS)</label><div class="note">Turn it on under the chat (WOLF MODE). Pings go by internet only.</div></div>
+      <div class="set"><label>Wolf: only stations at least (km)</label><input class="inset" data-k="wolf_min_km" data-num type="number" min="100" max="20000"></div>
+      <div class="set"><label>Wolf: pings per hour (max)</label><input class="inset" data-k="wolf_per_hour" data-num type="number" min="1" max="10"></div>
+      <div class="set"><label>Wolf: your location in pings</label><input class="inset" data-k="wolf_qth" placeholder="Barbados" maxlength="20"></div>
     </div>
 
     <div class="pane" id="p-net">
@@ -809,6 +843,35 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
       <div class="set wide note">Share the passphrase in person or by phone, never over the radio. After setting it, read the <b>key fingerprint</b> to the other units; if it matches, you hold the same key.
         Tradewind stores the derived 256-bit key on this computer, not the passphrase. Have the encryption reviewed independently before relying on it for sensitive operations.</div>
     </div>
+
+    <div class="pane" id="p-mail">
+      <div class="set"><label>Default way to send email</label>
+        <select class="inset" data-k="mail_via" id="f-mailvia"><option value="EMAIL-2">EMAIL-2 service (internet email gateway)</option></select></div>
+      <div class="set wide note">EMAIL-2 needs an internet path: your own APRS-IS connection, or an iGate that hears you. To use a Tradewind gateway instead, choose it in the email panel and enter the gateway's callsign.</div>
+      <div class="set wide"><label class="chk"><input type="checkbox" data-k="mail_gw_enabled"> This station is a Tradewind email gateway (needs internet and an email account)</label></div>
+      <div class="set"><label>Mail provider</label>
+        <select class="inset" id="f-mailprov"><option value="">Choose to fill in the servers...</option>
+          <option value="gmail">Gmail (app password)</option><option value="zoho">Zoho Mail (app password)</option>
+          <option value="fastmail">Fastmail (app password)</option><option value="proton">Proton Mail Bridge (on this computer)</option></select></div>
+      <div class="set wide note" id="mailprov-note">Use a mailbox just for the gateway, with an app password. Tradewind checks the mail server's security certificate, so the password is never sent to an impostor server.</div>
+      <div class="set"><label>Outgoing mail server (SMTP)</label><input class="inset" data-k="smtp_host" placeholder="smtp.gmail.com"></div>
+      <div class="set"><label>SMTP port</label><input class="inset" data-k="smtp_port" data-num type="number" min="1" max="65535"></div>
+      <div class="set"><label class="chk"><input type="checkbox" data-k="smtp_tls"> Use STARTTLS</label></div>
+      <div class="set"><label>Mail account user</label><input class="inset" data-k="smtp_user" autocomplete="off"></div>
+      <div class="set"><label>From address</label><input class="inset" data-k="smtp_from" placeholder="8p5ab.gateway@example.com"></div>
+      <div class="set"><label>Incoming mail server (IMAP)</label><input class="inset" data-k="imap_host" placeholder="imap.gmail.com"></div>
+      <div class="set"><label>IMAP port</label><input class="inset" data-k="imap_port" data-num type="number" min="1" max="65535"></div>
+      <div class="set"><label>Check for replies every (minutes)</label><input class="inset" data-k="mail_poll_min" data-num type="number" min="2" max="60"></div>
+      <div class="set wide"><label>Mail passwords <span class="note" id="mailpass-state"></span></label>
+        <div class="pin-row"><input class="inset" id="smtp-pass" type="password" placeholder="SMTP password / app password" autocomplete="off">
+        <input class="inset" id="imap-pass" type="password" placeholder="IMAP password (blank = same)" autocomplete="off">
+        <button class="btn" type="button" id="b-mailpass">SET PASSWORDS</button></div>
+        <div class="note">Use an app password for a dedicated mailbox, never your main account. Passwords are stored on this station only and never shown on the face plate.</div></div>
+      <div class="set wide"><label>Callsigns allowed to use this gateway (blank = any amateur callsign)</label><input class="inset" data-k="mail_allowed_calls" placeholder="8P6XX, 8P6RR, J37PGP"></div>
+      <div class="set"><label>Emails per callsign per day</label><input class="inset" data-k="mail_per_day" data-num type="number" min="1" max="100"></div>
+      <div class="set"><label>Session time limit (minutes)</label><input class="inset" data-k="mail_session_min" data-num type="number" min="2" max="30"></div>
+      <div class="set wide note">Rules: plain text only, up to 500 characters. Ham addresses only (CALL@winlink.org, or a callsign as the mailbox name), unless a disaster session is on (EMAIL panel under the chat) - that is logged and ends by itself. Replies reach a station by radio when the reply's subject starts with its callsign, e.g. "8P6XX-9: on my way".</div>
+    </div>
     <div class="drawer-foot">
       <div class="note" id="save-note">Saving restarts the station if it's on.</div>
       <button class="btn" id="b-close">CLOSE</button>
@@ -872,12 +935,37 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
       <div class="forms-prev" id="form-prev" aria-live="polite"></div>
       <div class="forms-acts"><button class="btn" type="button" id="form-cancel">CLOSE</button><button class="btn accent" type="button" id="form-send">SEND FORM</button></div>
     </section>
+    <div class="disaster hide" id="disaster-banner" role="status"></div>
     <div class="chat-tools">
+      <button class="btn" type="button" id="b-email" title="Send a short email by radio">EMAIL</button>
       <a class="btn" id="b-commlog" href="/api/commlog.csv" download>DOWNLOAD LOG (ICS-309)</a>
       <span class="note" id="commlog-n"></span>
       <span class="note" id="outbox-n"></span>
       <span class="note" id="blocked-n"></span>
     </div>
+    <details class="heard" id="mail-box">
+      <summary>EMAIL BY RADIO <span id="mail-n"></span></summary>
+      <div class="set wide"><label>Send through</label>
+        <select class="inset" id="mail-via"><option value="EMAIL-2">EMAIL-2 service (APRS internet email gateway)</option><option value="gw">A Tradewind gateway station</option></select></div>
+      <div class="set wide hide" id="mail-gw-row"><label>Gateway station callsign</label><input class="inset" id="mail-gw" placeholder="8P6GW" maxlength="9"></div>
+      <div class="set wide"><label>To (email address)</label><input class="inset" id="mail-to" type="email" placeholder="8p6xx@winlink.org"></div>
+      <div class="set wide"><label>Subject</label><input class="inset" id="mail-subj" maxlength="60"></div>
+      <div class="set wide"><label>Message <span class="note" id="mail-count">0/500</span></label><textarea class="inset" id="mail-body" maxlength="500"></textarea></div>
+      <div class="note" id="mail-rule"></div>
+      <button class="btn accent" type="button" id="b-mail-send">SEND EMAIL</button>
+      <div class="mail-list" id="mail-list"></div>
+      <div class="set wide" style="margin-top:12px"><label>Disaster session (EmComm)</label>
+        <div class="note">Email to and from non-hams (third-party traffic) is only allowed in a disaster. Starting a session is logged; it ends by itself.</div>
+        <div class="more-row" style="margin-top:6px"><input class="inset" id="dis-reason" placeholder="Reason, e.g. Hurricane warning - NEOC activated" style="flex:1">
+        <select class="inset" id="dis-hours" style="width:auto"><option value="12">12 h</option><option value="24" selected>24 h</option><option value="72">72 h</option></select></div>
+        <div class="more-row" style="margin-top:6px"><button class="btn" type="button" id="b-dis-on">START DISASTER SESSION</button><button class="btn" type="button" id="b-dis-off">END IT</button></div></div>
+    </details>
+    <details class="heard" id="wolf-box">
+      <summary>WOLF MODE - DX ON APRS <span id="wolf-n"></span></summary>
+      <label class="chk" style="margin:8px 0"><input type="checkbox" id="wolf-on"> Hunt: check long-distance stations from PSKReporter for APRS activity</label>
+      <div class="note" id="wolf-note"></div>
+      <div id="wolf-list"><div class="chat-empty">Turn Wolf Mode on. After the next propagation check, DX stations working 2 m / 70 cm appear here; those also active on APRS can be pinged.</div></div>
+    </details>
     <details class="heard" id="relay-box">
       <summary>SEND THROUGH A RELAY STATION</summary>
       <form class="hail" id="relay-form" style="margin-top:8px">
@@ -978,7 +1066,41 @@ function readForm(){
   o.call = (o.call||'').toUpperCase();
   return o;
 }
+let zones = [];
+function gridLL(g){
+  g = (g||'').trim(); if (!/^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?$/.test(g)) return null;
+  g = g.slice(0,2).toUpperCase()+g.slice(2,4)+g.slice(4,6).toLowerCase();
+  let lon=(g.charCodeAt(0)-65)*20-180+(+g[2])*2, lat=(g.charCodeAt(1)-65)*10-90+(+g[3]);
+  if (g.length===6){ lon+=(g.charCodeAt(4)-97)*5/60+2.5/60; lat+=(g.charCodeAt(5)-97)*2.5/60+1.25/60; } else { lon+=1; lat+=0.5; }
+  return [lat, lon];
+}
+function zoneForGrid(g){                       // same rough boxes as tnc.zone_for_grid
+  const p = gridLL(g); if (!p) return 'r2'; const [lat, lon] = p;
+  if (lon>=-170 && lon<=-25){ if (lat<-27 && lon<-53) return 'ar'; if (lat>=-34 && lat<=5.5 && lon>=-60 && lon<=-34) return 'br'; return 'r2'; }
+  if (lat>=24 && lat<=46 && lon>=128.5 && lon<=146) return 'jp';
+  if (lat>=-48 && lat<=-33 && lon>=165) return 'nz';
+  if (lat>=-45 && lat<=-10 && lon>=112 && lon<=155) return 'au';
+  if (lat>=33 && lat<=39 && lon>=124 && lon<=131.5) return 'r3';
+  if (lat>=18 && lat<=54 && lon>=73 && lon<=135) return 'cn';
+  if ((lon>=-25 && lon<=60) || (lat>=40 && lon>60)) return 'r1';
+  return 'r3';
+}
+function zoneNote(){
+  const el = $('#zone-note'); if (!el || !zones.length) return;
+  const sel = $('#f-zone').value, key = sel==='auto' ? zoneForGrid($('#f-grid').value) : sel;
+  const z = zones.find(x=>x.key===key) || zones[0], man = $('#f-qsymode').value==='manual';
+  $$('.m-qsyman').forEach(e=>e.classList.toggle('hide', !man));
+  const fsel = $('#f-freq').value, aprs = fsel==='auto' ? z.aprs : (fsel==='custom' ? ($('[data-k="aprs_freq_custom"]').value||'?') : fsel);
+  const ch = man ? $('#f-qsyfreqs').value.split(',').map(x=>x.trim()).filter(Boolean) : (z.qsy ? z.qsy.split(',') : []);
+  const sat = (+aprs>=145.79 && +aprs<=146) || (+aprs>=435 && +aprs<=438);
+  el.innerHTML = `<b>${sel==='auto' ? 'Your grid square is in' : 'Manual zone'}: ${z.name}.</b> `+
+    `Hail / APRS frequency <b>${aprs}</b>${fsel==='auto' ? '' : ' (chosen by hand)'} · chat channels: `+
+    (ch.length ? `<b>${ch.join(', ')}</b>${man ? ' (your list)' : ''}` : '<b>none set</b> - chats stay on the APRS frequency; choose Manual override to add channels')+
+    `. ${z.note}`+(sat ? ' <b>Satellite / ISS frequency: hails and email are switched off.</b>' : '')+
+    (sel==='auto' ? ' If the zone is wrong (border areas), pick yours from the list.' : '');
+}
 function updateVisibility(){
+  zoneNote();
   const t = $('#f-tnc').value, p = $('#f-ptt').value;
   $$('.m-sound').forEach(e=>e.classList.toggle('hide', t!=='sound'));
   $$('.m-kiss_tcp').forEach(e=>e.classList.toggle('hide', t!=='kiss_tcp'));
@@ -1113,7 +1235,8 @@ async function poll(){
     for (const e of s.log){
       const d = document.createElement('div'); d.className = 'k-'+e.kind;
       const tt = document.createElement('span'); tt.className='t'; tt.textContent = hms(new Date(e.t*1000))+' '+e.kind.padEnd(4)+' ';
-      d.append(tt, document.createTextNode(e.text)); mon.append(d);
+      const tx = document.createElement('span'); tx.innerHTML = callify(e.text);
+      d.append(tt, tx); mon.append(d);
       logSince = Math.max(logSince, e.id);
       alertFromLog(e);
     }
@@ -1123,6 +1246,9 @@ async function poll(){
   renderAlt(s);
   drawCom(s);
   drawHeard(s);
+  drawWolf(s);
+  drawMail(s, chatData);
+  const mp = s.mail_pass_set || {}; $('#mailpass-state').textContent = `(SMTP ${mp.smtp?'set':'not set'} · IMAP ${mp.imap?'set':'not set - uses SMTP'})`;
 }
 function androidMode(){
   document.body.dataset.android = '1';
@@ -1426,6 +1552,9 @@ function chatAlert(ev){
   else if (ev.kind==='message'){ toast(ev.text, true, 8000); if (soundReady) chime(); }
   else if (ev.kind==='qsy'){ toast('↔ ' + ev.text, true, 15000); if (soundReady) dispatchTone(); chatSel = ev.call; }
   else if (ev.kind==='qsy_on' || ev.kind==='qsy_hint'){ toast(ev.text, true, 10000); if (soundReady) chime(); }
+  else if (ev.kind==='mail_in'){ toast('✉ ' + ev.text, true, 12000); if (soundReady) chime(); }
+  else if (ev.kind==='mail_sent'){ toast('✉ ' + ev.text, true, 8000); }
+  else if (ev.kind==='mail_failed'){ toast('✉ ' + ev.text, false, 12000); }
   else if (ev.kind==='qsy_fail'){ toast(ev.text, false, 12000); }
   else toast(ev.text);
   addAlert('CHAT', ev.text, ev.t);
@@ -1446,28 +1575,35 @@ function drawChat(){
   drawNet(c);
   const peers = c.peers || [];
   if (!chatSel && peers.length) chatSel = peers[0].call;
-  $('#chat-peers').innerHTML = peers.map(p=>`<button type="button" data-peer="${esc(p.call)}" aria-pressed="${p.call===chatSel}"><i class="${ST_CLASS[p.status]||''}"></i>${esc(p.call)}${p.unread?`<span class="n">${p.unread}</span>`:''}</button>`).join('');
+  const RCHIP = r => r==='is' ? 'Internet' : r==='rf' ? 'RF' : r==='smart' ? 'Auto' : String(r||'').toUpperCase();
+  $('#chat-peers').innerHTML = peers.map(p=>`<button type="button" class="cpeer" data-peer="${esc(p.call)}" aria-pressed="${p.call===chatSel}"><i class="${ST_CLASS[p.status]||''}"></i><span class="cp-main"><span class="cp-top"><b>${esc(p.call)}</b><span class="cp-chip">${esc(RCHIP(p.route))}${p.qsy&&p.qsy.state==='on'?' · '+esc(p.qsy.freq):''}</span></span><span class="cp-last">${esc(p.status==='incoming'?'Wants to chat - tap to answer':p.last||p.status_text)}</span></span>${p.unread?`<span class="n">${p.unread}</span>`:''}</button>`).join('');
   $$('[data-peer]').forEach(b=>b.onclick=()=>{ chatSel = b.dataset.peer; api('/api/chat', {action:'read', call: chatSel}); drawChat(); });
   const p = peers.find(x=>x.call===chatSel);
   if (!p){ $('#chat-pane').innerHTML = `<div class="chat-empty">${c.off ? 'Turn the station on, then hail a station to open a two-way link.' :
     'Hail a station to open a two-way link. They hear a call-out tone and get an Accept button; when they accept, you confirm, and the chat opens.'}</div>`; return; }
-  const ROUTE = {smart:'RF first', rf:'RF only', rf_is:'RF + APRS-IS', is:'APRS-IS only', auto:'Auto link', 'link:A':'link A', 'link:B':'link B'};
-  let acts = '';
+  const ROUTE = {smart:'RF first', rf:'RF only', rf_is:'RF + APRS-IS', is:'Internet only', auto:'Auto link', 'link:A':'link A', 'link:B':'link B'};
   if (p.forever && p.status==='hailing') p.status_text = 'Calling until received (stops after 30 min) - waiting for an answer';
+  if (p.status==='idle' && p.can_send) p.status_text = 'Direct messages (no handshake)';
+  const Q = p.qsy || null, QF = (lastState && lastState.qsy_freqs) || [];
+  let acts = '', more = '';
   if (p.status==='incoming') acts = `<button class="btn accent" data-act="accept">ACCEPT</button><button class="btn" data-act="decline">DECLINE</button>`;
   else if (p.status==='await_confirm') acts = `<button class="btn accent" data-act="accept">ACCEPT</button><button class="btn" data-act="end">CANCEL</button>`;
-  else if (['open','hailing','accepted'].includes(p.status)) acts = `<button class="btn" data-act="end">${p.status==='open'?'END LINK':'CANCEL'}</button>`;
-  const Q = p.qsy || null, QF = (lastState && lastState.qsy_freqs) || [];
-  if (p.status==='open'){
-    if (Q && Q.state==='incoming') acts = `<button class="btn accent" data-act="qsy_yes">MOVE TO ${esc(Q.freq)}</button><button class="btn" data-act="qsy_no">STAY</button>` + acts;
-    else if (Q && ['moving','on','returning'].includes(Q.state)) acts = `<button class="btn" data-act="qsy_back" title="Both stations go back to the APRS frequency">BACK TO APRS</button>` + acts;
-    else if (Q && ['offered','accepting'].includes(Q.state)) acts = `<span class="note">moving to ${esc(Q.freq)}…</span>` + acts;
-    else if (QF.length && p.route!=='is') acts = `<select class="inset" id="qsy-f" aria-label="Chat frequency"><option value="auto">Auto - first free</option>${QF.map(f=>`<option ${(chatData&&chatData.qsy_busy||[]).includes(Number(f).toFixed(3))?'disabled':''}>${esc(f)}</option>`).join('')}</select><button class="btn" data-act="qsy" title="Move this chat off the APRS frequency to a chat channel">QSY</button>` + acts;
+  else if (p.status==='open'){
+    if (Q && Q.state==='incoming') acts = `<button class="btn accent" data-act="qsy_yes">MOVE TO ${esc(Q.freq)}</button><button class="btn" data-act="qsy_no">STAY</button>`;
+    else if (Q && ['moving','on','returning'].includes(Q.state)) acts = `<button class="btn" data-act="qsy_back" title="Both stations go back to the APRS frequency">BACK TO APRS</button>`;
+    else if (Q && ['offered','accepting'].includes(Q.state)) acts = `<span class="note">moving to ${esc(Q.freq)}…</span>`;
+    else if (QF.length && p.route!=='is') more += `<div class="more-row"><select class="inset" id="qsy-f" aria-label="Chat frequency"><option value="auto">Auto - first free</option>${QF.map(f=>`<option ${(chatData&&chatData.qsy_busy||[]).includes(Number(f).toFixed(3))?'disabled':''}>${esc(f)}</option>`).join('')}</select><button class="btn" data-act="qsy" title="Move this chat off the APRS frequency to a chat channel">QSY</button></div>`;
+    acts += `<button class="btn" data-act="end">END LINK</button>`;
   }
+  else if (['hailing','accepted'].includes(p.status)) acts = `<button class="btn" data-act="end">CANCEL</button>`;
+  else acts = `<button class="btn" data-act="hail" title="Call, accept and confirm - for a full chat">HAIL</button>`;
   if (Q && Q.state==='on') p.status_text += ` · on ${Q.freq} MHz`;
-  else acts = `<button class="btn" data-act="hail">HAIL AGAIN</button>`;
-  acts += `<button class="btn" data-act="block" title="Ignore all calls and messages from this station">BLOCK</button>`;
-  if ((p.links || []).length > 1) acts += `<button class="btn" data-act="probe" title="Send a short test on each radio link and time the replies">PROBE</button>`;
+  const R = ['is','rf'].includes(p.route) ? p.route : 'smart';
+  const seg = `<span class="seg" role="radiogroup" aria-label="Send by">${[['rf','RF'],['is','INTERNET'],['smart','AUTO']].map(([v,l])=>`<button type="button" role="radio" aria-checked="${R===v}" data-route="${v}">${l}</button>`).join('')}</span>`;
+  if ((p.links || []).length > 1) more += `<button class="btn" data-act="probe" title="Send a short test on each radio link and time the replies">PROBE LINKS</button>`;
+  more += `<label class="chk more-row"><input type="checkbox" id="nogate-${esc(p.call)}" data-nogate ${p.nogate?'checked':''}> Keep this chat off the internet (asks iGates not to copy it)</label>`;
+  more += `<button class="btn" data-act="block" title="Ignore all calls and messages from this station">BLOCK ${esc(p.call)}</button>`;
+  acts += `<details class="more"><summary class="btn" aria-label="More options">⋯</summary><div class="more-menu">${more}</div></details>`;
   const lstats = (p.links || []).length > 1 ? `<div class="link-stats">${p.links.map(l=>`<span class="${l.best?'best':''} ${l.failing?'bad':''}">${esc(l.link)} ${esc(l.name)}: ${l.ok}/${l.sent} ok${l.rtt?` · ${l.rtt}s`:''}${l.tput?` · ${l.tput} B/s`:''}${l.best?' · using':''}${l.failing?' · failing':''}</span>`).join('')}</div>` : '';
   const ask = ['incoming','await_confirm'].includes(p.status);
   const icon = m => (m.dir!=='out' ? '' : m.state==='delivered' ? ' · ✓ delivered' : m.state==='failed' ? ' · ✗ not delivered' :
@@ -1478,7 +1614,7 @@ function drawChat(){
     ' · sending…' + (m.tries>1 ? ` (try ${m.tries})` : '')) + (m.link && m.link!=='IS' && (p.links||[]).length>1 ? ` · link ${m.link}` : '');
   const msgs = p.messages.map(m => m.dir==='sys' ? `<div class="cm sys">${hms(new Date(m.t*1000)).slice(0,5)} ${esc(m.text)}</div>` :
     `<div class="cm ${m.dir} ${m.state==='failed'||m.state==='rejected'?'failed':''}"><span class="who">${m.dir==='in' ? esc(p.call) : 'YOU'}</span>${esc(m.text)}<small>${hms(new Date(m.t*1000)).slice(0,5)}${m.via?' · via '+m.via:''}${icon(m)}${m.error?' · '+esc(m.error):''}</small></div>`).join('');
-  $('#chat-pane').innerHTML = `<div class="chat-status${ask?' ask pulse':''}"><span><b>${esc(p.call)}</b> · ${esc(p.status_text)} · ${ROUTE[p.route]||p.route}${p.via?' · last heard via '+p.via:''}</span><span class="acts">${acts}</span></div>
+  $('#chat-pane').innerHTML = `<div class="chat-status${ask?' ask pulse':''}"><span><button type="button" class="callk big" data-call="${esc(p.call)}">${esc(p.call)}</button> · ${esc(p.status_text)}${p.via?' · last heard via '+p.via:''}</span><span class="acts">${seg}${acts}</span></div>
     ${lstats}<div class="chat-legend" aria-hidden="true"><span><i style="background:#ef4444"></i>${esc(p.call)}</span><span><i style="background:#3b82f6"></i>You</span></div>
     <div class="chat-msgs" id="chat-msgs" role="log" aria-live="polite">${msgs || '<div class="cm sys">No messages yet</div>'}</div>
     <div class="composer">${p.can_send ? `<div class="quick" role="group" aria-label="Quick replies">${['QSL','Roger','Standby','Say again','All OK here','Need help','73'].map(q=>`<button type="button" data-quick="${q}">${q}</button>`).join('')}</div>` : ''}
@@ -1495,11 +1631,15 @@ function drawChat(){
     const body = {action: b.dataset.act, call: p.call};
     if (body.action==='hail') body.route = p.route;
     if (body.action==='qsy') body.freq = $('#qsy-f').value;
+    if (body.action==='block' && !confirm('Block ' + p.call + '? Their calls and messages will be ignored.')) return;
     const r = await api('/api/chat', body);
     if (r.errors && r.errors.length) toast(r.errors[0]);
     else if (body.action==='block'){ toast(p.call + ' blocked - unblock it under the chat', true); chatSel = null; }
     pollChat();
   });
+  $$('[data-route]').forEach(b=>b.onclick = async ()=>{ await api('/api/chat', {action:'route', call:p.call, route:b.dataset.route}); pollChat(); });
+  $$('[data-nogate]').forEach(b=>b.onchange = async ()=>{ await api('/api/chat', {action:'nogate', call:p.call, on:b.checked});
+    toast(b.checked ? 'Chat marked NOGATE - iGates are asked not to copy it to the internet' : 'NOGATE off', true); pollChat(); });
   $('#chat-form').onsubmit = async e=>{
     e.preventDefault(); const t = $('#chat-text').value.trim(); if (!t) return;
     const r = await api('/api/chat', {action:'send', call: p.call, text: t});
@@ -1623,7 +1763,7 @@ function drawHeard(s){
   $('#tw-stats').innerHTML = `<div>Tradewind users today<b>${T.today||0}</b></div><div>This week<b>${T.week||0} ${T.new_week?`<i>+${T.new_week} new</i>`:''}</b></div>`;
   const list = heardFilter==='tw' ? H.filter(h=>h.tw) : H;
   if (!list.length){ $('#heard-list').innerHTML = `<div class="chat-empty">${heardFilter==='tw' ? 'No Tradewind stations heard on RF yet. They show a green TRADEWIND badge.' : 'Stations your radio decodes appear here, even with no internet.'}</div>`; return; }
-  $('#heard-list').innerHTML = list.map(h=>`<div class="heard-row"><b>${esc(h.call)}${h.tw?'<span class="tw-badge" title="Running Tradewind">TRADEWIND</span>':''}</b><span>${ago(h.last)}</span><span>${esc(h.via)} · ${h.count} pkt</span>
+  $('#heard-list').innerHTML = list.map(h=>`<div class="heard-row"><b><button type="button" class="callk" data-call="${esc(h.call)}">${esc(h.call)}</button>${h.tw?'<span class="tw-badge" title="Running Tradewind">TRADEWIND</span>':''}</b><span>${ago(h.last)}</span><span>${esc(h.via)} · ${h.count} pkt</span>
     <button class="btn" type="button" data-hail="${esc(h.call)}">HAIL</button></div>`).join('');
   $$('[data-hail]').forEach(b=>b.onclick=()=>{ $('#hail-call').value = b.dataset.hail; $('#hail-route').value = 'smart'; $('#hail-call').focus(); $('#hail-form').scrollIntoView({behavior:'smooth', block:'center'}); });
 }
@@ -1672,7 +1812,7 @@ function routeOptions(s){
 function drawNet(c){
   const R = (c && c.roster) || [];
   $('#roster-n').textContent = R.length ? `(${R.length})` : '';
-  if (R.length) $('#roster-list').innerHTML = R.map(r=>`<div class="heard-row roster-row"><b>${esc(r.call)}</b>
+  if (R.length) $('#roster-list').innerHTML = R.map(r=>`<div class="heard-row roster-row"><b><button type="button" class="callk" data-call="${esc(r.call)}">${esc(r.call)}</button></b>
       <span class="st-${esc((r.status||'').split(' ')[0])}">${esc(r.status || '-')}</span><span>${ago(r.t)}</span><span></span></div>
       <div class="note" style="margin:0 4px 6px">${esc(r.text || '')}</div>`).join('');
   $('#outbox-n').textContent = c && c.outbox ? `${c.outbox} message${c.outbox>1?'s':''} waiting to be forwarded` : '';
@@ -1730,7 +1870,7 @@ const HELP = {
   civ_addr:'Icom CI-V address in hex: IC-9100 7C, IC-7300 94, IC-7610 98, IC-705 A4, IC-9700 A2, IC-7100 88.',
   ptt_invert:'Tick only if the radio transmits when it should be receiving (some home-made interfaces invert the line).',
   cat_tune:'With a CAT link, Tradewind sets the radio to the chosen frequency in FM data mode when the station turns on.',
-  aprs_freq:'The APRS frequency to tune to. 144.390 is used in North America and much of the Caribbean; 145.825 is the ISS digipeater.',
+  aprs_freq:'Automatic follows your band-plan zone. The APRS frequency to tune to. 144.390 is used in North America and much of the Caribbean; 145.825 is the ISS digipeater.',
   aprs_freq_custom:'Type any 2m or 70cm frequency in MHz, e.g. 144.930.',
   cat_restore:'Put the radio back on the frequency and mode it was using before Tradewind tuned it.',
   txdelay:'How long the transmitter is keyed before data starts. Raise it (400-600 ms) if other stations miss the start of your packets.',
@@ -1791,6 +1931,8 @@ const HELP = {
   link2_speed:'Air speed of the second link. Used to choose links: faster links are preferred while they deliver.',
   link2_name:'A short name shown in the chat, e.g. "70cm 9600".', link1_name:'A short name for the main radio link, e.g. "2m 1200".',
   link1_speed:'Air speed of the main link when it is an external KISS TNC (the built-in modem sets this itself).',
+  zone:'Automatic uses your grid square to pick the band plan: the APRS / hail frequency (144.390 Americas, 144.800 Europe-Africa, 145.570 Brazil, 144.930 Argentina, 144.640 Japan/China, 145.175 Australia, 144.575 NZ) and the chat channels. Near a border, or where your country differs, pick the zone by hand.',
+  qsy_mode:'Automatic uses the chat channels agreed for your zone. Manual override lets you type your own list, e.g. if a channel clashes with a local repeater or packet node. Channels on APRS, 145.010, weak-signal or satellite segments are refused.',
   qsy_freqs:'Chats start on the APRS frequency, then move (QSY) to the first free channel here. Default: 144.510-144.590 (IARU Region 2 local-option segment - confirm with your national society) then 145.030-145.090 (data segment), 20 kHz apart because a 1200-baud FM signal is about 12 kHz wide. 145.010 is skipped: it is protected for Caribbean APRS.',
   igate_tx:'Messages from the internet for stations your radio hears locally are passed on to them on RF, as a standard iGate does. Limited to 30 an hour.',
   kiss_server:'Other APRS programs on this computer can connect to Tradewind on this port as if it were a hardware TNC. Packets they send must use your callsign.',
@@ -1843,7 +1985,27 @@ $('#b-save').onclick = save; $('#b-save-top').onclick = save;
 $$('.tab').forEach(t=>t.onclick=()=>{ $$('.tab').forEach(x=>x.classList.toggle('on',x===t)); $$('.pane').forEach(p=>p.classList.toggle('on',p.id===t.dataset.p)); });
 $('#f-preset').onchange = e=>applyPreset(e.target.value);
 $('#f-tnc').onchange = updateVisibility; $('#f-rfwhen').onchange = updateVisibility; $('#f-ptt').onchange = updateVisibility;
+const MAILPROV = {
+  gmail:{smtp_host:'smtp.gmail.com',smtp_port:587,smtp_tls:true,imap_host:'imap.gmail.com',imap_port:993,
+    note:'Gmail: turn on 2-Step Verification, then Google Account > Security > App passwords. User = your full Gmail address.'},
+  zoho:{smtp_host:'smtp.zoho.com',smtp_port:587,smtp_tls:true,imap_host:'imap.zoho.com',imap_port:993,
+    note:'Zoho: turn on IMAP access in Zoho Mail settings and create an app password. (Accounts outside the US may use smtp.zoho.eu / imap.zoho.eu.)'},
+  fastmail:{smtp_host:'smtp.fastmail.com',smtp_port:587,smtp_tls:true,imap_host:'imap.fastmail.com',imap_port:993,
+    note:'Fastmail: Settings > Privacy & Security > App passwords (allow IMAP and SMTP).'},
+  proton:{smtp_host:'127.0.0.1',smtp_port:1025,smtp_tls:true,imap_host:'127.0.0.1',imap_port:1143,
+    note:'Proton: needs a paid plan and Proton Mail Bridge running on THIS computer all the time (not Android). Use the username and password that Bridge shows, not your Proton password. If you changed Bridge\'s ports, copy them from Bridge.'},
+};
+$('#f-mailprov').addEventListener('change', e=>{
+  const p = MAILPROV[e.target.value]; if (!p) return;
+  for (const [k,v] of Object.entries(p)){ if (k==='note') continue;
+    const el = $(`[data-k="${k}"]`); if (!el) continue;
+    if (el.type==='checkbox') el.checked = v; else el.value = v;
+    el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); }
+  $('#mailprov-note').textContent = p.note + ' Then enter the user, From address and SET PASSWORDS, and SAVE.';
+});
 $('#f-cattune').onchange = updateVisibility; $('#f-freq').onchange = updateVisibility;
+['#f-zone','#f-qsymode'].forEach(k=>$(k).addEventListener('change', zoneNote));
+['#f-grid','#f-qsyfreqs'].forEach(k=>$(k).addEventListener('input', zoneNote));
 document.addEventListener('input', e=>{ if (e.target.matches('[data-k],[data-list]')) markDirty(); });
 document.addEventListener('change', e=>{ if (e.target.matches('[data-k],[data-list]')) markDirty(); });
 $('[data-k="com_unit"]').addEventListener('input', e=>{ const p=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); e.target.setSelectionRange(p,p); });
@@ -1854,6 +2016,10 @@ $('#f-grid').addEventListener('blur', e=>{ const v=e.target.value.trim(); e.targ
   drawMatrix([]);
   presets = await api('/api/presets');
   $('#f-preset').innerHTML = presets.map(p=>`<option value="${p.id}">${p.label}</option>`).join('');
+  try { zones = await api('/api/zones');
+        $('#f-zone').innerHTML = '<option value="auto">Automatic - from my grid square</option>' +
+          zones.map(z=>`<option value="${z.key}">${z.name} - APRS ${z.aprs}</option>`).join('');
+  } catch(e){}
   try { const fr = await api('/api/freqs');
         $('#f-freq').innerHTML = fr.map(f=>`<option value="${f.value}">${f.label}</option>`).join('') + '<option value="custom">Other (type below)</option>';
   } catch(e){}
@@ -1877,6 +2043,113 @@ async function pinAct(body, okMsg){
 $('#b-pin-set').onclick = ()=>pinAct({action:'set', new: $('#pin-new').value.trim()}, 'Station PIN saved');
 $('#b-pin-remove').onclick = ()=>pinAct({action:'remove'}, 'Station PIN removed');
 $('#pin-lock').onchange = e=>pinAct({action:'lock', lock: e.target.checked}, e.target.checked ? 'Settings locked' : 'Settings unlocked');
+
+/* ---------- v3.5: tap any callsign ---------- */
+const CALL_TXT_RE = /\b([A-Z0-9]{1,2}[0-9][A-Z]{1,4}(?:-[0-9]{1,2})?)\b/g;
+function callify(text){       // escape, then make callsigns tappable
+  return esc(text).replace(CALL_TXT_RE, m => `<button type="button" class="callk" data-call="${m}">${m}</button>`);
+}
+function closeCallMenu(){ $('#callmenu').classList.add('hide'); }
+function callMenu(call, x, y){
+  const m = $('#callmenu');
+  const h = (lastState && (lastState.heard||[]).find(h=>h.call===call)) || null;
+  const tw = h && h.tw;
+  m.innerHTML = `<h4>${esc(call)}${tw?' <span class="tw-badge">TRADEWIND</span>':''}</h4>
+    <div class="note">${h ? `Heard ${ago(h.last)} · ${esc(h.via)}` : 'Not heard on RF recently'}</div>
+    <button class="btn accent" type="button" data-cm="rf">MESSAGE BY RF</button>
+    <button class="btn" type="button" data-cm="is">MESSAGE BY INTERNET</button>
+    <button class="btn" type="button" data-cm="hail">HAIL FOR A FULL CHAT</button>
+    <a class="btn" href="https://aprs.fi/info/a/${encodeURIComponent(call)}" target="_blank" rel="noopener">LOOK UP ON APRS.FI</a>
+    <button class="btn" type="button" data-cm="block">BLOCK</button>
+    <button class="btn" type="button" data-cm="close">CLOSE</button>`;
+  m.classList.remove('hide');
+  const w = m.offsetWidth, hh = m.offsetHeight;
+  m.style.left = Math.max(8, Math.min(x, innerWidth - w - 8)) + 'px';
+  m.style.top = Math.max(8, Math.min(y, innerHeight - hh - 8)) + 'px';
+  m.querySelectorAll('[data-cm]').forEach(b=>b.onclick = async ()=>{
+    const a = b.dataset.cm; closeCallMenu();
+    if (a==='close') return;
+    if (a==='rf' || a==='is'){
+      const r = await api('/api/chat', {action:'direct', call, route:a==='rf'?'rf':'is'});
+      if (r.errors && r.errors.length) return toast(r.errors[0]);
+      chatSel = call; await pollChat(); $('#chat-wrap').scrollIntoView({behavior:'smooth'}); setTimeout(()=>{ const t=$('#chat-text'); t && t.focus(); }, 400);
+    } else if (a==='hail'){
+      $('#hail-call').value = call; $('#hail-route').value = 'smart'; $('#hail-form').scrollIntoView({behavior:'smooth', block:'center'});
+    } else if (a==='block'){
+      if (!confirm('Block ' + call + '?')) return;
+      const r = await api('/api/chat', {action:'block', call}); if (r.errors && r.errors.length) toast(r.errors[0]); else toast(call+' blocked', true);
+    }
+  });
+}
+document.addEventListener('click', e=>{
+  const k = e.target.closest && e.target.closest('.callk');
+  if (k){ e.preventDefault(); callMenu(k.dataset.call, e.clientX + 6, e.clientY + 6); return; }
+  if (!e.target.closest || !e.target.closest('#callmenu')) closeCallMenu();
+  if (!e.target.closest || !e.target.closest('details.more')) $$('details.more[open]').forEach(d=>d.open=false);
+});
+document.addEventListener('keydown', e=>{ if (e.key==='Escape') closeCallMenu(); });
+
+/* ---------- v3.5: email ---------- */
+function mailVis(){ $('#mail-gw-row').classList.toggle('hide', $('#mail-via').value!=='gw'); }
+$('#mail-via').onchange = mailVis;
+$('#b-email').onclick = ()=>{ const b=$('#mail-box'); b.open = true; b.scrollIntoView({behavior:'smooth', block:'start'}); };
+$('#mail-body').oninput = ()=>{ $('#mail-count').textContent = $('#mail-body').value.length + '/500'; };
+$('#mail-to').oninput = mailRule;
+function hamAddr(a){ a=(a||'').trim().toLowerCase(); const [l,d]=a.split('@'); return !!d && (['winlink.org','arrl.net'].includes(d) || /^(?=.*\d)[a-z0-9]{3,7}([-._][a-z0-9]{1,2})?$/.test(l)); }
+function mailRule(){
+  const dis = lastState && lastState.disaster && lastState.disaster.on, a = $('#mail-to').value;
+  $('#mail-rule').textContent = !a ? 'Hams only (e.g. CALL@winlink.org) - other addresses need a disaster session.' :
+    hamAddr(a) ? 'Ham address - OK to send.' : dis ? 'Non-ham address - allowed because a disaster session is on (logged).' :
+    'This looks like a non-ham address: only allowed during a disaster session.';
+}
+$('#b-mail-send').onclick = async ()=>{
+  const via = $('#mail-via').value==='gw' ? $('#mail-gw').value.trim().toUpperCase() : 'EMAIL-2';
+  const r = await api('/api/mail', {to:$('#mail-to').value.trim(), subject:$('#mail-subj').value, body:$('#mail-body').value, via});
+  if (!r.ok) return toast(r.errors[0]);
+  toast('Email queued via ' + via, true); $('#mail-body').value=''; $('#mail-count').textContent='0/500'; pollChat();
+};
+$('#b-dis-on').onclick = async ()=>{
+  const reason = $('#dis-reason').value.trim(); if (!reason) return toast('Give the reason for the disaster session (it is logged).');
+  if (!confirm('Start a disaster session? Email to non-hams will be allowed until it ends.')) return;
+  await api('/api/disaster', {on:true, hours:$('#dis-hours').value, reason}); poll();
+};
+$('#b-dis-off').onclick = async ()=>{ await api('/api/disaster', {on:false, reason:'ended by operator'}); poll(); };
+function drawMail(s, c){
+  const d = s.disaster || {};
+  const b = $('#disaster-banner');
+  b.classList.toggle('hide', !d.on);
+  if (d.on) b.textContent = `DISASTER SESSION ON until ${new Date(d.until*1000).toLocaleString()} - third-party email allowed and logged. ${d.reason||''}`;
+  const M = (c && c.mail) || [];
+  $('#mail-n').textContent = M.length ? `(${M.length})` : '';
+  $('#mail-list').innerHTML = M.map(m=>`<span>#${esc(m.id)} to ${esc(m.to)} via ${esc(m.via)} - <b>${esc(m.state)}</b></span>`).join('');
+  if (s.mail_error) $('#mail-list').innerHTML += `<span style="color:#fca5a5">${esc(s.mail_error)}</span>`;
+  mailRule();
+}
+
+/* ---------- v3.5: Wolf Mode ---------- */
+$('#wolf-on').onchange = async e=>{ await api('/api/wolf', {action:'toggle', on:e.target.checked}); toast(e.target.checked ? 'Wolf Mode on - DX appears after the next propagation check' : 'Wolf Mode off', true); poll(); };
+function drawWolf(s){
+  const W = s.wolf || {rows:[]};
+  $('#wolf-on').checked = !!W.on;
+  $('#wolf-n').textContent = W.on ? `(${W.on_aprs||0} on APRS)` : '';
+  $('#wolf-note').textContent = W.on ? `${W.rows.length} DX stations from PSKReporter · ${W.on_aprs||0} active on APRS · ${W.pings_left} pings left this hour · each station once a day · STOP replies honoured` : '';
+  if (!W.on || !W.rows.length) return;
+  $('#wolf-list').innerHTML = W.rows.map(r=>`<div class="wolf-row"><span><button type="button" class="callk" data-call="${esc(r.aprs_call||r.call)}">${esc(r.aprs_call||r.call)}</button><br><span class="sm">${Number(r.km).toLocaleString()} km · ${esc(r.band)}</span></span>
+    <span class="sm">${esc(r.mode)} ${esc(r.snr)} dB ${esc(r.prop||'')}<br>${r.aprs_ago!=null ? `<span class="ok">On APRS (${esc(r.sw||'APRS')}) ${Math.round(r.aprs_ago/60)} min ago</span>` : 'Not seen on APRS'}</span>
+    <span>${r.stopped ? '<span class="sm">asked not to be pinged</span>' : r.pinged ? '<span class="sm">pinged today</span>' : r.aprs_ago!=null ? `<button class="btn accent" type="button" data-wping="${esc(r.call)}">PING</button>` : ''}</span></div>`).join('');
+  $$('[data-wping]').forEach(b=>b.onclick = async ()=>{
+    const r = await api('/api/wolf', {action:'ping', call:b.dataset.wping});
+    if (!r.ok) return toast(r.errors[0]); toast('Ping sent by internet', true); poll(); pollChat();
+  });
+}
+
+$('#b-mailpass').onclick = async ()=>{
+  const sp = $('#smtp-pass').value, ip = $('#imap-pass').value;
+  if (!sp && !ip) return toast('Type a password first.');
+  const body = {}; if (sp) body.smtp_pass = sp; if (ip) body.imap_pass = ip;
+  const r = await api('/api/mailpass', body); if (!r.ok) return toast((r.errors||['Not saved'])[0]);
+  $('#smtp-pass').value = $('#imap-pass').value = ''; toast('Mail passwords saved on this station', true); poll();
+};
 </script>
 </body>
 </html>

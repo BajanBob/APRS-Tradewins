@@ -214,6 +214,49 @@ The **FORMS** button in the chat sends short structured reports, styled on Winli
 
 Each form becomes one or more numbered messages of up to 67 characters, e.g. `WXOBS 201225L 1/3 Ocean City, St Philip. Wind ENE 35 G50kt...`. Each message is acknowledged like any other chat message.
 
+## New in v3.6: frequencies follow your grid square
+
+Tradewind now works out your **band-plan zone** from the grid square you enter, and sets the hail / APRS frequency and the chat (QSY) channels to match:
+
+| Zone | APRS / hail | Chat channels (automatic) |
+|---|---|---|
+| North America & Caribbean (IARU Region 2) | 144.390 | 144.510-144.590, 145.030-145.090 (20 kHz apart) |
+| Europe, Africa & Middle East (IARU Region 1) | 144.800 | 144.850-144.975 (25 kHz apart) |
+| Brazil | 145.570 | none - add your own |
+| Argentina / Uruguay | 144.930 | none - add your own |
+| Japan / China | 144.640 | none - add your own |
+| Australia | 145.175 | none - add your own |
+| New Zealand | 144.575 | none - add your own |
+| Other Asia-Pacific | 144.390 (check your country) | none - add your own |
+
+**Manual override** (MENU > RADIO / TNC): pick the zone by hand (border areas, or where your country differs), and switch *Chat channels* to **Manual override** to type your own list, e.g. if a channel clashes with a local repeater. A note under the settings shows exactly which frequencies will be used.
+
+- Channels on APRS, 145.010, weak-signal, beacon or satellite segments are refused for your zone.
+- With no chat channels, chats stay short on the APRS frequency and QSY is not offered.
+- **Hails and email are switched off on satellite / ISS frequencies** (145.800-146.000, 435-438). Internet hails still work.
+- **Mail security**: the gateway checks the mail server's certificate (TLS 1.2 or newer) before sending any password, and refuses to send a password unencrypted. Only a mail bridge on the same computer (Proton Mail Bridge) is exempt.
+- **Mail provider presets** in EMAIL settings: Gmail, Zoho, Fastmail, Proton Mail Bridge (paid Proton plan; Bridge must run on the gateway computer).
+- Older settings: the old 144.390 default becomes *Automatic*; a hand-edited chat list becomes the *Manual override* list.
+
+## New in v3.5: email, disaster sessions, Wolf Mode, simpler chat
+
+**Email by radio (two options, choose in EMAIL settings)**
+- **EMAIL-2**: the public APRS email service. Short emails, numbered parts. Replies must start the subject with your callsign and a colon.
+- **Tradewind gateway**: a Tradewind station with internet sends and receives email through its own mailbox. Set up a dedicated mailbox with an app password; passwords stay on the station and are never shown on the face plate.
+- Limits: 500 characters, 10 emails a day, 10-minute session. Hams only. Non-ham (third-party) addresses work only while a **disaster session** is on.
+- Never sent on 145.800 / 145.825.
+
+**Disaster session** (EMAIL panel): start with a reason and hours; a red banner shows while it is on; it ends itself and is logged.
+
+**Wolf Mode** (PROPAGATION settings and chat): finds long-distance 2m/70cm stations on PSKReporter that are also on APRS. Pings go by internet only, 5 an hour, each station once a day. A STOP reply is honoured.
+
+**Simpler chat**
+- Tap any callsign (packets, heard list, roster) for MESSAGE BY RF, MESSAGE BY INTERNET, HAIL, aprs.fi or BLOCK.
+- RF / INTERNET / AUTO switch on every chat; QSY, PROBE LINKS, "Keep this chat off the internet" (NOGATE) and BLOCK are under the ⋯ menu.
+- Carrier sense: Tradewind waits for a clear channel before transmitting.
+
+**Fixes**: HAIL AGAIN button hiding other chat buttons (v3.4); queue jam with three or more held messages; position beacon now uses "=" (messaging capable).
+
 ## New in v3.4: QSY, automatic chat channels and reply-acks
 
 A chat on the APRS frequency shares airtime with every beacon. One message and its acknowledgement take about 1.7 s direct, or about 3.5 s through a digipeater, so a lively chat can use 12-25% of the channel. Long chats should move.

@@ -195,6 +195,13 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
 .tw-dim{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
 .leaflet-tooltip.tw-tip{background:#15181b;color:#e6edf3;border:1px solid #33393f;font-family:var(--mono);font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.6)}
 .leaflet-tooltip.tw-tip:before{display:none}
+.leaflet-popup-content-wrapper{background:#15181b;color:#e6edf3;border:1px solid #33393f;border-radius:10px}
+.leaflet-popup-tip{background:#15181b;border:1px solid #33393f}
+.leaflet-popup-content{margin:10px 12px}
+.tw-op-pop{font-family:var(--mono);text-align:center;min-width:120px}
+.tw-op-pop b{display:block;color:var(--lcd-glow);font-size:16px}
+.tw-op-pop span{display:block;color:var(--engrave);font-size:12px;margin:2px 0 8px}
+.tw-op-pop .btn{width:100%}
 @media (max-width:480px){ .map-box{height:340px} }
 /* ---------- face plate switcher ---------- */
 .fp-bar{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:6px;margin:0 0 14px}
@@ -752,6 +759,17 @@ details.more summary::-webkit-details-marker{display:none}
     </div>
 
     <div class="pane" id="p-station">
+      <div class="set wide" style="border:1px solid var(--edge);border-radius:10px;padding:10px 12px;background:#11161b">
+        <label style="font-size:13px;letter-spacing:.1em;color:var(--engrave-hi)">GLOBAL OPERATORS MAP</label>
+        <div class="set" style="margin-top:8px"><label class="chk"><input type="checkbox" data-k="map_show"> Show me on the global operator map (others see my dot &amp; callsign)</label></div>
+        <input type="hidden" data-k="locate_by" value="grid">
+        <div class="set"><label>When someone hails me</label>
+          <select class="inset" data-k="hail_status">
+            <option value="available">Available - ring me, I answer or decline</option>
+            <option value="dnd">Do not disturb - hails arrive quietly, no ring</option>
+            <option value="reject">Don't accept hails - auto-decline</option></select></div>
+        <div class="set wide note">Callsigns and grids are already public on amateur radio. Turn the map off to browse others without appearing. Directory service: set under NETWORK.</div>
+      </div>
       <div class="set"><label>APRS symbol (table + code)</label><input class="inset" data-k="symbol" maxlength="2" placeholder="/-"></div>
       <div class="set"><label class="chk"><input type="checkbox" data-k="beacon"> Send position beacon</label></div>
       <div class="set"><label>Beacon every (minutes)</label><input class="inset" data-k="beacon_min" data-num type="number" min="30" max="120"></div>
@@ -826,6 +844,8 @@ details.more summary::-webkit-details-marker{display:none}
       <div class="set"><label>Passcode (blank = auto)</label><input class="inset" data-k="passcode" placeholder="auto" inputmode="numeric"></div>
       <div class="set"><label class="chk"><input type="checkbox" data-k="igate"> RX iGate (gate heard RF packets to APRS-IS)</label></div>
       <div class="set"><label class="chk"><input type="checkbox" data-k="igate_tx"> Full iGate: pass internet messages to stations heard locally on RF (max 30 an hour)</label></div>
+      <div class="set wide"><label>Global Operators directory URL</label><input class="inset" data-k="directory_url" placeholder="https://tradewind-directory.yourname.workers.dev"></div>
+      <div class="set wide note">The small presence service that powers the world map and the "Online users" count. Leave as the placeholder to keep the map off. One is shared by the whole Tradewind community.</div>
     </div>
 
 
@@ -938,10 +958,11 @@ details.more summary::-webkit-details-marker{display:none}
         <label class="chk"><input type="checkbox" data-mf="TROPO" checked> <i class="sw duct"></i>Duct</label>
         <label class="chk"><input type="checkbox" data-mf="ES" checked> <i class="sw es"></i>Es</label>
       </div>
+      <span class="map-count" id="ops-online" style="color:#45f08a"></span>
       <span class="map-count" id="map-count"></span>
     </div>
     <div class="map-box"><div id="map"></div><div class="map-msg" id="map-msg">Loading map...</div></div>
-    <div class="map-legend">Lines join Caribbean stations to the stations that heard them (or that they heard) on PSKReporter during the look-back window. Solid = 2m, dashed = 70cm. Updated after every check (every 10 minutes by default). Map areas you view are saved, so they still show with no internet.</div>
+    <div class="map-legend"><b style="color:#45f08a">●</b> you &middot; <b style="color:#ff4b3e">●</b> operator available to hail &middot; <b style="color:#ffb547">●</b> do not disturb &middot; <b style="color:#5b6168">●</b> offline — hover a dot for the callsign, click to hail. Lines join Caribbean stations heard on PSKReporter (solid = 2m, dashed = 70cm). Map areas you view are saved, so they still show with no internet.</div>
   </section>
 
   <section class="chat-wrap" id="chat-wrap" aria-label="Two-way chat">
@@ -1883,8 +1904,18 @@ async function initMap(){
 async function refreshMap(){
   let d; try { d = await api('/api/map'); } catch(e){ return; }
   mapData = d;
-  if (d.last_check !== mapLast){ mapLast = d.last_check; drawMap(); }
+  const opsSig = (d.online||0) + '|' + (d.ops||[]).map(o=>o.call+o.status+(o.online?1:0)).join(',');
+  if (d.last_check !== mapLast || opsSig !== mapOpsSig){ mapLast = d.last_check; mapOpsSig = opsSig; drawMap(); }
   mapClock();
+}
+let mapOpsSig = '';
+function hailOp(call){
+  const f = $('#hail-call'); if (!f) return;
+  f.value = call;
+  const r = $('#hail-route'); if (r) r.value = 'smart';     // RF first, then relay, then APRS-IS
+  if (map) map.closePopup();
+  $('#hail-form').dispatchEvent(new Event('submit', {cancelable:true}));
+  toast('📡 Hailing ' + call + ' - RF first, then internet.', true, 8000);
 }
 function mapClock(){
   const d = mapData; if (!d) return;
@@ -1915,10 +1946,24 @@ function drawMap(){
        .bindTooltip(`${esc(call)} &middot; ${esc(grid)}`, {className:'tw-tip'}).addTo(mapLayer);
     }
   }
+  // Global Tradewind operators (v3.9): red = available, amber = do-not-disturb, grey = offline / not accepting
+  const OPC = {available:'#ff4b3e', dnd:'#ffb547', reject:'#5b6168'};
+  for (const o of (d.ops||[])){
+    if (!o.pos) continue;
+    const col = !o.online ? '#5b6168' : (OPC[o.status] || '#ff4b3e');
+    const stTxt = o.status==='reject' ? 'Not accepting hails' : o.status==='dnd' ? 'Do not disturb' : (o.online ? 'Available to hail' : 'Offline');
+    const dis = (o.status==='reject' || !o.online) ? 'disabled' : '';
+    L.circleMarker(o.pos, {radius:o.online?6:5, color:'#0b0d0f', weight:1.5, fillColor:col, fillOpacity:0.95})
+      .bindTooltip(`<b>${esc(o.call)}</b>${o.grid?` &middot; ${esc(o.grid)}`:''}`, {className:'tw-tip'})
+      .bindPopup(`<div class="tw-op-pop"><b>${esc(o.call)}</b><span>${esc(o.grid||'')} &middot; ${stTxt}</span>`+
+                 `<button type="button" class="btn accent" ${dis} onclick="hailOp('${esc(o.call)}')">📡 HAIL</button></div>`)
+      .addTo(mapLayer);
+  }
   if (d.me && d.me.pos){
-    L.circleMarker(d.me.pos, {radius:7, color:'#fff', weight:2, fillColor:'#ffd27a', fillOpacity:1})
+    L.circleMarker(d.me.pos, {radius:7, color:'#fff', weight:2, fillColor:'#45f08a', fillOpacity:1})
      .bindTooltip(`<b>${esc(d.me.call||'You')}</b> &middot; ${esc(d.me.grid)}`, {className:'tw-tip', permanent:false}).addTo(mapLayer);
   }
+  $('#ops-online').textContent = (d.online ? 'Online users ' + d.online : '');
   $('#map-msg').textContent = !d.last_check ? (d.running ? 'Waiting for the first PSKReporter check...' : 'Turn the station on to fill the map.') :
     (!paths.length ? 'No Caribbean 2m / 70cm paths in the look-back window.' : '');
   if (!mapFitted && paths.length){
@@ -2041,7 +2086,12 @@ function dispatchTone(){                 // CHAT REQUEST: dispatch two-tone, 704
 }
 function chatAlert(ev){
   const say1 = t => { if (soundReady && cfg.alert_voice !== false) setTimeout(()=>say(t), 1200); };
-  if (ev.kind==='request'){ toast('📡 ' + ev.text, true, 15000); if (soundReady) warble(); else pendingAlert = {msg: ev.text, kind:'hail'}; say1(`${ev.call.split('').join(' ')} wants to chat`); }
+  if (ev.kind==='request'){
+    const hs = cfg.hail_status || 'available';
+    if (hs === 'reject'){ api('/api/chat', {action:'decline', call: ev.call}).catch(()=>{}); addAlert('CHAT', 'Auto-declined hail from ' + ev.call + ' (not accepting hails)', ev.t); return; }
+    toast('📡 ' + ev.text, true, 15000);
+    if (hs !== 'dnd'){ if (soundReady) warble(); else pendingAlert = {msg: ev.text, kind:'hail'}; say1(`${ev.call.split('').join(' ')} wants to chat`); }  // do-not-disturb: arrive quietly, no ring
+  }
   else if (ev.kind==='accepted'){ toast('✅ ' + ev.text, true, 15000); if (soundReady) dispatchTone(); say1('Your chat request was accepted. Press accept to confirm.'); }
   else if (ev.kind==='open'){ toast(ev.text, true); if (soundReady) chime(); }
   else if (ev.kind==='message'){ toast(ev.text, true, 8000); if (soundReady) chime(); }

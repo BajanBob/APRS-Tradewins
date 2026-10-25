@@ -126,6 +126,27 @@ def _web_get(url, timeout=15):
         return r.read()
 
 
+def _web_json(url, obj=None, timeout=12):
+    """GET (obj=None) or POST JSON and parse the JSON reply. Returns a dict, or None on any failure."""
+    import ssl
+    import urllib.request
+    try:
+        import certifi
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        ctx = ssl.create_default_context()
+    data = json.dumps(obj).encode() if obj is not None else None
+    hdr = {"User-Agent": f"{APP_NAME}/{APP_VERSION} (amateur radio app)"}
+    if data is not None:
+        hdr["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=hdr, method="POST" if data is not None else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except Exception:
+        return None
+
+
 def cached_get(path, url, max_age=None):
     """Serve from the disk cache; refresh from the internet when missing or old. None if neither."""
     fresh = os.path.exists(path) and (max_age is None or time.time() - os.path.getmtime(path) < max_age)
@@ -210,6 +231,11 @@ DEFAULTS = {
     # Commercial / EmComm mode: encrypted chat on a licensed 148-174 MHz channel
     "op_mode": "amateur", "com_callsign": "", "com_licensee": "", "com_unit": "",
     "com_freq": "", "com_net": "", "com_key": "", "com_fp": "", "com_id_min": 30,
+    # v3.9 Global Operators map: show other Tradewind stations worldwide, with hailing preference
+    "map_show": True,                 # appear on the global operator map (off = browse only, invisible)
+    "hail_status": "available",       # available | dnd | reject  (how others may hail you)
+    "locate_by": "grid",              # grid | ip  (how your dot is placed)
+    "directory_url": "https://tradewind-directory.YOURNAME.workers.dev",
     "cfg_ver": 4,
 }
 SECRET_KEYS = ("com_key", "pin_hash", "pin_salt", "smtp_pass", "imap_pass")   # never sent to the face plate
@@ -584,6 +610,9 @@ class Station:
         self.igate_tx_times = collections.deque()
         self.igate_seen = {}          # (src, info) -> last gated, to skip duplicates
         self.tw_users = load_tw_users()   # Tradewind stations heard: call -> {first, last, via}
+        self.dir_ops = []                 # global operator directory: list of {call, grid, pos, status, last, online}
+        self.dir_online = 0               # how many are online now (from the directory)
+        self.dir_next = 0                 # next directory announce/fetch time
         self.commlog = []             # ICS-309-style log of chat traffic
         self._chat_saved = -1
         self._chat_save_t = 0
@@ -755,6 +784,9 @@ class Station:
             if self.cfg.get("tc_enabled") and now >= self.tc_next:
                 self.tc_next = now + 20 * 60
                 threading.Thread(target=self.check_tropical, daemon=True).start()
+            if self._dir_base() and now >= self.dir_next:
+                self.dir_next = now + 120
+                threading.Thread(target=self._directory_sync, daemon=True).start()
             if self.chat:
                 try:
                     self.chat.tick()
@@ -998,7 +1030,23 @@ class Station:
                        "pos": [round(me[0], 3), round(me[1], 3)] if me else None},
                 "paths": self.map_paths,
                 "open": [{"band": b, "region": r, "mode": o.mode} for (b, r), o in sorted(self.openings.items())],
+                "ops": self._map_ops(),
+                "online": self.dir_online,
                 "names": eng.MODE_NAMES}
+
+    def _map_ops(self):
+        """Tradewind operators to plot as dots: the global directory, minus our own callsign (drawn as 'me')."""
+        mycall = (self.cfg.get("call") or "").strip().upper()
+        out = []
+        for o in self.dir_ops:
+            if not isinstance(o, dict) or not o.get("pos"):
+                continue
+            if (o.get("call") or "").upper() == mycall:
+                continue
+            out.append({"call": o.get("call", ""), "grid": o.get("grid", ""),
+                        "pos": o["pos"], "status": o.get("status", "available"),
+                        "online": bool(o.get("online"))})
+        return out
 
     # ---- RF mode: always, or only while selected propagation modes are open
     def rf_possible(self):
@@ -1562,7 +1610,38 @@ class Station:
                 "week": sum(1 for x in u.values() if now - x["last"] < 7 * 86400),
                 "new_week": sum(1 for x in u.values() if now - x["first"] < 7 * 86400),
                 "total": len(u),
+                "online": self.dir_online,
                 "list": sorted(({"call": c, **v} for c, v in u.items()), key=lambda x: -x["last"])[:60]}
+
+    # ---- Global Operators directory (v3.9): presence on the world map
+    def _dir_base(self):
+        """The directory service URL, or '' if it isn't set up."""
+        url = (self.cfg.get("directory_url") or "").strip().rstrip("/")
+        if not url or "YOURNAME" in url or not url.startswith("http"):
+            return ""
+        return url
+
+    def _directory_sync(self):
+        """Announce this station (if opted in) and fetch the global operator roster."""
+        base = self._dir_base()
+        if not base:
+            return
+        c = self.cfg
+        call = (c.get("call") or "").strip().upper()
+        if c.get("map_show") and call and not self.commercial:
+            locate_by = c.get("locate_by", "grid")
+            pos = None
+            if locate_by != "ip":
+                ll = eng.grid_to_latlon(c.get("grid", ""))
+                if ll:
+                    pos = [round(ll[0], 3), round(ll[1], 3)]
+            body = {"call": call, "grid": c.get("grid", ""), "pos": pos,
+                    "status": c.get("hail_status", "available"), "locate_by": locate_by}
+            _web_json(base + "/announce", body)     # best-effort; ignore the reply
+        r = _web_json(base + "/ops")
+        if isinstance(r, dict) and isinstance(r.get("ops"), list):
+            self.dir_ops = r["ops"]
+            self.dir_online = int(r.get("online") or 0)
 
     def relay_candidates(self, dest):
         """RF-first routing: Tradewind stations heard directly on RF in the last 30 minutes, newest first."""

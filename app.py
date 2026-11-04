@@ -220,6 +220,7 @@ DEFAULTS = {
     "multi_decoder": True, "fx25_tx": False,                                    # modem: parallel decoders, FX.25 FEC
     "dx_enabled": False, "dx_auto_beacon": False, "dx_height_m": 30,            # APRS DX mode (inter-island)
     "dx_freq": "144.150", "dx_path": "", "dx_beacon_min": 60,
+    "dx_burst_count": 4,                                                        # DX beacons in the minute after an opening
     "sdr_gain": "", "sdr_ppm": 0, "sdr_index": 0,                             # RTL-SDR receive
     "window": 60, "interval": 10, "min_km": 800, "min_paths": 2,
     "strong_km": 1500, "repeat": 30, "announce_close": False, "group": "VHF",
@@ -611,6 +612,7 @@ class Station:
         self.local = []
         self.dx_open = {}             # APRS DX mode: target island -> {"since", "evidence"}
         self.dx_beaconed = {}         # target island -> time of the last automatic DX beacon
+        self.dx_burst = []            # pending DX beacons: (send at, target, n, of)
         self.map_paths = []           # Caribbean paths for the live map
         self.check_error = ""
         self.ann_state = eng.load_state(STATE_PATH)
@@ -810,6 +812,8 @@ class Station:
                 else:
                     self.run_check()
                     self.next_check = time.time() + max(PSK_MIN_GAP, self.cfg["interval"] * 60)
+            if self.dx_burst:
+                self.dx_burst_due(now)
             if self.next_beacon and now >= self.next_beacon:
                 self.send_beacon()
                 self.next_beacon = time.time() + max(BEACON_MIN_MIN, self.cfg["beacon_min"]) * 60
@@ -1184,20 +1188,32 @@ class Station:
                                    f"{ev['tx']} > {ev['rx']} {ev['km']} km {ev['mode']} {ev['snr']} dB ({ev['kind']})")
                 if c.get("dx_auto_beacon") and now - self.dx_beaconed.get(name, 0) >= int(c.get("dx_beacon_min") or 60) * 60:
                     self.dx_beaconed[name] = now
-                    self.send_dx_beacon(t)
+                    count, gap = dxmode.burst_plan(c, c.get("dx_burst_count") or 4)
+                    self.dx_burst += [(now + i * gap, t, i + 1, count) for i in range(count)]
+                    self.add_log("DX", f"{count} DX beacon{'s' if count > 1 else ''} to {name} over the next minute"
+                                       + (" (Robust DX: about 22 s each, so 2 fit)" if count == 2 and c.get("modem") == "robust_dx" else ""))
+                    self.dx_burst_due(now)
             self.dx_open[name] = {"since": self.dx_open.get(name, {}).get("since", now), "evidence": ev}
         for name in [n for n in self.dx_open if n not in found]:
             self.add_log("DX", f"DX closed to {name}")
             del self.dx_open[name]
 
-    def send_dx_beacon(self, target):
+    def dx_burst_due(self, now=None):
+        """Send the DX beacons whose time has come (called from the station loop every second)."""
+        now = time.time() if now is None else now
+        due = [b for b in self.dx_burst if b[0] <= now]
+        self.dx_burst = [b for b in self.dx_burst if b[0] > now]
+        for _, target, n, of in due:
+            self.send_dx_beacon(target, n, of)
+
+    def send_dx_beacon(self, target, seq=1, of=1):
         """Status beacon announcing the opening, on the DX path (default: direct, no digipeaters)."""
         c = self.cfg
         robust = c.get("tnc") == "sound" and c.get("modem") in ("robust", "robust_dx")
         freq = tncmod.dx_freq_hz(c) if robust else tncmod.aprs_freq_hz(c)
         label = f"{freq / 1e6:.3f}{'USB' if robust else 'FM'}" if freq else ""
         path = [p.strip() for p in (c.get("dx_path") or "").split(",") if p.strip()]
-        self.transmit(dxmode.dx_beacon_text(target, c, label), path=path)
+        self.transmit(dxmode.dx_beacon_text(target, c, label, seq, of), path=path)
 
     def send_beacon(self):
         if self.commercial:

@@ -98,6 +98,7 @@ def openings(spots, me, targets, near_me_km=150, near_target_km=80, area_km=350)
         if not hit:
             continue
         ev = {"band": getattr(s, "band", ""), "tx": getattr(s, "tx", ""), "rx": getattr(s, "rx", ""),
+              "tx_grid": getattr(s, "tx_grid", ""), "rx_grid": getattr(s, "rx_grid", ""),
               "km": round(getattr(s, "km", 0) or 0), "mode": getattr(s, "mode", ""), "snr": getattr(s, "snr", None),
               "kind": kind}
         best = found.get(hit["name"])
@@ -106,8 +107,23 @@ def openings(spots, me, targets, near_me_km=150, near_target_km=80, area_km=350)
     return found
 
 
-def dx_beacon_text(target, cfg, freq_label):
-    """Short APRS status (at most 62 characters after '>') announcing the opening and how to reach this station."""
-    via = "RobustDX" if cfg.get("modem") == "robust_dx" else "Robust" if cfg.get("modem") == "robust" else "APRS"
-    text = f"DX open {target['name']} {target['km']}km {target['bearing']}deg {cfg.get('call', '')} {via} {freq_label}"
+def dx_beacon_text(target, cfg, freq_label, seq=1, of=1):
+    """Short APRS status (at most 62 characters after '>') announcing the opening and how to reach this station.
+    Robust DX gets an even shorter text so each beacon fits the 64-byte frame (about 22 s on air)."""
+    modem, call, n = cfg.get("modem"), cfg.get("call", ""), f" {seq}/{of}" if of > 1 else ""
+    if modem == "robust_dx":
+        text = f"DX {target['name']} {call} RDX {freq_label}{n}"
+    else:
+        via = "R" if modem == "robust" else "APRS"
+        text = f"DX OPEN {target['name']} {target['km']}km brg{target['bearing']} {call} {via} {freq_label}{n}"
     return ">" + text[:62]
+
+
+def burst_plan(cfg, count=4, seconds=60):
+    """When an island opens: how many DX beacons, how far apart. 4 a minute on 1200 baud and Robust;
+    Robust DX takes ~22 s per beacon, so 2 fit in the minute."""
+    modem = cfg.get("modem") if cfg.get("tnc") == "sound" else "1200"
+    count = max(1, min(int(count or 4), 6))
+    if modem == "robust_dx":
+        count = min(count, 2)
+    return count, seconds / count

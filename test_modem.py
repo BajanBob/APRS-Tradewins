@@ -1048,7 +1048,11 @@ def test_dx_mode():
     op = dxmode.openings([Spot("GK03ec", "FK93hd", 175)], me, list(t.values()))  # Barbados <-> St Vincent
     assert "St Vincent" in op and op["St Vincent"]["kind"] == "direct", op
     assert dxmode.openings([Spot("GK03ec", "GK03fd", 15)], me, list(t.values())) == {}
-    assert dxmode.dx_beacon_text(t["St Lucia"], {"call": "8P5AB-10", "modem": "robust_dx"}, "144.150USB").startswith(">DX open St Lucia")
+    assert dxmode.dx_beacon_text(t["St Lucia"], {"call": "8P5AB-10", "modem": "robust_dx"}, "144.150USB", 1, 2) == ">DX St Lucia 8P5AB-10 RDX 144.150USB 1/2"
+    for nm in t:
+        assert len(dxmode.dx_beacon_text(t[nm], {"call": "8P5AB-10", "modem": "1200"}, "144.390FM", 4, 4)) <= 63, nm
+    assert dxmode.burst_plan({"tnc": "sound", "modem": "1200"}) == (4, 15.0)
+    assert dxmode.burst_plan({"tnc": "sound", "modem": "robust_dx"}) == (2, 30.0)
     # CAT: Robust modes tune the radio in USB data mode
     ic = tnc.CivPTT("COMx", 9600, "7C")
     ic.ser = FakeIcom()

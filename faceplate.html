@@ -407,6 +407,12 @@ details.more summary::-webkit-details-marker{display:none}
 #callmenu{position:fixed;z-index:60;min-width:250px;max-width:92vw;background:#0f1317;border:1px solid #374151;border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px;box-shadow:0 12px 40px rgba(0,0,0,.6)}
 #callmenu h4{margin:0 0 4px;font:600 16px var(--mono);color:#fff}
 #callmenu .btn{width:100%;justify-content:flex-start}
+.dxr-wrap{background:var(--mon-bg);border:1px solid var(--edge);border-radius:12px;padding:6px;margin:6px 0 10px}
+#dx-radar{width:100%;height:min(86vw,560px);display:block}
+.dxr-ctl{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;padding:4px 6px 2px;color:var(--mon);font:12px var(--mono)}
+.dxr-ctl button{font:12px var(--mono);background:transparent;color:var(--mon);border:1px solid var(--mon-dim);border-radius:6px;padding:3px 8px;cursor:pointer}
+.dxr-ctl button.on{background:var(--mon-dim);color:#fff}
+.dxr-key i{display:inline-block;width:9px;height:9px;border-radius:2px;margin:0 4px 0 8px;vertical-align:middle}
 .wolf-row{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.4fr) auto;gap:8px;align-items:center;padding:8px 6px;border-bottom:1px solid #2a3036}
 .wolf-row .sm{font-size:12px;color:var(--engrave)}.wolf-row .ok{color:#86efac}
 .disaster{background:#450a0a;border:1px solid #b91c1c;color:#fee2e2;border-radius:10px;padding:8px 12px;margin:8px 0;font-size:13px}
@@ -1043,6 +1049,9 @@ details.more summary::-webkit-details-marker{display:none}
     </details>
     <details class="heard" id="dx-box">
       <summary>APRS DX - ISLANDS <span id="dx-n"></span></summary>
+      <div class="dxr-wrap"><canvas id="dx-radar" aria-label="DX radar: islands, stations heard and open paths by bearing and distance from this station"></canvas>
+        <div class="dxr-ctl"><span>RANGE</span><span id="dxr-ranges"></span>
+          <span class="dxr-key"><i style="background:#46e0b4"></i>OPEN <i style="background:#6b7c86"></i>closed <i style="background:#ffb547"></i>heard on RF <i style="background:#4fb6ff"></i>PSKReporter</span></div></div>
       <label class="chk" style="margin:8px 0"><input type="checkbox" data-k="dx_enabled" id="dx-on"> Watch for 2 m / 70 cm openings to the islands (after each propagation check)</label>
       <label class="chk" style="margin:0 0 8px"><input type="checkbox" data-k="dx_auto_beacon" id="dx-auto"> Send a DX beacon when an island opens (at most once an hour per island)</label>
       <div class="more-row"><label>Antenna height above sea level (m)<input class="inset" data-k="dx_height_m" data-num type="number" min="0" max="3000" style="width:7em"></label>
@@ -1738,6 +1747,7 @@ async function poll(){
     prevTc = s.tc.seq;
   }
   const now = Date.now()/1000, t = s.tnc;
+  DXR.state = { dx: s.dx, heard: s.heard, grid: cfg.grid };
   const DX = s.dx, dxl = document.getElementById('dx-list');
   if (DX && dxl) {
     const nopen = DX.targets.filter(t=>t.open).length;
@@ -2047,6 +2057,108 @@ function drawAlerts(){
 }
 const REGION_LONG = {NA:'North America', EU:'Europe', LA:'Latin America'};
 const MODE_TAG = {TEP:'TEP', TROPO:'DUCT', ES:'Es'};
+/* ---------- DX radar: azimuthal-equidistant "globe" centred on this station (true bearings and distances) ---------- */
+const DXR = { range: +(localStorage.getItem('dxr-range') || 400), state: null, t0: performance.now() };
+function dxrProject(me, p, R, cx, cy, range){
+  const rad = Math.PI/180, la1 = me[0]*rad, lo1 = me[1]*rad, la2 = p[0]*rad, lo2 = p[1]*rad;
+  const c = Math.acos(Math.min(1, Math.max(-1, Math.sin(la1)*Math.sin(la2) + Math.cos(la1)*Math.cos(la2)*Math.cos(lo2-lo1))));
+  const km = 6371*c; if (km > range*1.05) return null;
+  const b = Math.atan2(Math.sin(lo2-lo1)*Math.cos(la2), Math.cos(la1)*Math.sin(la2) - Math.sin(la1)*Math.cos(la2)*Math.cos(lo2-lo1));
+  const r = km/range*R; return {x: cx + r*Math.sin(b), y: cy - r*Math.cos(b), km, brg: (b/rad+360)%360};
+}
+function drawDxRadar(t){
+  const cv = document.getElementById('dx-radar'), s = DXR.state;
+  if (!cv || !cv.clientWidth || document.hidden) return requestAnimationFrame(drawDxRadar);
+  const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w*dpr)) { cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr); }
+  const g = cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
+  const cx = w/2, cy = h/2, R = Math.min(w, h)/2 - 26, range = DXR.range;
+  const me = gridLL((s && s.grid) || cfg.grid || '') || [13.104, -59.625];
+  // globe disc
+  const bg = g.createRadialGradient(cx - R*0.3, cy - R*0.35, R*0.1, cx, cy, R*1.05);
+  bg.addColorStop(0, '#0c2a33'); bg.addColorStop(1, '#03100d');
+  g.fillStyle = '#020806'; g.fillRect(0, 0, w, h);
+  g.fillStyle = bg; g.beginPath(); g.arc(cx, cy, R, 0, 2*Math.PI); g.fill();
+  // graticule: every 1 degree (2 degrees beyond 400 km) - the globe as seen from above this station
+  const step = range > 400 ? 2 : 1;
+  g.strokeStyle = 'rgba(80,140,150,.22)'; g.lineWidth = 1;
+  for (let lat = Math.floor(me[0]-range/100) ; lat <= me[0]+range/100; lat += step) {
+    g.beginPath(); let pen = false;
+    for (let lon = me[1]-range/90; lon <= me[1]+range/90; lon += 0.1) { const p = dxrProject(me, [lat, lon], R, cx, cy, range); if (p) { pen ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y); pen = true; } else pen = false; }
+    g.stroke();
+  }
+  for (let lon = Math.floor(me[1]-range/90); lon <= me[1]+range/90; lon += step) {
+    g.beginPath(); let pen = false;
+    for (let lat = me[0]-range/100; lat <= me[0]+range/100; lat += 0.1) { const p = dxrProject(me, [lat, lon], R, cx, cy, range); if (p) { pen ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y); pen = true; } else pen = false; }
+    g.stroke();
+  }
+  // range rings + bearing scale
+  g.strokeStyle = 'rgba(111,240,160,.35)'; g.fillStyle = 'rgba(111,240,160,.75)'; g.font = '11px ' + getComputedStyle(document.body).getPropertyValue('--mono');
+  const ra = 100*Math.PI/180;                       // ring labels on the east side (open sea from Barbados)
+  for (let i = 1; i <= 4; i++) { g.beginPath(); g.arc(cx, cy, R*i/4, 0, 2*Math.PI); g.stroke(); g.textAlign = 'left'; g.fillText(`${range*i/4} km`, cx + (R*i/4)*Math.sin(ra) + 3, cy - (R*i/4)*Math.cos(ra) - 4); }
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  for (let a = 0; a < 360; a += 10) {
+    const ar = a*Math.PI/180, k = a % 30 ? 4 : 8;
+    g.beginPath(); g.moveTo(cx + R*Math.sin(ar), cy - R*Math.cos(ar)); g.lineTo(cx + (R+k)*Math.sin(ar), cy - (R+k)*Math.cos(ar)); g.stroke();
+    if (a % 30 === 0) g.fillText(a ? String(a).padStart(3, '0') : 'N', cx + (R+16)*Math.sin(ar), cy - (R+16)*Math.cos(ar));
+  }
+  // sweep
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches && g.createConicGradient) {
+    const sw = ((t - DXR.t0)/6000*2*Math.PI) % (2*Math.PI);
+    const cg = g.createConicGradient(sw - Math.PI/2 - 0.7, cx, cy);
+    cg.addColorStop(0, 'rgba(0,0,0,0)'); cg.addColorStop(0.11, 'rgba(70,255,170,.22)'); cg.addColorStop(0.112, 'rgba(0,0,0,0)');
+    g.fillStyle = cg; g.beginPath(); g.arc(cx, cy, R, 0, 2*Math.PI); g.fill();
+  }
+  const blink = Math.floor(t/500) % 2 === 0;
+  // labels are placed where they don't cover another label (tries 8 positions around the marker)
+  const placed = [], marks = [];
+  const label = (txt, x, y, col, bold) => {
+    g.font = (bold ? 'bold ' : '') + '11px ' + getComputedStyle(document.body).getPropertyValue('--mono');
+    const m = g.measureText(txt).width + 6, hh = 15;
+    const tries = [[8, -16], [8, 2], [-m-8, -16], [-m-8, 2], [-m/2, -26], [-m/2, 10], [8, -32], [8, 18], [-m-8, -32], [-m-8, 18]];
+    const hit = (bx, by) => placed.some(r => bx < r[0]+r[2] && bx+m > r[0] && by < r[1]+r[3] && by+hh > r[1]) ||
+                            marks.some(([mx, my]) => mx > bx-3 && mx < bx+m+3 && my > by-3 && my < by+hh+3);
+    let [dx, dy] = tries.find(([ox, oy]) => !hit(x+ox, y+oy)) || tries[0];
+    const bx = x+dx, by = y+dy; placed.push([bx, by, m, hh]);
+    g.fillStyle = 'rgba(2,8,6,.78)'; g.fillRect(bx, by, m, hh);
+    g.fillStyle = col; g.textAlign = 'left'; g.textBaseline = 'alphabetic'; g.fillText(txt, bx+3, by+11);
+  };
+  const targets = (s && s.dx && s.dx.targets) || [];
+  marks.push([cx, cy]);
+  for (const tg of targets) { const p = dxrProject(me, [tg.lat, tg.lon], R, cx, cy, range); if (p) marks.push([p.x, p.y]); }
+  for (const hd of ((s && s.heard) || [])) { const ll = gridLL(hd.grid || ''); const p = ll && dxrProject(me, ll, R, cx, cy, range); if (p) marks.push([p.x, p.y]); }
+  label((cfg.call || 'ME'), cx, cy, '#ffffff', true);
+  // open paths
+  for (const tg of targets) { if (!tg.open) continue; const p = dxrProject(me, [tg.lat, tg.lon], R, cx, cy, range); if (!p) continue;
+    g.strokeStyle = blink ? 'rgba(70,224,180,.9)' : 'rgba(70,224,180,.45)'; g.lineWidth = 2; g.setLineDash([6, 6]);
+    g.beginPath(); g.moveTo(cx, cy); g.lineTo(p.x, p.y); g.stroke(); g.setLineDash([]); g.lineWidth = 1; }
+  // islands
+  for (const tg of targets) { const p = dxrProject(me, [tg.lat, tg.lon], R, cx, cy, range); if (!p) continue;
+    const col = tg.open ? '#46e0b4' : '#6b7c86';
+    g.fillStyle = col; g.strokeStyle = '#021'; g.beginPath(); g.ellipse(p.x, p.y, 7, 5, 0.5, 0, 2*Math.PI); g.fill(); g.stroke();
+    if (tg.open) { g.strokeStyle = col; g.beginPath(); g.arc(p.x, p.y, 11 + (blink ? 3 : 0), 0, 2*Math.PI); g.stroke(); }
+    label(`${tg.name}${tg.open ? ' OPEN' : ''} ${tg.km}km ${String(tg.bearing).padStart(3,'0')}°`, p.x, p.y, col, tg.open); }
+  // PSKReporter stations behind the openings
+  for (const tg of targets) { const ev = tg.evidence; if (!ev) continue;
+    for (const [call, grid] of [[ev.tx, ev.tx_grid], [ev.rx, ev.rx_grid]]) { const ll = gridLL(grid || ''); if (!ll) continue;
+      const p = dxrProject(me, ll, R, cx, cy, range); if (!p || p.km < 15) continue;
+      g.fillStyle = '#4fb6ff'; g.beginPath(); g.rect(p.x-4, p.y-4, 8, 8); g.fill(); label(call, p.x, p.y, '#4fb6ff'); } }
+  // stations heard on RF (with a position)
+  for (const hd of ((s && s.heard) || [])) { const ll = gridLL(hd.grid || ''); if (!ll) continue;
+    const p = dxrProject(me, ll, R, cx, cy, range); if (!p || p.km < 1) continue;
+    g.fillStyle = '#ffb547'; g.beginPath(); g.moveTo(p.x, p.y-6); g.lineTo(p.x+5, p.y+4); g.lineTo(p.x-5, p.y+4); g.closePath(); g.fill();
+    label(`${hd.call}${hd.direct ? '' : ' ' + (hd.via || '')}`, p.x, p.y, '#ffb547'); }
+  // this station
+  g.fillStyle = '#ffffff'; g.beginPath(); g.arc(cx, cy, 4, 0, 2*Math.PI); g.fill();
+  requestAnimationFrame(drawDxRadar);
+}
+function dxrRanges(){
+  const box = document.getElementById('dxr-ranges'); if (!box) return;
+  box.innerHTML = [200, 400, 600, 800].map(r=>`<button type="button" class="${r===DXR.range?'on':''}" data-r="${r}" title="${r} km">${r}</button>`).join(' ');
+  box.querySelectorAll('button').forEach(b=>b.onclick = ()=>{ DXR.range = +b.dataset.r; try { localStorage.setItem('dxr-range', DXR.range); } catch (e) {} dxrRanges(); });
+}
+dxrRanges(); requestAnimationFrame(drawDxRadar);
+
 function renderAlt(s){
   const fp = document.body.dataset.fp, t = s.tnc, now = Date.now()/1000, is = s.aprsis;
   const freq = running && t && t.freq ? (t.freq/1e6).toFixed(3) + (t.cat && t.cat.startsWith('tuned') ? ' FM-D' : '?') : '';

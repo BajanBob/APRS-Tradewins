@@ -27,12 +27,13 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import afsk
+import digi as digimod
 import tnc as tncmod
 import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.8"
+APP_VERSION = "3.10"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -213,6 +214,7 @@ DEFAULTS = {
     "aprsis": True, "server": "rotate.aprs2.net", "igate": False,
     "igate_tx": False,           # full iGate: also pass internet messages to local RF stations
     "kiss_server": False, "kiss_server_port": 8001, "kiss_server_lan": False,   # be a TNC for other apps
+    "digi": False, "digi_alias": "", "digi_max_per_min": 10,                    # fill-in digipeater (WIDE1-1)
     "sdr_gain": "", "sdr_ppm": 0, "sdr_index": 0,                             # RTL-SDR receive
     "window": 60, "interval": 10, "min_km": 800, "min_paths": 2,
     "strong_km": 1500, "repeat": 30, "announce_close": False, "group": "VHF",
@@ -552,6 +554,18 @@ def validate(cfg):
         errs.append("APRS frequency must be in MHz within the 2m or 70cm band, e.g. 144.390.")
     if cfg.get("igate_tx") and not cfg.get("igate"):
         errs.append("The full iGate needs 'RX iGate' switched on too (MENU > APRS-IS).")
+    if cfg.get("digi"):
+        if cfg.get("tnc") in ("none",) or (cfg.get("tnc") == "sdr" and not cfg.get("link2_enabled")):
+            errs.append("The fill-in digipeater needs a radio that transmits (MENU > RADIO / TNC).")
+        if cfg.get("tnc") == "sound" and cfg.get("modem") in ("robust", "300"):
+            errs.append("The fill-in digipeater works on 1200-baud VHF/UHF APRS, not on the HF modems.")
+        if cfg.get("digi_alias") and not digimod.valid_call(cfg.get("digi_alias")):
+            errs.append("Digipeater alias must look like a callsign, e.g. BARBADOS or 8P5AB-1 (or leave it blank).")
+        try:
+            if not 1 <= int(cfg.get("digi_max_per_min") or 10) <= 60:
+                raise ValueError
+        except (TypeError, ValueError):
+            errs.append("Digipeater limit must be 1-60 packets a minute.")
     if cfg.get("tnc") == "kiss_serial" and not cfg.get("kiss_serial"):
         errs.append("Choose the radio / TNC serial port.")
     return errs
@@ -601,6 +615,7 @@ class Station:
         self.my_dx = {}               # v3.7 "I made it": PSKReporter spots of my own signal (evidence for DX cards)
         self.msg_stats = []           # v3.7 field test: delivery time of every chat message
         self.kiss_srv = None          # KISS TCP server for other APRS apps
+        self.digi = None              # fill-in digipeater (digi.FillInDigi) while it is switched on
         self.qsy_hz = None            # set while a chat has moved off the APRS frequency
         self.mail_count = {}          # gateway: (callsign, date) -> emails sent today
         self.mail_next_poll = 0
@@ -663,6 +678,11 @@ class Station:
                     "B": {"name": c.get("link2_name") or "second link", "speed": int(c.get("link2_speed") or 9600)}})
             self.commercial = c.get("op_mode") == "commercial"
             self.sec, self.last_id = None, 0
+            self.digi = None
+            if c.get("digi") and not self.commercial:
+                self.digi = digimod.FillInDigi(c["call"], c.get("digi_alias") or "", int(c.get("digi_max_per_min") or 10))
+                self.add_log("SYS", f"Fill-in digipeater ON (WIDE1-1{', ' + self.digi.alias if self.digi.alias else ''}; "
+                                    f"max {self.digi.max_per_min}/min)")
             self.kiss_srv = None
             if c.get("kiss_server") and not self.commercial and c.get("tnc") in ("sound", "sdr", "kiss_serial"):
                 try:
@@ -724,6 +744,7 @@ class Station:
                     pass
             self._save_chat()
             self.tnc = self.isc = self.tnc2 = self.kiss_srv = None
+            self.digi = None
             self.linkctl = None
             self.running = False
             self.add_log("SYS", "Station OFF")
@@ -1897,6 +1918,7 @@ class Station:
             except Exception as e:
                 self.add_log("ERR", f"secure rx: {e}")
             return          # no iGate in commercial mode
+        self._digipeat(line, link)
         inner = line.partition(":")[2]
         if inner.startswith("}") and ">" in inner.split(":", 1)[0]:
             line_for_chat = inner[1:]                  # gated from the internet by an iGate: unwrap
@@ -1927,6 +1949,23 @@ class Station:
             self.add_log("IGT", f"gated {head.split('>')[0]}")
         except Exception as e:
             self.add_log("ERR", f"iGate: {e}")
+
+    def _digipeat(self, line, link="A"):
+        """Fill-in digipeater: repeat a heard packet once if its first hop is WIDE1-1 (or our call / alias)."""
+        if not self.digi:
+            return
+        try:
+            r = self.digi.consider(line)
+            if not r:
+                return
+            tx = self.tnc2 if link == "B" else self._tx_tnc()
+            if not tx or getattr(tx, "modem", "1200") in ("robust", "300"):
+                return
+            src, dst, path, info = r
+            tx.send(src, dst, path, info)
+            self.add_log("DIG", f"{src}>{','.join([dst] + path)}:{info}"[:200])
+        except Exception as e:
+            self.add_log("ERR", f"digipeater: {e}")
 
     # ---- status for the face plate
     def state(self, since=0):
@@ -1962,6 +2001,7 @@ class Station:
             "qsy_freqs": tncmod.zone_qsy(c),
             "zone": self.zone_info(c),
             "kiss_clients": len(self.kiss_srv.clients) if self.kiss_srv else None,
+            "digi": self.digi.status if self.digi else None,
             "links": ([{"link": l, **v} for l, v in sorted(self.linkctl.links.items())] if self.linkctl else []),
             "link2": None if not self.tnc2 else {"kind": self.tnc2.kind, "error": self.tnc2.error,
                                                   "rx": self.tnc2.rx_count, "tx": self.tnc2.tx_count},

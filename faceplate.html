@@ -164,7 +164,7 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
   font-size:13px;padding:10px 12px;border:1px solid #000;box-shadow:0 2px 10px rgba(0,0,0,.8) inset}
 .mon div{white-space:pre-wrap;word-break:break-all;line-height:1.45}
 .mon .t{color:var(--mon-dim)}
-.mon .k-TX{color:#ffd27a}.mon .k-ERR{color:#ff7b70}.mon .k-PROP{color:#7fd8ff}.mon .k-SYS{color:#b9c2cb}.mon .k-IGT{color:#c7a6ff}.mon .k-WX{color:#8ef0e0}.mon .k-MSG{color:#7dd3fc}
+.mon .k-TX{color:#ffd27a}.mon .k-ERR{color:#ff7b70}.mon .k-PROP{color:#7fd8ff}.mon .k-SYS{color:#b9c2cb}.mon .k-IGT{color:#c7a6ff}.mon .k-DIG{color:#9fe870}.mon .k-WX{color:#8ef0e0}.mon .k-MSG{color:#7dd3fc}
 .missed{margin-top:18px;border-radius:10px;border:1px solid #6b4a12;background:linear-gradient(180deg,#2a1d08,#1c1407);
   padding:14px 16px;box-shadow:0 0 0 1px rgba(255,181,71,.15) inset}
 .missed.hide{display:none}
@@ -712,6 +712,10 @@ details.more summary::-webkit-details-marker{display:none}
       <div class="set m-kissrv"><label class="chk"><input type="checkbox" data-k="kiss_server"> KISS TNC server: let other APRS apps (Xastir, YAAC, APRSIS32) use this modem</label></div>
       <div class="set m-kissrv"><label>KISS server port</label><input class="inset" data-k="kiss_server_port" data-num type="number" min="1024" max="65535"></div>
       <div class="set m-kissrv"><label class="chk"><input type="checkbox" data-k="kiss_server_lan"> Allow other computers on my network (KISS has no password - trusted networks only)</label></div>
+      <div class="set wide"><label class="chk"><input type="checkbox" data-k="digi"> Fill-in digipeater: repeat nearby packets whose first hop is WIDE1-1 (VHF/UHF 1200 baud)</label></div>
+      <div class="set"><label>Digipeater alias (optional)</label><input class="inset" data-k="digi_alias" placeholder="e.g. BARBADOS" maxlength="9" autocomplete="off"></div>
+      <div class="set"><label>Digipeater limit (packets a minute)</label><input class="inset" data-k="digi_max_per_min" data-num type="number" min="1" max="60"></div>
+      <div class="set wide note" id="digi-note">Fill-in digipeater off.</div>
       <div class="set m-kiss_tcp"><label>KISS TCP host:port</label><input class="inset" data-k="kiss_addr" placeholder="127.0.0.1:8001"></div>
       <div class="set m-kiss_serial"><label>Serial port</label><input class="inset" data-k="kiss_serial" list="serial-list" placeholder="COM5 or /dev/ttyACM0"></div>
       <div class="set m-kiss_serial"><label>Baud rate</label>
@@ -1718,6 +1722,9 @@ async function poll(){
     prevTc = s.tc.seq;
   }
   const now = Date.now()/1000, t = s.tnc;
+  const dg = s.digi, dn = document.getElementById('digi-note');
+  if (dn) dn.textContent = !dg ? (cfg.digi ? 'Fill-in digipeater: starts with the station.' : 'Fill-in digipeater off.')
+    : `Fill-in digipeater ON: ${dg.count} repeated, ${dg.skipped} skipped (duplicates / limit), ${dg.per_min}/${dg.max_per_min} this minute${dg.last ? ' · last: ' + dg.last.slice(0, 80) : ''}`;
   $('#l-tnc').textContent = !running ? 'OFF' : (t ? (t.kind==='Sound modem'?'SOUND':t.kind==='APRS-IS only'?'NONE':t.kind.toUpperCase()) : '---');
   const lvl = t && t.audio_level ? Math.min(8, Math.round(Math.sqrt(t.audio_level)*16)) : 0;
   $('#meter').innerHTML = (t && t.kind==='Sound modem') ? Array.from({length:8},(_,i)=>`<i class="${i<lvl?'on':''}"></i>`).join('') : '';
@@ -2481,6 +2488,9 @@ const HELP = {
   zone:'Automatic uses your grid square to pick the band plan: the APRS / hail frequency (144.390 Americas, 144.800 Europe-Africa, 145.570 Brazil, 144.930 Argentina, 144.640 Japan/China, 145.175 Australia, 144.575 NZ) and the chat channels. Near a border, or where your country differs, pick the zone by hand.',
   qsy_mode:'Automatic uses the chat channels agreed for your zone. Manual override lets you type your own list, e.g. if a channel clashes with a local repeater or packet node. Channels on APRS, 145.010, weak-signal or satellite segments are refused.',
   qsy_freqs:'Chats start on the APRS frequency, then move (QSY) to the first free channel here. Default: 144.510-144.590 (IARU Region 2 local-option segment - confirm with your national society) then 145.030-145.090 (data segment), 20 kHz apart because a 1200-baud FM signal is about 12 kHz wide. 145.010 is skipped: it is protected for Caribbean APRS.',
+  digi:'A fill-in digipeater helps hand-held and mobile stations the wide-area digipeaters cannot hear. Tradewind repeats a packet once when its first hop is WIDE1-1 (or your callsign / alias), adds your callsign to the path, and skips its own packets, duplicates within 30 s and internet traffic. Your callsign must be licensed to run an unattended digipeater where you operate.',
+  digi_alias:'An extra name stations can put in their path to go through you, e.g. BARBADOS. Leave blank to answer only WIDE1-1 and your callsign.',
+  digi_max_per_min:'The most packets the digipeater repeats in any minute (the 10%-of-airtime limit still applies).',
   igate_tx:'Messages from the internet for stations your radio hears locally are passed on to them on RF, as a standard iGate does. Limited to 30 an hour.',
   kiss_server:'Other APRS programs on this computer can connect to Tradewind on this port as if it were a hardware TNC. Packets they send must use your callsign.',
   sdr_gain:'Leave blank for automatic gain. Try 30-40 dB if the SDR hears too little or too much noise.',

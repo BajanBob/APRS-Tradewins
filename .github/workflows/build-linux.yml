@@ -9,6 +9,10 @@ on:
     branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish to this release tag (e.g. v3.10); blank = build only'
+        required: false
 
 permissions:
   contents: write
@@ -36,7 +40,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p Tradewind
-          cp app.py afsk.py tnc.py vhf_prop_aprs.py wx.py faceplate.html icon.png \
+          cp app.py afsk.py digi.py tnc.py vhf_prop_aprs.py wx.py faceplate.html icon.png \
              requirements.txt test_modem.py install_linux.sh README.md LICENSE Tradewind/
           chmod +x Tradewind/install_linux.sh
           tar czf Tradewind-linux.tar.gz Tradewind
@@ -47,7 +51,9 @@ jobs:
           path: Tradewind-linux.tar.gz
 
       - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           files: Tradewind-linux.tar.gz

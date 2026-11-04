@@ -10,6 +10,10 @@ on:
     branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish to this release tag (e.g. v3.10); blank = build only'
+        required: false
 
 permissions:
   contents: write
@@ -56,9 +60,11 @@ jobs:
             Tradewind-windows.zip
 
       - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           files: |
             dist/Tradewind.exe
             Tradewind-windows.zip

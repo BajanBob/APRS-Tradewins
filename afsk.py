@@ -47,10 +47,10 @@ def crc16_x25(data: bytes) -> int:
 
 
 def _addr(call, last=False, command=False):
-    base, _, ssid = call.upper().partition("-")
+    call = call.upper().strip()
+    hbit = call.endswith("*")              # "has been repeated" mark, e.g. WIDE1* or 8P5AB-10*
+    base, _, ssid = call.rstrip("*").partition("-")
     ssid = int(ssid or 0) & 0x0F
-    hbit = base.endswith("*")
-    base = base.rstrip("*")
     b = bytes((ord(c) << 1) for c in base.ljust(6)[:6])
     sb = 0x60 | (ssid << 1) | (1 if last else 0)
     if command or hbit:

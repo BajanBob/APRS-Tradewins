@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np  # noqa: E402
 
 import afsk  # noqa: E402
+import digi  # noqa: E402
 import tnc  # noqa: E402
 import vhf_prop_aprs as eng  # noqa: E402
 
@@ -936,6 +937,45 @@ def test_cat():
     # radios without CAT just get a note
     t3 = tnc.SoundModemTNC(ptt=tnc.PTT(), tune_hz=144_390_000)
     assert not t3.tune(144_390_000) and "by hand" not in t3.cat_status and "no CAT" in t3.cat_status
+
+    test_digipeater()
+
+
+def test_digipeater():
+    """Fill-in digipeater: WIDE1-1 first hop only, own call/alias, duplicates, limits, and the frame on air."""
+    me = "8P5AB-10"
+    ok, _ = digi.plan("8P6XX-9>APRS,WIDE1-1,WIDE2-1:!1306.25N/05937.50W>test", me)
+    assert ok[2] == ["8P5AB-10*", "WIDE1*", "WIDE2-1"], ok
+    ok, _ = digi.plan("8P6XX-9>APRS,8P5AB-10,WIDE2-1:hello", me)
+    assert ok[2] == ["8P5AB-10*", "WIDE2-1"], ok
+    ok, _ = digi.plan("8P6XX-9>APRS,BARBADOS:hello", me, alias="BARBADOS")
+    assert ok[2] == ["8P5AB-10*"], ok
+    for line, why in (("8P5AB-7>APRS,WIDE1-1:own", "own packet"),
+                      ("8P6XX>APRS,DIGI1*,WIDE1-1:x", "not the first hop"),
+                      ("8P6XX>APRS,WIDE2-2:x", "not for a fill-in"),
+                      ("8P6XX>APRS,RELAY,WIDE:x", "outdated"),
+                      ("8P6XX>APRS,TCPIP*,WIDE1-1:x", "internet"),
+                      ("8P6XX>APRS,DIGI1*,WIDE1*:x", "path complete"),
+                      ("garbage", "not a packet")):
+        r, w = digi.plan(line, me)
+        assert r is None and why in w, (line, w)
+    t = [1000.0]
+    d = digi.FillInDigi(me, max_per_min=2, now=lambda: t[0])
+    pkt = "8P6XX-9>APRS,WIDE1-1,WIDE2-1:!1306.25N/05937.50W>test"
+    assert d.consider(pkt) is not None
+    assert d.consider(pkt) is None, "duplicate within 30 s"
+    assert d.consider("8P6XX-9>APRS,8P4AA-1*,WIDE2-1:!1306.25N/05937.50W>test") is None, "same packet via another digi"
+    t[0] += 31
+    assert d.consider(pkt) is not None, "repeats again after 30 s"
+    assert d.consider("8P6YY>APRS,WIDE1-1:a") is None, "per-minute limit"
+    t[0] += 61
+    assert d.consider("8P6YY>APRS,WIDE1-1:b") is not None
+    assert d.status["count"] == 3 and d.status["skipped"] == 2, d.status
+    # the repeated frame decodes with the used-hop marks set
+    src, dst, path, info = d.consider("8P6ZZ>APRS,WIDE1-1,WIDE2-1:c") or (None,) * 4
+    line = afsk.decode_ax25(afsk.encode_ax25(src, dst, path, info)[:-2])
+    assert line == "8P6ZZ>APRS,8P5AB-10*,WIDE1*,WIDE2-1:c", line
+    print("digipeater ok")
 
 
 if __name__ == "__main__":

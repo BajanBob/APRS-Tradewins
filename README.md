@@ -80,6 +80,21 @@ A **setup wizard** opens the first time (and any time from MENU > SETUP WIZARD):
 To reach the face plate from a phone on the same Wi-Fi, run `python3 app.py --host 0.0.0.0` and set a **station PIN**
 (MENU > STATION). Open it by IP address (e.g. `http://192.168.1.20:8073`) or a `.local` name; other host names are refused.
 
+## Fill-in digipeater, iGate and TNC in one
+
+With one radio (for example the IC-9100 on your APRS frequency), Tradewind can be a complete APRS station on its own:
+the **TNC** (built-in 1200-baud sound modem), an **iGate** (MENU > APRS-IS) and a **fill-in digipeater**.
+
+Switch on **Fill-in digipeater** under MENU > RADIO / TNC. It repeats a packet once when:
+- its first hop is **WIDE1-1**, for example `8P6XX>APRS,WIDE1-1,WIDE2-1:...` goes out as `8P6XX>APRS,8P5AB-10*,WIDE1*,WIDE2-1:...`, or
+- the sender routes it through your callsign or your optional **alias** (e.g. `BARBADOS`).
+
+It never repeats its own packets, a packet heard again within 30 s, internet-gated traffic (TCPIP/TCPXX), RELAY/TRACE paths,
+or WIDE1-1 that isn't the first hop. It repeats at most 10 packets a minute by default (1-60), and the station's
+10%-of-airtime limit still applies. Repeated packets appear as **DIG** in the packet log.
+It works on 1200-baud VHF/UHF APRS (sound modem, KISS TNCs, or an SDR with a second radio link), not on the HF modems.
+Run an unattended digipeater only where your licence allows it.
+
 ## TNC options
 
 | Mode | Use for |

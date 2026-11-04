@@ -80,6 +80,11 @@ A **setup wizard** opens the first time (and any time from MENU > SETUP WIZARD):
 To reach the face plate from a phone on the same Wi-Fi, run `python3 app.py --host 0.0.0.0` and set a **station PIN**
 (MENU > STATION). Open it by IP address (e.g. `http://192.168.1.20:8073`) or a `.local` name; other host names are refused.
 
+## What's new in 3.12
+
+- **DX radar** (APRS DX - Islands): a radar-style globe centred on your station, with true bearings and distances. It shows the islands (green and flashing when open, with the path drawn from you), stations heard on RF (orange, with call signs), and the PSKReporter stations behind each opening (blue). Range 200-800 km.
+- **DX beacon burst**: when an island opens, Tradewind sends 4 DX beacons in one minute (15 s apart, numbered 1/4-4/4), at most once an hour per island. In Robust DX each beacon takes about 22 s, so 2 fit in the minute.
+
 ## What's new in 3.11
 
 | Feature | Where | What it does |

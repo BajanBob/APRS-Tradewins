@@ -1,6 +1,11 @@
 # Tradewind - Copyright (c) 2026 Brandon St Rose (8P5DG) and Kammie Holder (8P5AB)
 # Released under the MIT License - see LICENSE
-"""Fill-in digipeater (WIDEn-N paradigm, fill-in only).
+"""Fill-in and wide-area digipeater (WIDEn-N paradigm, at most 2 hops).
+
+Wide-area mode (for a high site serving a whole island with no other digipeaters): also answers WIDE2-2 and
+WIDE2-1, counting the hop down, e.g.  ...,WIDE2-2:  ->  ...,8P5AB-10*,WIDE2-1:  and  ...,WIDE2-1:  ->  ...,8P5AB-10*,WIDE2*:
+Paths asking for more than 2 hops in total (WIDE2-3, WIDE3-3, ...) are never repeated.
+
 
 A fill-in digipeater helps stations that the wide-area digipeaters can't hear. It repeats a packet once when:
   * the packet's first unused path hop is WIDE1-1 and it is the FIRST hop of the path (nothing used before it), or
@@ -42,7 +47,10 @@ def parse(line):
     return src.strip(), parts[0].strip(), [p.strip() for p in parts[1:] if p.strip()], info
 
 
-def plan(line, mycall, alias=""):
+_WIDE_RE = re.compile(r"^WIDE([1-7])-([1-7])$")
+
+
+def plan(line, mycall, alias="", mode="fill"):
     """Work out the repeat for one heard packet. Returns (src, dst, new_path, info, reason) or (None, why_not)."""
     p = parse(line)
     if not p:
@@ -71,14 +79,28 @@ def plan(line, mycall, alias=""):
         if len(new) > MAX_PATH:
             return None, "path too long"
         return (src, dst, new, info, "fill-in WIDE1-1"), ""
-    return None, f"next hop {hop} is not for a fill-in digipeater"
+    m = _WIDE_RE.match(hop)
+    if mode == "wide" and m:
+        n, left = int(m.group(1)), int(m.group(2))
+        hops_total = sum(int(x.group(1)) for x in (_WIDE_RE.match(p.rstrip("*").upper()) for p in path) if x)
+        after_wide1 = any(p.rstrip("*").upper().startswith("WIDE1") for p in path[:nxt])
+        if n != 2 or left > 2 or hops_total > 3 or (left == 2 and after_wide1):   # WIDE1-1,WIDE2-2 = 3 hops
+            return None, f"{hop}: more than 2 hops - not repeated"
+        rest = path[nxt + 1:]
+        new = path[:nxt] + [me + "*", f"WIDE2-{left - 1}" if left > 1 else "WIDE2*"] + rest
+        if len(new) > MAX_PATH:
+            return None, "path too long"
+        return (src, dst, new, info, f"wide {hop}"), ""
+    return None, f"next hop {hop} is not for a {'wide-area' if mode == 'wide' else 'fill-in'} digipeater"
 
 
 class FillInDigi:
     """Decides which heard packets to repeat, with duplicate suppression and a per-minute limit."""
 
-    def __init__(self, mycall, alias="", max_per_min=DEFAULT_MAX_PER_MIN, dup_window=DUP_WINDOW_S, now=time.time):
+    def __init__(self, mycall, alias="", max_per_min=DEFAULT_MAX_PER_MIN, dup_window=DUP_WINDOW_S, now=time.time,
+                 mode="fill"):
         self.mycall, self.alias = mycall.upper(), (alias or "").upper()
+        self.mode = "wide" if mode == "wide" else "fill"
         self.max_per_min, self.dup_window, self.now = max(1, int(max_per_min)), dup_window, now
         self.seen = {}                          # (src, dst, info) -> last time heard or sent
         self.sent = collections.deque()         # times of repeats in the last minute
@@ -100,7 +122,7 @@ class FillInDigi:
         key = self._key(p[0], p[1], p[3])
         dup = key in self.seen
         self.seen[key] = t                     # any copy heard (direct or via another digi) resets the window
-        result, _why = plan(line, self.mycall, self.alias)
+        result, _why = plan(line, self.mycall, self.alias, self.mode)
         if not result:
             return None
         if dup:
@@ -119,5 +141,5 @@ class FillInDigi:
 
     @property
     def status(self):
-        return {"on": True, "count": self.count, "skipped": self.skipped, "last": self.last,
+        return {"on": True, "mode": self.mode, "count": self.count, "skipped": self.skipped, "last": self.last,
                 "per_min": len(self.sent), "max_per_min": self.max_per_min, "alias": self.alias}

@@ -80,12 +80,34 @@ A **setup wizard** opens the first time (and any time from MENU > SETUP WIZARD):
 To reach the face plate from a phone on the same Wi-Fi, run `python3 app.py --host 0.0.0.0` and set a **station PIN**
 (MENU > STATION). Open it by IP address (e.g. `http://192.168.1.20:8073`) or a `.local` name; other host names are refused.
 
+## What's new in 3.11
+
+| Feature | Where | What it does |
+|---|---|---|
+| **Robust DX** (SSB APRS) | MENU > RADIO / TNC > Modem | Tradewind Robust at half speed (8-FSK, 15.625 baud, 125 Hz wide) for 2 m / 70 cm DX in USB and weak HF paths. In simulation it decodes 8 of 8 frames at **-14 dB SNR** (2.5 kHz), where Robust stops at about -12 dB, and tolerates radios up to ±300 Hz off frequency. Tradewind tunes the radio to USB data mode on the **Robust / DX dial frequency** (default 144.150 - agree one with the other islands). |
+| **APRS DX - Islands** | Home screen, under the chat | Distance, beam heading and path type (line of sight to high ground, or tropo duct / HF) from your grid square to St Vincent, St Lucia, Grenada, Martinique, Dominica, Tobago, Trinidad, Guadeloupe and Antigua. After each PSKReporter check it marks an island **OPEN** when spots show the band open toward it, and can send a DX beacon (once an hour per island). |
+| **Wide-area digipeater** | MENU > RADIO / TNC > Digipeater type | Besides fill-in (WIDE1-1), a wide-area mode for a high site serving a whole island: WIDE2-1 and WIDE2-2, counted down, never more than 2 hops. |
+| **Weak-signal 1200 baud** | MENU > RADIO / TNC | Four decoders in parallel (different tone balance and clock tracking), repair of packets with 1-2 bad bits, and FX.25 receive. Optional FX.25 transmit (Reed-Solomon, 16 check bytes) that ordinary APRS radios still decode. In simulation the 50%-decode point improves by about 1 dB, and about 2 dB with FX.25. |
+
+### Measured in simulation (white noise, SNR in 2.5 kHz)
+
+| Modem | 50% decode point |
+|---|---|
+| 1200 baud, previous decoder | about +6.8 dB |
+| 1200 baud, 4 decoders + bit repair | about +6.0 dB |
+| 1200 baud, FX.25 both ends | about +4.8 dB |
+| Tradewind Robust | about -12 dB |
+| **Tradewind Robust DX** | **-14 dB or better** (8 of 8 frames at -14 dB) |
+
+FM radios stop passing audio below roughly +10 dB carrier-to-noise, so for really weak paths use Robust DX in USB, not FM.
+Robust and Robust DX work only between Tradewind stations; frames heard can be gated to APRS-IS (RX iGate) so they still show on aprs.fi.
+
 ## Fill-in digipeater, iGate and TNC in one
 
 With one radio (for example the IC-9100 on your APRS frequency), Tradewind can be a complete APRS station on its own:
 the **TNC** (built-in 1200-baud sound modem), an **iGate** (MENU > APRS-IS) and a **fill-in digipeater**.
 
-Switch on **Fill-in digipeater** under MENU > RADIO / TNC. It repeats a packet once when:
+Switch on **Digipeater** under MENU > RADIO / TNC and choose **Fill-in** or **Wide-area**. It repeats a packet once when:
 - its first hop is **WIDE1-1**, for example `8P6XX>APRS,WIDE1-1,WIDE2-1:...` goes out as `8P6XX>APRS,8P5AB-10*,WIDE1*,WIDE2-1:...`, or
 - the sender routes it through your callsign or your optional **alias** (e.g. `BARBADOS`).
 

@@ -28,12 +28,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import afsk
 import digi as digimod
+import dxmode
 import tnc as tncmod
 import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.10"
+APP_VERSION = "3.11"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -214,7 +215,11 @@ DEFAULTS = {
     "aprsis": True, "server": "rotate.aprs2.net", "igate": False,
     "igate_tx": False,           # full iGate: also pass internet messages to local RF stations
     "kiss_server": False, "kiss_server_port": 8001, "kiss_server_lan": False,   # be a TNC for other apps
-    "digi": False, "digi_alias": "", "digi_max_per_min": 10,                    # fill-in digipeater (WIDE1-1)
+    "digi": False, "digi_alias": "", "digi_max_per_min": 10,                    # digipeater (WIDE1-1 / WIDE2-n)
+    "digi_mode": "fill",                                                        # fill = WIDE1-1 only, wide = high site
+    "multi_decoder": True, "fx25_tx": False,                                    # modem: parallel decoders, FX.25 FEC
+    "dx_enabled": False, "dx_auto_beacon": False, "dx_height_m": 30,            # APRS DX mode (inter-island)
+    "dx_freq": "144.150", "dx_path": "", "dx_beacon_min": 60,
     "sdr_gain": "", "sdr_ppm": 0, "sdr_index": 0,                             # RTL-SDR receive
     "window": 60, "interval": 10, "min_km": 800, "min_paths": 2,
     "strong_km": 1500, "repeat": 30, "announce_close": False, "group": "VHF",
@@ -557,8 +562,8 @@ def validate(cfg):
     if cfg.get("digi"):
         if cfg.get("tnc") in ("none",) or (cfg.get("tnc") == "sdr" and not cfg.get("link2_enabled")):
             errs.append("The fill-in digipeater needs a radio that transmits (MENU > RADIO / TNC).")
-        if cfg.get("tnc") == "sound" and cfg.get("modem") in ("robust", "300"):
-            errs.append("The fill-in digipeater works on 1200-baud VHF/UHF APRS, not on the HF modems.")
+        if cfg.get("tnc") == "sound" and cfg.get("modem") in ("robust", "robust_dx", "300"):
+            errs.append("The digipeater works on 1200-baud VHF/UHF APRS, not on the Robust or HF modems.")
         if cfg.get("digi_alias") and not digimod.valid_call(cfg.get("digi_alias")):
             errs.append("Digipeater alias must look like a callsign, e.g. BARBADOS or 8P5AB-1 (or leave it blank).")
         try:
@@ -566,6 +571,19 @@ def validate(cfg):
                 raise ValueError
         except (TypeError, ValueError):
             errs.append("Digipeater limit must be 1-60 packets a minute.")
+    if cfg.get("modem") == "robust_dx" and cfg.get("tnc") != "sound":
+        errs.append("Robust DX needs the built-in sound modem (MENU > RADIO / TNC > TNC type: sound card).")
+    if cfg.get("modem") in ("robust", "robust_dx") and cfg.get("tnc") == "sound" and cfg.get("cat_tune") \
+            and not tncmod.dx_freq_hz(cfg):
+        errs.append("Robust / DX frequency must be in an amateur band (160 m to 70 cm), e.g. 144.150 or 10.142 (MHz, USB dial).")
+    if cfg.get("dx_enabled"):
+        try:
+            if not 0 <= float(cfg.get("dx_height_m") or 0) <= 3000:
+                raise ValueError
+        except (TypeError, ValueError):
+            errs.append("Antenna height above sea level must be 0-3000 m.")
+        if cfg.get("dx_path") and check_path(cfg.get("dx_path")):
+            errs.append("DX path: " + check_path(cfg.get("dx_path")).removeprefix("RF path: "))
     if cfg.get("tnc") == "kiss_serial" and not cfg.get("kiss_serial"):
         errs.append("Choose the radio / TNC serial port.")
     return errs
@@ -591,6 +609,8 @@ class Station:
         self.spot_count = 0
         self.car_count = 0
         self.local = []
+        self.dx_open = {}             # APRS DX mode: target island -> {"since", "evidence"}
+        self.dx_beaconed = {}         # target island -> time of the last automatic DX beacon
         self.map_paths = []           # Caribbean paths for the live map
         self.check_error = ""
         self.ann_state = eng.load_state(STATE_PATH)
@@ -670,7 +690,8 @@ class Station:
                     self.tnc2 = None
                     self.add_log("ERR", f"Second radio link not started: {e}")
             if self.tnc2 is not None and c.get("tnc") not in ("none", "sdr"):
-                s1 = 44 if c.get("tnc") == "sound" and c.get("modem") == "robust" else \
+                s1 = 22 if c.get("tnc") == "sound" and c.get("modem") == "robust_dx" else \
+                    44 if c.get("tnc") == "sound" and c.get("modem") == "robust" else \
                     300 if c.get("tnc") == "sound" and str(c.get("modem")) == "300" else \
                     (1200 if c.get("tnc") == "sound" else int(c.get("link1_speed") or 1200))
                 self.linkctl = tncmod.LinkController({
@@ -680,8 +701,11 @@ class Station:
             self.sec, self.last_id = None, 0
             self.digi = None
             if c.get("digi") and not self.commercial:
-                self.digi = digimod.FillInDigi(c["call"], c.get("digi_alias") or "", int(c.get("digi_max_per_min") or 10))
-                self.add_log("SYS", f"Fill-in digipeater ON (WIDE1-1{', ' + self.digi.alias if self.digi.alias else ''}; "
+                self.digi = digimod.FillInDigi(c["call"], c.get("digi_alias") or "", int(c.get("digi_max_per_min") or 10),
+                                               mode=c.get("digi_mode") or "fill")
+                kind = "Wide-area digipeater ON (WIDE1-1, WIDE2-1, WIDE2-2" if self.digi.mode == "wide" else \
+                    "Fill-in digipeater ON (WIDE1-1"
+                self.add_log("SYS", f"{kind}{', ' + self.digi.alias if self.digi.alias else ''}; "
                                     f"max {self.digi.max_per_min}/min)")
             self.kiss_srv = None
             if c.get("kiss_server") and not self.commercial and c.get("tnc") in ("sound", "sdr", "kiss_serial"):
@@ -708,7 +732,8 @@ class Station:
                 self.chat.links = self.linkctl
                 self.chat.store_forward = bool(c.get("store_forward", True))
                 self.chat.relay_enabled = bool(c.get("relay_enabled"))
-                self.chat.retry = (90, 150, 240) if (c.get("tnc") == "sound" and c.get("modem") == "robust") else tncmod.RETRY_S
+                self.chat.retry = (150, 300, 480) if (c.get("tnc") == "sound" and c.get("modem") == "robust_dx") else \
+                    (90, 150, 240) if (c.get("tnc") == "sound" and c.get("modem") == "robust") else tncmod.RETRY_S
             if not self.commercial and (not self.chat or self.chat.mycall != c["call"]
                                         or getattr(self.chat, "send_fn", None) != self._chat_send):
                 self.chat = tncmod.ChatManager(c["call"], self._chat_send)
@@ -994,6 +1019,10 @@ class Station:
                                            "km": round(s.km), "mode": s.mode, "snr": s.snr})
                         break
             self.local = sorted(self.local, key=lambda x: -x["km"])[:8]
+            try:
+                self._dx_update(spots, me)
+            except Exception as e:
+                self.add_log("ERR", f"DX mode: {e}")
         self.map_paths = self._map_paths(spots)
         self._my_dx_update(spots)
         if c.get("wolf_on"):
@@ -1107,7 +1136,7 @@ class Station:
         self.tx_seen[info] = times + [now]
         return True
 
-    def transmit(self, info, rf=True, net=True, mode=None, force_rf=False):
+    def transmit(self, info, rf=True, net=True, mode=None, force_rf=False, path=None):
         if self.commercial:
             return      # APRS bulletins / beacons never go out on a commercial channel
         if not self.same_tx_ok(info):
@@ -1118,7 +1147,8 @@ class Station:
         call = c["call"]
         sent = []
         if rf and (self.rf_live(mode) or (force_rf and self.rf_possible())):
-            path = [p.strip() for p in (c.get("rf_path") or "").split(",") if p.strip()]
+            if path is None:
+                path = [p.strip() for p in (c.get("rf_path") or "").split(",") if p.strip()]
             try:
                 self._tx_tnc().send(call, eng.TOCALL, path, info)
                 sent.append("RF")
@@ -1131,6 +1161,43 @@ class Station:
             except Exception as e:
                 self.add_log("ERR", f"APRS-IS send: {e}")
         self.add_log("TX", f"[{'+'.join(sent) or 'nothing sent'}] {call}>{eng.TOCALL}:{info}")
+
+    # ---- APRS DX mode
+    def dx_targets(self):
+        me = eng.grid_to_latlon(self.cfg.get("grid", ""))
+        if not me:
+            return []
+        return dxmode.targets_from(me, float(self.cfg.get("dx_height_m") or 30))
+
+    def _dx_update(self, spots, me):
+        c = self.cfg
+        if not c.get("dx_enabled"):
+            self.dx_open = {}
+            return
+        targets = dxmode.targets_from(me, float(c.get("dx_height_m") or 30))
+        now = time.time()
+        found = dxmode.openings(spots, me, targets)
+        for name, ev in found.items():
+            if name not in self.dx_open:
+                t = next(x for x in targets if x["name"] == name)
+                self.add_log("DX", f"DX OPEN to {name}: {t['km']} km, beam {t['bearing']} deg ({t['compass']}) - "
+                                   f"{ev['tx']} > {ev['rx']} {ev['km']} km {ev['mode']} {ev['snr']} dB ({ev['kind']})")
+                if c.get("dx_auto_beacon") and now - self.dx_beaconed.get(name, 0) >= int(c.get("dx_beacon_min") or 60) * 60:
+                    self.dx_beaconed[name] = now
+                    self.send_dx_beacon(t)
+            self.dx_open[name] = {"since": self.dx_open.get(name, {}).get("since", now), "evidence": ev}
+        for name in [n for n in self.dx_open if n not in found]:
+            self.add_log("DX", f"DX closed to {name}")
+            del self.dx_open[name]
+
+    def send_dx_beacon(self, target):
+        """Status beacon announcing the opening, on the DX path (default: direct, no digipeaters)."""
+        c = self.cfg
+        robust = c.get("tnc") == "sound" and c.get("modem") in ("robust", "robust_dx")
+        freq = tncmod.dx_freq_hz(c) if robust else tncmod.aprs_freq_hz(c)
+        label = f"{freq / 1e6:.3f}{'USB' if robust else 'FM'}" if freq else ""
+        path = [p.strip() for p in (c.get("dx_path") or "").split(",") if p.strip()]
+        self.transmit(dxmode.dx_beacon_text(target, c, label), path=path)
 
     def send_beacon(self):
         if self.commercial:
@@ -1162,7 +1229,7 @@ class Station:
         self.chat.is_ok = lambda: bool(self.isc and self.isc.verified)
         self.chat.on_tw = lambda call: self._tw_seen(call, "chat")
         self.chat.links = self.linkctl
-        robust = self.cfg.get("tnc") == "sound" and self.cfg.get("modem") == "robust"
+        robust = self.cfg.get("tnc") == "sound" and self.cfg.get("modem") in ("robust", "robust_dx")
         self.chat.on_qsy = None if self.commercial else self._on_qsy   # a licensed commercial channel never moves
         tncmod.set_zone(tncmod.zone_of(self.cfg))
         tncmod.set_uhf(self.cfg.get("uhf_range") or "430-440")
@@ -2002,6 +2069,9 @@ class Station:
             "zone": self.zone_info(c),
             "kiss_clients": len(self.kiss_srv.clients) if self.kiss_srv else None,
             "digi": self.digi.status if self.digi else None,
+            "dx": {"enabled": bool(c.get("dx_enabled")), "targets": [
+                {**t, "open": t["name"] in self.dx_open, "evidence": self.dx_open.get(t["name"], {}).get("evidence")}
+                for t in self.dx_targets()]} if c.get("dx_enabled") else None,
             "links": ([{"link": l, **v} for l, v in sorted(self.linkctl.links.items())] if self.linkctl else []),
             "link2": None if not self.tnc2 else {"kind": self.tnc2.kind, "error": self.tnc2.error,
                                                   "rx": self.tnc2.rx_count, "tx": self.tnc2.tx_count},

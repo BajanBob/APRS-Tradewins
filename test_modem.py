@@ -12,6 +12,8 @@ import numpy as np  # noqa: E402
 
 import afsk  # noqa: E402
 import digi  # noqa: E402
+import dxmode  # noqa: E402
+import fx25  # noqa: E402
 import tnc  # noqa: E402
 import vhf_prop_aprs as eng  # noqa: E402
 
@@ -975,7 +977,86 @@ def test_digipeater():
     src, dst, path, info = d.consider("8P6ZZ>APRS,WIDE1-1,WIDE2-1:c") or (None,) * 4
     line = afsk.decode_ax25(afsk.encode_ax25(src, dst, path, info)[:-2])
     assert line == "8P6ZZ>APRS,8P5AB-10*,WIDE1*,WIDE2-1:c", line
+    # wide-area mode: WIDE2-n counted down, never more than 2 hops
+    w = lambda l: digi.plan(l, me, mode="wide")[0]
+    assert w("X>APRS,WIDE2-2:a")[2] == ["8P5AB-10*", "WIDE2-1"]
+    assert w("X>APRS,WIDE2-1:a")[2] == ["8P5AB-10*", "WIDE2*"]
+    assert w("X>APRS,D1*,WIDE1*,WIDE2-1:a")[2] == ["D1*", "WIDE1*", "8P5AB-10*", "WIDE2*"]
+    for bad in ("X>APRS,WIDE2-3:a", "X>APRS,WIDE3-3:a", "X>APRS,D1*,WIDE1*,WIDE2-2:a"):
+        assert w(bad) is None, bad
+    assert digi.plan("X>APRS,WIDE2-1:a", me, mode="fill")[0] is None, "fill-in ignores WIDE2"
     print("digipeater ok")
+    test_weak_signal()
+    test_dx_mode()
+
+
+def test_weak_signal():
+    """FX.25, bit repair and the parallel decoders; Robust DX loopback in deep noise and off frequency."""
+    import random
+    random.seed(5)
+    for n, k in ((255, 239), (48, 32), (80, 64)):
+        data = bytes(random.randrange(256) for _ in range(k))
+        cw = bytearray(data + fx25.rs_encode(data, n - k))
+        for p in random.sample(range(n), (n - k) // 2):
+            cw[p] ^= random.randrange(1, 256)
+        assert fx25.rs_decode(bytes(cw), n - k) == (data, (n - k) // 2), f"RS({n},{k})"
+    frame = afsk.encode_ax25("8P6XX-9", "APRS", ["WIDE1-1"], "!1306.25N/05937.50W>FX.25 test")
+    # FX.25 frame with burst damage inside the codeblock: the plain decoder fails, FX.25 repairs it
+    a = afsk.modulate(frame, 48000, 200, 30, 0.5, "1200", fx25=True)
+    a = np.concatenate([np.zeros(800), a, np.zeros(1500)])
+    mid = len(a) // 2
+    a[mid:mid + 300] = 0.0                                     # a 6 ms drop-out (about 7 bits)
+    d = afsk.MultiDemodulator(48000)
+    got = []
+    for i in range(0, len(a), 4800):
+        got += d.process(a[i:i + 4800])
+    assert frame[:-2] in got and d.fx25_decoded >= 1, "FX.25 repair"
+    # bit repair: one flipped data bit
+    bits = [(b >> k) & 1 for b in frame for k in range(8)]
+    bits[100] ^= 1
+    assert afsk.fix_frame(bits) == frame[:-2], "single-bit repair"
+    # Robust DX at -12 dB SNR (2.5 kHz), 150 Hz off frequency
+    rng = np.random.default_rng(7)
+    payload = b"8P5AB-10>APTWDX:!1306.25N/05937.50W- Robust DX test"
+    rate = 8000
+    x = afsk.robust_modulate(payload, rate, 0.5, 300, modem="robust_dx").astype(float)
+    n = len(x)
+    A = np.fft.fft(x)
+    h = np.zeros(n)
+    h[0] = 1
+    h[1:(n + 1) // 2] = 2
+    x = np.real(np.fft.ifft(A * h) * np.exp(2j * np.pi * 150.0 * np.arange(n) / rate))
+    noise = 0.125 / (10 ** (-12 / 10)) * (rate / 2) / 2500.0
+    x = x + rng.normal(0, noise ** 0.5, n)
+    rd = afsk.RobustDemodulator(rate, "robust_dx")
+    out = []
+    for i in range(0, n, 4000):
+        out += rd.process(x[i:i + 4000])
+    out += rd.process(np.zeros(8000))
+    assert payload in out, "Robust DX at -12 dB, 150 Hz off"
+    print("weak-signal modem ok")
+
+
+def test_dx_mode():
+    me = (13.104, -59.625)                                      # GK03ec
+    t = {x["name"]: x for x in dxmode.targets_from(me, my_height_m=340)}
+    assert 165 <= t["St Vincent"]["km"] <= 185 and 265 <= t["St Vincent"]["bearing"] <= 280, t["St Vincent"]
+    assert t["St Vincent"]["path"].startswith("line of sight") and t["Trinidad"]["path"].startswith("beyond"), t
+    class Spot:
+        def __init__(self, tg, rg, km):
+            self.tx_grid, self.rx_grid, self.km, self.band, self.mode, self.snr, self.tx, self.rx = tg, rg, km, "2m", "FT8", -12, "8P6AA", "J88BB"
+    op = dxmode.openings([Spot("GK03ec", "FK93hd", 175)], me, list(t.values()))  # Barbados <-> St Vincent
+    assert "St Vincent" in op and op["St Vincent"]["kind"] == "direct", op
+    assert dxmode.openings([Spot("GK03ec", "GK03fd", 15)], me, list(t.values())) == {}
+    assert dxmode.dx_beacon_text(t["St Lucia"], {"call": "8P5AB-10", "modem": "robust_dx"}, "144.150USB").startswith(">DX open St Lucia")
+    # CAT: Robust modes tune the radio in USB data mode
+    ic = tnc.CivPTT("COMx", 9600, "7C")
+    ic.ser = FakeIcom()
+    tr = tnc.SoundModemTNC(ptt=ic, tune_hz=144_150_000, modem="robust_dx")
+    assert tr.tune(144_150_000) and ic.ser.mode == [0x01, 0x01] and "USB" in tr.cat_status, tr.cat_status
+    assert tnc.dx_freq_hz({"dx_freq": "144.150"}) == 144_150_000 and tnc.dx_freq_hz({"dx_freq": "145.9"}) == 145_900_000
+    assert tnc.dx_freq_hz({"dx_freq": "100.0"}) is None
+    print("DX mode ok")
 
 
 if __name__ == "__main__":

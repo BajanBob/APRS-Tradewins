@@ -156,12 +156,13 @@ class RigctldPTT(PTT):
                 "mode": m[0] if m and not m[0].startswith("RPRT") else None,
                 "pb": m[1] if len(m) > 1 and m[1].lstrip("-").isdigit() else "0"}
 
-    def tune(self, hz):
+    def tune(self, hz, mode="fm"):
         r = self._ask(f"F {int(hz)}")
         if "RPRT -" in r:
             raise IOError(f"rigctld refused frequency ({r.strip()})")
-        if "RPRT -" in self._ask("M PKTFM 0"):      # FM data mode if the radio has one
-            self._ask("M FM 0")
+        data, plain = ("PKTUSB", "USB") if mode == "usb" else ("PKTFM", "FM")
+        if "RPRT -" in self._ask(f"M {data} 0"):      # data mode if the radio has one
+            self._ask(f"M {plain} 0")
 
     def restore(self, st):
         if st.get("hz"):
@@ -279,13 +280,13 @@ class CivPTT(_CatSerialPTT):
             st["data"] = list(r[2:])
         return st
 
-    def tune(self, hz):
+    def tune(self, hz, mode="fm"):
         r = self._ask([0x05] + list(hz_to_civ_bcd(hz)))
         if r != b"\xFB":
             raise IOError("radio did not accept the frequency (check CI-V address and baud rate)"
                           if r is None else "radio refused the frequency - is it in this radio's range?")
-        self._ask([0x06, 0x05, 0x01])                 # FM, filter 1
-        if self._ask([0x1A, 0x06, 0x01, 0x01]) != b"\xFB":   # DATA mode on (FM-D)
+        self._ask([0x06, 0x01 if mode == "usb" else 0x05, 0x01])   # USB or FM, filter 1
+        if self._ask([0x1A, 0x06, 0x01, 0x01]) != b"\xFB":   # DATA mode on (FM-D / USB-D)
             self._ask([0x1A, 0x06, 0x01])             # radios that take a single data byte
 
     def restore(self, st):
@@ -331,9 +332,9 @@ class YaesuCatPTT(_CatSerialPTT):
             st["mode"] = m[3]
         return st
 
-    def tune(self, hz):
+    def tune(self, hz, mode="fm"):
         self._ask(f"FA{int(hz):09d};")
-        self._ask("MD0A;")                            # DATA-FM
+        self._ask("MD0C;" if mode == "usb" else "MD0A;")   # DATA-USB or DATA-FM
         f = self._ask("FA;", True)
         if f and f.startswith("FA") and f[2:-1].isdigit() and int(f[2:-1]) != int(hz):
             raise IOError(f"radio is on {int(f[2:-1]) / 1e6:.4f} MHz, not {hz / 1e6:.4f} MHz")
@@ -359,6 +360,19 @@ APRS_FREQS = [
     ("144.575", "144.575 (New Zealand)"),
     ("145.825", "145.825 (ISS digipeater)"),
 ]
+
+
+DX_BANDS_MHZ = [(1.8, 2.0), (3.5, 4.0), (5.3, 5.41), (7.0, 7.3), (10.1, 10.15), (14.0, 14.35), (18.068, 18.168),
+                (21.0, 21.45), (24.89, 24.99), (28.0, 29.7), (50.0, 54.0), (144.0, 148.0), (420.0, 450.0)]
+
+
+def dx_freq_hz(cfg):
+    """Dial frequency (USB) for the Robust modes: an amateur band from 160 m to 70 cm, or None if invalid."""
+    try:
+        mhz = float(str(cfg.get("dx_freq") or "144.150").replace(",", "."))
+    except ValueError:
+        return None
+    return int(round(mhz * 1e6)) if any(lo <= mhz <= hi for lo, hi in DX_BANDS_MHZ) else None
 
 
 def aprs_freq_hz(cfg):
@@ -440,7 +454,7 @@ class BaseTNC:
 AIRTIME_WINDOW_S = 600       # this station may transmit at most...
 AIRTIME_PCT = 10             # ...10% of any 10 minutes (60 s) on VHF/UHF packet
 AIRTIME_PCT_ROBUST = 25      # Robust HF: one message takes 12-45 s, so 25% (150 s) there
-PTT_MAX_S = {"1200": 10, "300": 20, "robust": 50}   # longest single transmission (watchdog)
+PTT_MAX_S = {"1200": 10, "300": 20, "robust": 50, "robust_dx": 100}   # longest single transmission (watchdog)
 
 
 class AirtimeGuard:
@@ -492,9 +506,10 @@ class SoundModemTNC(BaseTNC):
 
     def __init__(self, in_dev=None, out_dev=None, rate=48000, ptt=None,
                  txdelay=300, txtail=50, level=0.5, busy_hold=1.5,
-                 tune_hz=None, cat_restore=True, modem="1200"):
+                 tune_hz=None, cat_restore=True, modem="1200", fx25_tx=False, multi_decoder=True):
         super().__init__()
-        self.modem = modem if (modem in afsk.PROFILES or modem == "robust") else "1200"
+        self.modem = modem if (modem in afsk.PROFILES or afsk.is_robust(modem)) else "1200"
+        self.fx25_tx = bool(fx25_tx) and not afsk.is_robust(self.modem)
         self.in_dev, self.out_dev, self.rate = in_dev, out_dev, int(rate)
         self.ptt = ptt or PTT()
         self.txdelay, self.txtail, self.level = txdelay, txtail, level
@@ -502,8 +517,13 @@ class SoundModemTNC(BaseTNC):
         self.audio_level = 0.0
         self.noise_floor = None    # quietest recent audio level: the reference for carrier sense
         self.txq = queue.Queue()
-        self.demod = afsk.RobustDemodulator(self.rate) if self.modem == "robust" else afsk.Demodulator(self.rate, self.modem)
-        if self.modem == "robust":
+        if afsk.is_robust(self.modem):
+            self.demod = afsk.RobustDemodulator(self.rate, self.modem)
+        elif multi_decoder:
+            self.demod = afsk.MultiDemodulator(self.rate, self.modem)
+        else:
+            self.demod = afsk.Demodulator(self.rate, self.modem)
+        if afsk.is_robust(self.modem):
             self.airtime = AirtimeGuard(AIRTIME_PCT_ROBUST)
         self.tune_hz, self.cat_restore = tune_hz, cat_restore
         self.cat_saved = None
@@ -532,8 +552,9 @@ class SoundModemTNC(BaseTNC):
                         self.cat_saved = self.ptt.read_state() or None
                     except Exception:
                         self.cat_saved = None
-                self.ptt.tune(hz)
-                self.cat_status = f"tuned {hz / 1e6:.3f} MHz FM data"
+                usb = afsk.is_robust(self.modem) or self.modem == "300"
+                self.ptt.tune(hz, "usb" if usb else "fm")
+                self.cat_status = f"tuned {hz / 1e6:.3f} MHz {'USB' if usb else 'FM'} data"
                 return True
             except Exception as e:
                 self.cat_status = f"CAT tuning failed: {e}"
@@ -569,7 +590,7 @@ class SoundModemTNC(BaseTNC):
                     if self.tx_active:
                         continue  # don't decode our own transmission
                     for fr in self.demod.process(chunk):
-                        if self.modem == "robust":
+                        if afsk.is_robust(self.modem):
                             self._heard_text(fr)
                         else:
                             self._heard(fr)
@@ -597,12 +618,13 @@ class SoundModemTNC(BaseTNC):
                 self.txq.put(frame)
                 continue
             try:
-                if self.modem == "robust":
+                if afsk.is_robust(self.modem):
                     np = afsk.np
                     audio = np.concatenate([np.zeros(int(self.rate * self.txdelay / 1000), dtype=np.float32),
-                                            afsk.robust_modulate(frame, self.rate, self.level, lead_ms=50)])
+                                            afsk.robust_modulate(frame, self.rate, self.level, lead_ms=50, modem=self.modem)])
                 else:
-                    audio = afsk.modulate(frame, self.rate, self.txdelay, self.txtail, self.level, self.modem)
+                    audio = afsk.modulate(frame, self.rate, self.txdelay, self.txtail, self.level, self.modem,
+                                          fx25=self.fx25_tx)
             except Exception as e:
                 self.error = f"transmit: {e}"
                 continue
@@ -659,14 +681,14 @@ class SoundModemTNC(BaseTNC):
         self.error = "transmit watchdog: PTT forced off (transmission ran too long)"
 
     def send(self, src, dst, path, info):
-        if self.modem == "robust":         # robust frames carry the text line itself (no digipeating on HF)
+        if afsk.is_robust(self.modem):     # robust frames carry the text line itself (no digipeating on HF)
             self.txq.put(f"{src}>{dst}:{info}".encode("latin-1", "replace"))
         else:
             self.txq.put(afsk.encode_ax25(src, dst, path, info))
 
     def send_frame(self, frame_no_fcs):
         """Transmit a raw AX.25 frame from another app (KISS server)."""
-        if self.modem == "robust":
+        if afsk.is_robust(self.modem):
             raise IOError("KISS frames can't be sent in Robust mode")
         crc = afsk.crc16_x25(frame_no_fcs)
         self.txq.put(frame_no_fcs + bytes([crc & 0xFF, crc >> 8]))
@@ -696,6 +718,8 @@ class SoundModemTNC(BaseTNC):
     def status(self):
         d = super().status
         snr = getattr(self.demod, "last_snr", None)
+        d.update(fixed=getattr(self.demod, "fixed", 0), fx25=getattr(self.demod, "fx25_decoded", 0), fx25_tx=self.fx25_tx,
+                 decoders=len(getattr(self.demod, "demods", [])) or 1)
         d.update(audio_level=round(self.audio_level, 4), ptt=self.ptt.name, modem=self.modem,
                  snr=round(snr, 1) if snr is not None else None,
                  cat=self.cat_status, freq=self.tune_hz)
@@ -995,10 +1019,12 @@ def make_tnc(cfg):
                              cfg.get("sample_rate", 48000), make_ptt(cfg),
                              cfg.get("txdelay", 300), cfg.get("txtail", 50),
                              cfg.get("tx_level", 0.5),
-                             tune_hz=(com_freq_hz(cfg) if cfg.get("op_mode") == "commercial" else aprs_freq_hz(cfg))
+                             tune_hz=(com_freq_hz(cfg) if cfg.get("op_mode") == "commercial" else
+                                      dx_freq_hz(cfg) if afsk.is_robust(str(cfg.get("modem"))) else aprs_freq_hz(cfg))
                              if cfg.get("cat_tune") else None,
                              cat_restore=cfg.get("cat_restore", True),
-                             modem=str(cfg.get("modem") or "1200"))
+                             modem=str(cfg.get("modem") or "1200"),
+                             fx25_tx=bool(cfg.get("fx25_tx")), multi_decoder=cfg.get("multi_decoder", True))
     if mode == "kiss_tcp":
         host, _, port = (cfg.get("kiss_addr") or "127.0.0.1:8001").partition(":")
         return KissTcpTNC(host, port or 8001)

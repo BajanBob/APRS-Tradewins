@@ -12,6 +12,8 @@ the same job as a hardware TNC:
   decode_ax25()  -> frame bytes -> "SRC>DST,PATH:info" (TNC2 text)
 """
 
+import collections
+
 try:
     import numpy as np
 except ImportError:  # e.g. Android build: framing/KISS still work, the sound modem doesn't
@@ -127,13 +129,20 @@ def _need_numpy():
         raise RuntimeError("the sound modem needs numpy (pip install numpy)")
 
 
-def modulate(frame: bytes, rate=48000, txdelay_ms=300, txtail_ms=50, level=0.5, modem="1200"):
-    """AX.25 frame -> float32 mono audio (phase-continuous AFSK)."""
+def modulate(frame: bytes, rate=48000, txdelay_ms=300, txtail_ms=50, level=0.5, modem="1200", fx25=False):
+    """AX.25 frame -> float32 mono audio (phase-continuous AFSK).
+    fx25=True wraps the frame in FX.25 (Reed-Solomon, 16 check bytes): ordinary receivers still decode it."""
     _need_numpy()
     BAUD, MARK, SPACE = profile(modem)
     pre = max(1, int(txdelay_ms * BAUD / 8000))
     post = max(2, int(txtail_ms * BAUD / 8000))
-    bits = FLAG_BITS * pre + _frame_bits(frame) + FLAG_BITS * post
+    body = _frame_bits(frame)
+    if fx25:
+        import fx25 as fxmod
+        wrapped = fxmod.encode_bits(FLAG_BITS + body + FLAG_BITS)
+        bits = FLAG_BITS * pre + (wrapped if wrapped else FLAG_BITS + body) + FLAG_BITS * post
+    else:
+        bits = FLAG_BITS * pre + body + FLAG_BITS * post
     # NRZI: 0 -> change tone, 1 -> keep tone
     tones, cur = [], MARK
     for b in bits:
@@ -186,9 +195,19 @@ class Demodulator:
 
     PLL_GAIN = 0.2
 
-    def __init__(self, rate=48000, modem="1200"):
+    def __init__(self, rate=48000, modem="1200", space_gain=1.0, fix_bits=True, fx25_rx=True, pll_gain=None):
         _need_numpy()
         self.rate = rate
+        self.space_gain = space_gain          # tone balance: compensates radios' pre-/de-emphasis
+        self.fix_bits = fix_bits
+        self.fixed = 0                        # frames repaired by flipping 1-2 bits
+        if pll_gain is not None:
+            self.PLL_GAIN = pll_gain
+        if fx25_rx:
+            import fx25 as fxmod
+            self.fx = fxmod.Receiver()
+        else:
+            self.fx = None
         self.baud, self.mark, self.space = profile(modem)
         self.sps = rate / self.baud
         self.n = int(round(self.sps))
@@ -224,7 +243,7 @@ class Demodulator:
             im = np.convolve(x * np.sin(w * f * idx), k, "valid")
             return np.sqrt(re * re + im * im)
 
-        levels = (mag(self.mark) > mag(self.space)).tolist()
+        levels = (mag(self.mark) > self.space_gain * mag(self.space)).tolist()
         # Digital PLL: sample each bit when the phase wraps; nudge the phase so
         # level transitions fall half-way between samples.
         step, gain = 1.0 / self.sps, self.PLL_GAIN
@@ -236,7 +255,12 @@ class Demodulator:
             pll += step
             if pll >= 1.0:
                 pll -= 1.0
-                self._hdlc(1 if lv == prev else 0)   # NRZI: no change -> 1
+                bit = 1 if lv == prev else 0          # NRZI: no change -> 1
+                self._hdlc(bit)
+                if self.fx is not None:
+                    fr = self.fx.feed(bit)
+                    if fr:
+                        self.frames.append(fr)
                 prev = lv
         self.pll, self.level, self.prev_sym = pll, last, prev
         out, self.frames = self.frames, []
@@ -265,6 +289,105 @@ class Demodulator:
         body, fcs = by[:-2], by[-2] | (by[-1] << 8)
         if crc16_x25(body) == fcs:
             self.frames.append(body)
+        elif self.fix_bits:
+            fixed = fix_frame(bits)
+            if fixed is not None:
+                self.fixed += 1
+                self.frames.append(fixed)
+
+
+# --------------------------------------------------------------------------
+# Bit repair: a frame that fails the FCS is retried with 1 bit, or 2 adjacent bits
+# (one wrong tone in NRZI), flipped. CRC-16 is linear, so instead of re-checking every
+# flip we compare the frame's syndrome with a table of single-bit syndromes.
+# A repaired frame must also be a valid AX.25 UI packet, which keeps false repairs rare.
+# --------------------------------------------------------------------------
+_FIX_MAX_BITS = 8 * 340
+_SYN = []                                    # syndrome of a single 1 followed by d zero bits
+
+
+def _syndromes():
+    if not _SYN:
+        reg = 0x8408
+        for _ in range(_FIX_MAX_BITS):
+            _SYN.append(reg)
+            reg = (reg >> 1) ^ 0x8408 if reg & 1 else reg >> 1
+    return _SYN
+
+
+def _residue(data: bytes) -> int:
+    crc = 0xFFFF
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0x8408 if crc & 1 else crc >> 1
+    return crc
+
+
+def fix_frame(bits):
+    """Data bits of body + FCS (LSB first per byte) -> repaired body, or None."""
+    n = len(bits)
+    if n > _FIX_MAX_BITS or n < 8 * 18 or n % 8:
+        return None
+    syn = _syndromes()
+    by = bytearray(sum(bits[i + k] << k for k in range(8)) for i in range(0, n, 8))
+    s = _residue(bytes(by)) ^ 0xF0B8          # 0xF0B8 = residue of a good frame
+    cands = []
+    for d in range(n):
+        if syn[d] == s:
+            cands.append((n - 1 - d,))
+        if d + 1 < n and syn[d] ^ syn[d + 1] == s:
+            cands.append((n - 2 - d, n - 1 - d))
+    for pos in cands:
+        trial = bytearray(by)
+        for j in pos:
+            trial[j // 8] ^= 1 << (j % 8)
+        body, fcs = bytes(trial[:-2]), trial[-2] | (trial[-1] << 8)
+        if crc16_x25(body) == fcs and decode_ax25(body):
+            return body
+    return None
+
+
+class MultiDemodulator:
+    """Several demodulators on the same audio, each with a different tone balance and clock-recovery gain
+    (radios differ in pre-/de-emphasis), plus bit repair and FX.25. A packet any of them decodes counts once."""
+
+    VARIANTS = [(1.0, 0.2), (0.5, 0.2), (2.0, 0.2), (1.0, 0.1)]
+
+    def __init__(self, rate=48000, modem="1200", fx25_rx=True, fix_bits=True):
+        self.demods = [Demodulator(rate, modem, space_gain=g, pll_gain=p, fix_bits=fix_bits,
+                                   fx25_rx=(fx25_rx and i == 0)) for i, (g, p) in enumerate(self.VARIANTS)]
+        self.recent = collections.OrderedDict()   # frame -> chunk number when last delivered
+        self.chunk = 0
+        self.decoded = 0
+
+    @property
+    def fixed(self):
+        return sum(d.fixed for d in self.demods)
+
+    @property
+    def fx25_decoded(self):
+        return sum(d.fx.decoded for d in self.demods if d.fx)
+
+    @property
+    def energy(self):
+        return self.demods[0].energy
+
+    def process(self, samples):
+        self.chunk += 1
+        out = []
+        for d in self.demods:
+            for fr in d.process(samples):
+                last = self.recent.get(fr)
+                if last is not None and self.chunk - last < 30:     # same packet from another decoder
+                    continue
+                self.recent[fr] = self.chunk
+                self.recent.move_to_end(fr)
+                out.append(fr)
+                self.decoded += 1
+        while len(self.recent) > 200:
+            self.recent.popitem(last=False)
+        return out
 
 
 # ==========================================================================
@@ -289,6 +412,15 @@ R_HDR = 4                          # size-class symbols after the preamble
 _G1, _G2 = 0o171, 0o133            # K=7 code polynomials
 _GRAY = [0, 1, 3, 2, 6, 7, 5, 4]   # 3 bits -> tone index (Gray coded)
 _IGRAY = [_GRAY.index(i) for i in range(8)]
+# Robust profiles. "robust_dx" = Robust DX (SSB APRS for 2 m / 70 cm DX and weak HF paths): half the symbol
+# rate (15.625 baud, tones 15.625 Hz apart, 125 Hz wide) for about 3 dB more sensitivity, and a wider
+# tuning search (+/- 300 Hz) for VHF SSB radios that are a little off frequency.
+ROBUST = {"robust": {"baud": 31.25, "base": 1375.0, "max_off": 6.5},
+          "robust_dx": {"baud": 15.625, "base": 1437.5, "max_off": 19.5}}
+
+
+def is_robust(modem):
+    return modem in ROBUST
 
 
 def _conv_encode(bits):
@@ -376,13 +508,14 @@ def _nsyms(cls):
     return (nb + (-nb) % 3) // 3
 
 
-def robust_modulate(payload: bytes, rate=48000, level=0.5, lead_ms=200):
+def robust_modulate(payload: bytes, rate=48000, level=0.5, lead_ms=200, modem="robust"):
     """Payload bytes -> float32 audio (continuous-phase 8-FSK)."""
     _need_numpy()
+    P = ROBUST[modem]
     syms = _frame_symbols(payload)
-    sps = rate / R_BAUD
+    sps = rate / P["baud"]
     edges = np.round(np.arange(len(syms) + 1) * sps).astype(int)
-    freq = np.repeat(R_BASE + np.array(syms) * R_BAUD, np.diff(edges))
+    freq = np.repeat(P["base"] + np.array(syms) * P["baud"], np.diff(edges))
     phase = 2 * np.pi * np.cumsum(freq) / rate
     audio = level * np.sin(phase)
     f = int(rate * 0.01)
@@ -399,9 +532,12 @@ class RobustDemodulator:
     MAX_OFF = 6.5                     # +/- tone spacings of tuning error searched (~200 Hz)
     THRESH = 5.0                      # preamble score threshold (noise ~2, strong ~14)
 
-    def __init__(self, rate=48000):
+    def __init__(self, rate=48000, modem="robust"):
         _need_numpy()
         self.rate = rate
+        P = ROBUST[modem]
+        self.BAUD, self.BASE, self.MAX_OFF = P["baud"], P["base"], P["max_off"]
+        self.N = int(R_RATE / self.BAUD)  # samples per symbol at the internal rate
         self.buf = np.zeros(0)
         self.pending = np.zeros(0)
         self.lp = _bandpass(rate, 50.0, 3200.0, taps=(int(rate / 400) | 1)) if rate != R_RATE else None
@@ -431,7 +567,7 @@ class RobustDemodulator:
     def process(self, samples):
         x = self._to_internal(samples)
         self.buf = np.concatenate([self.buf, x])
-        maxlen = (len(R_COSTAS) + R_HDR + _nsyms(len(R_CLASSES) - 1) + 40) * R_N
+        maxlen = (len(R_COSTAS) + R_HDR + _nsyms(len(R_CLASSES) - 1) + 40) * self.N
         if len(self.buf) > maxlen + R_RATE * 5:
             cut = len(self.buf) - maxlen
             self.buf, self.base = self.buf[cut:], self.base + cut
@@ -440,18 +576,18 @@ class RobustDemodulator:
     def _search(self):
         frames = []
         pre = len(R_COSTAS) + R_HDR
-        need_min = (pre + _nsyms(0)) * R_N
+        need_min = (pre + _nsyms(0)) * self.N
         if len(self.buf) < need_min:
             return frames
-        hop = R_N // 8
-        nstart = (len(self.buf) - pre * R_N) // hop
+        hop = self.N // 8
+        nstart = (len(self.buf) - pre * self.N) // hop
         if nstart <= 0:
             return frames
         starts = np.arange(nstart) * hop
         # power for every hop position, half-bin grid
-        win = np.lib.stride_tricks.sliding_window_view(self.buf, R_N)[::hop]
-        sp = np.abs(np.fft.rfft(win, 2 * R_N, axis=1)) ** 2
-        k0 = int(round(R_BASE / (R_BAUD / 2)))        # half-bin index of tone 0
+        win = np.lib.stride_tricks.sliding_window_view(self.buf, self.N)[::hop]
+        sp = np.abs(np.fft.rfft(win, 2 * self.N, axis=1)) ** 2
+        k0 = int(round(self.BASE / (self.BAUD / 2)))        # half-bin index of tone 0
         offs = np.arange(-int(self.MAX_OFF * 2), int(self.MAX_OFF * 2) + 1)
         best = []
         nsym_pos = np.arange(len(R_COSTAS)) * 8        # symbol step = 8 hops
@@ -482,12 +618,12 @@ class RobustDemodulator:
                 break
             st = int(starts[i])
             absst = self.base + st
-            if any(abs(absst - u) < R_N * 4 for u in used) or absst < self.done_until:
+            if any(abs(absst - u) < self.N * 4 for u in used) or absst < self.done_until:
                 continue
             res = self._decode(st, off)
             if res == "wait":
                 continue
-            key = (absst // (R_N // 2), off)
+            key = (absst // (self.N // 2), off)
             if res is None:
                 if key not in self.tried:
                     self.tried.add(key)
@@ -502,15 +638,15 @@ class RobustDemodulator:
 
     def _sym_energy(self, start, nsym, off):
         """Energy of the 8 tones for nsym symbols, refining timing by +/- 1/16 symbol."""
-        k0 = int(round(R_BASE / (R_BAUD / 2))) + off
+        k0 = int(round(self.BASE / (self.BAUD / 2))) + off
         cols = k0 + np.arange(R_TONES) * 2
         best = None
-        for dt in (-R_N // 16, 0, R_N // 16):
+        for dt in (-self.N // 16, 0, self.N // 16):
             s0 = start + dt
-            if s0 < 0 or s0 + nsym * R_N > len(self.buf):
+            if s0 < 0 or s0 + nsym * self.N > len(self.buf):
                 continue
-            seg = self.buf[s0:s0 + nsym * R_N].reshape(nsym, R_N)
-            sp = np.abs(np.fft.rfft(seg, 2 * R_N, axis=1)) ** 2
+            seg = self.buf[s0:s0 + nsym * self.N].reshape(nsym, self.N)
+            sp = np.abs(np.fft.rfft(seg, 2 * self.N, axis=1)) ** 2
             E = sp[:, cols]
             q = E.max(1).sum()
             if best is None or q > best[0]:
@@ -520,7 +656,7 @@ class RobustDemodulator:
 
     def _decode(self, st, off):
         pre = len(R_COSTAS)
-        hdr = self._sym_energy(st + pre * R_N, R_HDR, off)
+        hdr = self._sym_energy(st + pre * self.N, R_HDR, off)
         if hdr is None:
             return "wait"
         Eh = hdr[1].sum(0)
@@ -529,9 +665,9 @@ class RobustDemodulator:
             return None
         cls = (cls_tone - 1) // 2
         nd = _nsyms(cls)
-        if st + (pre + R_HDR + nd) * R_N + R_N // 16 > len(self.buf):
+        if st + (pre + R_HDR + nd) * self.N + self.N // 16 > len(self.buf):
             return "wait"
-        got = self._sym_energy(st + (pre + R_HDR) * R_N, nd, off)
+        got = self._sym_energy(st + (pre + R_HDR) * self.N, nd, off)
         if got is None:
             return "wait"
         _, E, noise, s0 = got
@@ -556,6 +692,6 @@ class RobustDemodulator:
         if n > len(body) - 3:
             return None
         sig = float(np.mean(E.max(1)))
-        self.last_snr = 10 * np.log10(max(sig / noise - 1, 1e-3) * (R_BAUD / 2500.0) * 2) if noise > 0 else None
-        end = s0 + nd * R_N
+        self.last_snr = 10 * np.log10(max(sig / noise - 1, 1e-3) * (self.BAUD / 2500.0) * 2) if noise > 0 else None
+        end = s0 + nd * self.N
         return body[1:1 + n], end

@@ -164,7 +164,7 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
   font-size:13px;padding:10px 12px;border:1px solid #000;box-shadow:0 2px 10px rgba(0,0,0,.8) inset}
 .mon div{white-space:pre-wrap;word-break:break-all;line-height:1.45}
 .mon .t{color:var(--mon-dim)}
-.mon .k-TX{color:#ffd27a}.mon .k-ERR{color:#ff7b70}.mon .k-PROP{color:#7fd8ff}.mon .k-SYS{color:#b9c2cb}.mon .k-IGT{color:#c7a6ff}.mon .k-DIG{color:#9fe870}.mon .k-WX{color:#8ef0e0}.mon .k-MSG{color:#7dd3fc}
+.mon .k-TX{color:#ffd27a}.mon .k-ERR{color:#ff7b70}.mon .k-PROP{color:#7fd8ff}.mon .k-SYS{color:#b9c2cb}.mon .k-IGT{color:#c7a6ff}.mon .k-DIG{color:#9fe870}.mon .k-DX{color:#ffb35c}.mon .k-WX{color:#8ef0e0}.mon .k-MSG{color:#7dd3fc}
 .missed{margin-top:18px;border-radius:10px;border:1px solid #6b4a12;background:linear-gradient(180deg,#2a1d08,#1c1407);
   padding:14px 16px;box-shadow:0 0 0 1px rgba(255,181,71,.15) inset}
 .missed.hide{display:none}
@@ -675,7 +675,11 @@ details.more summary::-webkit-details-marker{display:none}
           <option value="1200">1200 baud AFSK - VHF/UHF FM (APRS)</option>
           <option value="300">300 baud AFSK - HF SSB (USB, 1600/1800 Hz)</option>
           <option value="robust">Tradewind Robust - HF weak signal, down to about -12 dB (8-FSK, ~44 bit/s)</option>
+          <option value="robust_dx">Tradewind Robust DX - SSB APRS for 2 m / 70 cm DX and weak HF, down to about -14 dB (~22 bit/s)</option>
         </select></div>
+      <div class="set m-sound"><label>Robust / DX dial frequency (MHz, USB)</label><input class="inset" data-k="dx_freq" placeholder="144.150" inputmode="decimal"></div>
+      <div class="set wide m-sound"><label class="chk"><input type="checkbox" data-k="multi_decoder"> Weak-signal decoding: 4 decoders in parallel + bit repair + FX.25 receive (1200 / 300 baud)</label></div>
+      <div class="set wide m-sound"><label class="chk"><input type="checkbox" data-k="fx25_tx"> Send FX.25 (error-corrected; ordinary APRS radios still decode it)</label></div>
       <div class="set m-sound"><label>Audio input (from radio)</label><select class="inset" data-k="audio_in" id="f-ain"></select></div>
       <div class="set m-sound"><label>Audio output (to radio)</label><select class="inset" data-k="audio_out" id="f-aout"></select></div>
       <div class="set m-sound"><label>Sample rate</label>
@@ -712,7 +716,10 @@ details.more summary::-webkit-details-marker{display:none}
       <div class="set m-kissrv"><label class="chk"><input type="checkbox" data-k="kiss_server"> KISS TNC server: let other APRS apps (Xastir, YAAC, APRSIS32) use this modem</label></div>
       <div class="set m-kissrv"><label>KISS server port</label><input class="inset" data-k="kiss_server_port" data-num type="number" min="1024" max="65535"></div>
       <div class="set m-kissrv"><label class="chk"><input type="checkbox" data-k="kiss_server_lan"> Allow other computers on my network (KISS has no password - trusted networks only)</label></div>
-      <div class="set wide"><label class="chk"><input type="checkbox" data-k="digi"> Fill-in digipeater: repeat nearby packets whose first hop is WIDE1-1 (VHF/UHF 1200 baud)</label></div>
+      <div class="set wide"><label class="chk"><input type="checkbox" data-k="digi"> Digipeater (VHF/UHF 1200 baud)</label></div>
+      <div class="set"><label>Digipeater type</label><select class="inset" data-k="digi_mode">
+        <option value="fill">Fill-in: WIDE1-1 only (other digipeaters nearby)</option>
+        <option value="wide">Wide-area: WIDE1-1, WIDE2-1, WIDE2-2 (high site, sparse area)</option></select></div>
       <div class="set"><label>Digipeater alias (optional)</label><input class="inset" data-k="digi_alias" placeholder="e.g. BARBADOS" maxlength="9" autocomplete="off"></div>
       <div class="set"><label>Digipeater limit (packets a minute)</label><input class="inset" data-k="digi_max_per_min" data-num type="number" min="1" max="60"></div>
       <div class="set wide note" id="digi-note">Fill-in digipeater off.</div>
@@ -1033,6 +1040,15 @@ details.more summary::-webkit-details-marker{display:none}
       <label class="chk" style="margin:0 0 8px"><input type="checkbox" id="wolf-auto"> Auto-call on 2m RF when the path is open (once a day per station, STOP honoured)</label>
       <div class="note" id="wolf-note"></div>
       <div id="wolf-list"><div class="chat-empty">Turn Wolf Mode on. After the next propagation check, DX stations working 2 m / 70 cm appear here; those also active on APRS can be pinged.</div></div>
+    </details>
+    <details class="heard" id="dx-box">
+      <summary>APRS DX - ISLANDS <span id="dx-n"></span></summary>
+      <label class="chk" style="margin:8px 0"><input type="checkbox" data-k="dx_enabled" id="dx-on"> Watch for 2 m / 70 cm openings to the islands (after each propagation check)</label>
+      <label class="chk" style="margin:0 0 8px"><input type="checkbox" data-k="dx_auto_beacon" id="dx-auto"> Send a DX beacon when an island opens (at most once an hour per island)</label>
+      <div class="more-row"><label>Antenna height above sea level (m)<input class="inset" data-k="dx_height_m" data-num type="number" min="0" max="3000" style="width:7em"></label>
+        <label>DX path (blank = direct)<input class="inset" data-k="dx_path" placeholder="" style="width:9em"></label></div>
+      <div class="note">For DX beyond the horizon use <b>Robust DX</b> (MENU &gt; RADIO / TNC &gt; Modem) on 2 m USB, with a yagi on the beam heading below. When 2 m is closed, the same mode on 30 m or 40 m (USB) reaches all the islands.</div>
+      <div id="dx-list"><div class="chat-empty">Turn DX watch on. The islands, their distance and beam heading from your grid square appear here, marked OPEN when PSKReporter shows the band open in that direction.</div></div>
     </details>
     <details class="heard" id="relay-box">
       <summary>SEND THROUGH A RELAY STATION</summary>
@@ -1722,9 +1738,16 @@ async function poll(){
     prevTc = s.tc.seq;
   }
   const now = Date.now()/1000, t = s.tnc;
+  const DX = s.dx, dxl = document.getElementById('dx-list');
+  if (DX && dxl) {
+    const nopen = DX.targets.filter(t=>t.open).length;
+    document.getElementById('dx-n').textContent = nopen ? `(${nopen} OPEN)` : '';
+    dxl.innerHTML = DX.targets.length ? DX.targets.map(t=>`<div class="wolf-row"><span><b>${esc(t.name)}</b> ${t.open ? '<b style="color:#46e0b4">OPEN</b>' : ''}<br><span class="sm">${Number(t.km).toLocaleString()} km · beam ${t.bearing}° ${t.compass} · ${esc(t.path)}${t.evidence ? ' · ' + esc(t.evidence.tx) + '›' + esc(t.evidence.rx) + ' ' + t.evidence.km + ' km ' + esc(t.evidence.mode) + ' (' + esc(t.evidence.kind) + ')' : ''}</span></span></div>`).join('')
+      : '<div class="chat-empty">Set your grid square (MENU &gt; STATION) to see the islands.</div>';
+  }
   const dg = s.digi, dn = document.getElementById('digi-note');
   if (dn) dn.textContent = !dg ? (cfg.digi ? 'Fill-in digipeater: starts with the station.' : 'Fill-in digipeater off.')
-    : `Fill-in digipeater ON: ${dg.count} repeated, ${dg.skipped} skipped (duplicates / limit), ${dg.per_min}/${dg.max_per_min} this minute${dg.last ? ' · last: ' + dg.last.slice(0, 80) : ''}`;
+    : `${dg.mode === 'wide' ? 'Wide-area' : 'Fill-in'} digipeater ON: ${dg.count} repeated, ${dg.skipped} skipped (duplicates / limit), ${dg.per_min}/${dg.max_per_min} this minute${dg.last ? ' · last: ' + dg.last.slice(0, 80) : ''}`;
   $('#l-tnc').textContent = !running ? 'OFF' : (t ? (t.kind==='Sound modem'?'SOUND':t.kind==='APRS-IS only'?'NONE':t.kind.toUpperCase()) : '---');
   const lvl = t && t.audio_level ? Math.min(8, Math.round(Math.sqrt(t.audio_level)*16)) : 0;
   $('#meter').innerHTML = (t && t.kind==='Sound modem') ? Array.from({length:8},(_,i)=>`<i class="${i<lvl?'on':''}"></i>`).join('') : '';
@@ -2491,6 +2514,11 @@ const HELP = {
   digi:'A fill-in digipeater helps hand-held and mobile stations the wide-area digipeaters cannot hear. Tradewind repeats a packet once when its first hop is WIDE1-1 (or your callsign / alias), adds your callsign to the path, and skips its own packets, duplicates within 30 s and internet traffic. Your callsign must be licensed to run an unattended digipeater where you operate.',
   digi_alias:'An extra name stations can put in their path to go through you, e.g. BARBADOS. Leave blank to answer only WIDE1-1 and your callsign.',
   digi_max_per_min:'The most packets the digipeater repeats in any minute (the 10%-of-airtime limit still applies).',
+  digi_mode:'Fill-in: only WIDE1-1 as the first hop, for areas that already have wide-area digipeaters. Wide-area: also WIDE2-1 and WIDE2-2 (never more than 2 hops) - for a high site serving a whole island that has no other digipeater.',
+  multi_decoder:'Runs four 1200-baud decoders with different tone balance and clock tracking on the same audio, repairs packets with one or two bad bits, and decodes FX.25. In tests this gains about 1 dB, and about 2 dB with FX.25.',
+  fx25_tx:'Adds 16 Reed-Solomon check bytes in front of a normal APRS packet. Stations with FX.25 (Tradewind, Direwolf) can repair errors; ordinary APRS radios still decode the packet as usual. Makes each packet about 0.15 s longer.',
+  dx_freq:'USB dial frequency for Tradewind Robust and Robust DX. 2 m weak-signal segment, e.g. 144.150 - agree one with the stations on the other islands. HF: e.g. 10.142 (30 m) or 7.105 (40 m).',
+  dx_height_m:'Height of your antenna above sea level, used for the line-of-sight estimate to each island\'s high ground.',
   igate_tx:'Messages from the internet for stations your radio hears locally are passed on to them on RF, as a standard iGate does. Limited to 30 an hour.',
   kiss_server:'Other APRS programs on this computer can connect to Tradewind on this port as if it were a hardware TNC. Packets they send must use your callsign.',
   sdr_gain:'Leave blank for automatic gain. Try 30-40 dB if the SDR hears too little or too much noise.',

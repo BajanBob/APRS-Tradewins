@@ -21,6 +21,8 @@ import json
 import os
 import sys
 import re
+import shutil
+import subprocess
 import threading
 import time
 import webbrowser
@@ -30,12 +32,13 @@ import afsk
 import digi as digimod
 import dxmode
 import iss as issmod
+import satrx
 import tnc as tncmod
 import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.15"
+APP_VERSION = "3.16"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -54,6 +57,7 @@ CONF_PATH = os.path.join(CONF_DIR, "config.json")
 STATE_PATH = os.path.join(CONF_DIR, "announce_state.json")
 HISTORY_PATH = os.path.join(CONF_DIR, "opening_history.json")
 CHAT_DIR = os.path.join(CONF_DIR, "chat")         # saved chats + comms log (per callsign / unit)
+RX_DIR = os.path.join(CONF_DIR, "received")       # v3.16 satellite pictures, video and telemetry
 CACHE_DIR = os.path.join(CONF_DIR, "cache")       # map library + map tiles, for use with no internet
 VENDOR = {"leaflet.js": ("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js", "application/javascript"),
           "leaflet.css": ("https://unpkg.com/leaflet@1.9.4/dist/leaflet.css", "text/css")}
@@ -228,6 +232,10 @@ DEFAULTS = {
     "iss_enabled": False, "iss_auto_beacon": False, "iss_min_el": 0, "iss_path": "ARISS",
     "iss_comment": "Tradewind via ISS", "iss_tune": True,
     "sat_catnr": 25544, "sat_freq": "145.825", "n2yo_key": "",
+    # v3.16 satellite receivers: what the radio does on a pass, and the SDR receivers run on their own
+    "sat_rx": "iss_aprs", "sat_doppler": True, "rx_keep_wav": False,
+    "rx_jobs": [], "sdr_source": "rtlsdr", "sdr_gain_db": 40, "geo_min_el": 5,
+    "hamtv_lo_mhz": 0, "hamtv_cmd": "",
     "sdr_gain": "", "sdr_ppm": 0, "sdr_index": 0,                             # RTL-SDR receive
     "window": 60, "interval": 10, "min_km": 800, "min_paths": 2,
     "strong_km": 1500, "repeat": 30, "announce_close": False, "group": "VHF",
@@ -663,6 +671,18 @@ class Station:
         self.iss_sources = {}         # each source: status, age, distance from the chosen one
         self.iss_cat = None           # satellite (NORAD number) the data above is for
         self.iss_switch_aos = None    # pass the radio was switched for
+        self.rx_rec = None            # v3.16 PassRecorder while a pass is being recorded
+        self.rx_rec_info = None       # (receiver, sat name, wav path)
+        self.rx_tuned_hz = 0          # where the radio is now (Doppler steps)
+        self.rx_next_dop = 0
+        self.rx_busy = ""             # post-processing in progress (decoding a pass)
+        self.rx_orbits = {}           # NORAD -> (sat or None, next refresh) for the SDR receivers
+        self.rx_passes = {}           # receiver id -> upcoming passes
+        self.sdr_job = None           # satrx.Job running on the SDR
+        self.sdr_info = None          # {"rid", "kind": "pass" | "geo", "los", "out"}
+        self.sdr_status = {}          # receiver id -> status text for the face plate
+        self.sdr_next = 0
+        self.sdr_geo_retry = 0
         self.map_paths = []           # Caribbean paths for the live map
         self.check_error = ""
         self.ann_state = eng.load_state(STATE_PATH)
@@ -824,6 +844,11 @@ class Station:
             self.digi = None
             self.linkctl = None
             self.iss_tuned = False
+            try:
+                self._rx_stop()
+                self._sdr_finish()
+            except Exception:
+                pass
             self.running = False
             self.add_log("SYS", "Station OFF")
 
@@ -870,6 +895,10 @@ class Station:
                     self._iss_tick(now)
                 except Exception as e:
                     self.add_log("ERR", f"ISS: {e}")
+                try:
+                    self._sdr_tick(now)
+                except Exception as e:
+                    self.add_log("ERR", f"SDR receiver: {e}")
             if self.next_beacon and now >= self.next_beacon and self.iss_tuned:
                 self.next_beacon = now + 60          # radio is on 145.825 for an ISS pass: position beacon waits
             if self.next_beacon and now >= self.next_beacon:
@@ -1291,63 +1320,71 @@ class Station:
         after = os.path.getmtime(path) if os.path.exists(path) else None
         return data, ("unavailable" if data is None else "downloaded" if after != before else "cached")
 
-    def _iss_load_tle(self):
-        """Fetch orbit data from N2YO, AMSAT, CelesTrak and (ISS only) NASA, keep the freshest, and check
-        how far apart the sources put the satellite. Runs in its own thread."""
-        try:
-            cat, key = self._sat_catnr(), str(self.cfg.get("n2yo_key") or "").strip()
-            got, status = {}, {}
-            if key:
-                data, how = self._sat_get(f"sat_{cat}_n2yo.json", issmod.n2yo_url(cat, key))
-                t = issmod.parse_n2yo(data) if data else None
-                got["N2YO"], status["N2YO"] = t, how if t else ("bad reply - check the API key" if data else how)
-            else:
-                got["N2YO"], status["N2YO"] = None, "add your free N2YO API key to use it"
-            data, how = self._sat_get("amsat_nasabare.txt", issmod.AMSAT_URL)
-            t = issmod.parse_tle_text(data.decode("ascii", "replace"), cat) if data else None
-            got["AMSAT"], status["AMSAT"] = t, how if t else ("not in AMSAT's list" if data else how)
-            data, how = self._sat_get(f"sat_{cat}_celestrak.txt", issmod.celestrak_url(cat))
-            t = issmod.parse_tle_text(data.decode("ascii", "replace"), cat) if data else None
-            got["CelesTrak"], status["CelesTrak"] = t, how if t else ("no data" if data else how)
-            sats = {}
-            for lab, t in got.items():
-                if t:
-                    try:
-                        sats[lab] = issmod.Satellite(t[1], t[2], t[0])
-                    except ValueError as e:
-                        status[lab] = str(e)
-            if cat == issmod.ISS_CATNR:
-                data, how = self._sat_get("iss_nasa_oem.txt", issmod.NASA_OEM_URL)
+    def _fetch_orbit(self, cat):
+        """Orbit of one satellite from N2YO, AMSAT, CelesTrak and (ISS only) NASA.
+        Returns (label, sat, sources, worst disagreement km, error)."""
+        key = str(self.cfg.get("n2yo_key") or "").strip()
+        got, status = {}, {}
+        if key:
+            data, how = self._sat_get(f"sat_{cat}_n2yo.json", issmod.n2yo_url(cat, key))
+            t = issmod.parse_n2yo(data) if data else None
+            got["N2YO"], status["N2YO"] = t, how if t else ("bad reply - check the API key" if data else how)
+        else:
+            got["N2YO"], status["N2YO"] = None, "add your free N2YO API key to use it"
+        data, how = self._sat_get("amsat_nasabare.txt", issmod.AMSAT_URL)
+        t = issmod.parse_tle_text(data.decode("ascii", "replace"), cat) if data else None
+        got["AMSAT"], status["AMSAT"] = t, how if t else ("not in AMSAT's list" if data else how)
+        data, how = self._sat_get(f"sat_{cat}_celestrak.txt", issmod.celestrak_url(cat))
+        t = issmod.parse_tle_text(data.decode("ascii", "replace"), cat) if data else None
+        got["CelesTrak"], status["CelesTrak"] = t, how if t else ("no data" if data else how)
+        sats = {}
+        for lab, t in got.items():
+            if t:
                 try:
-                    sats["NASA"] = issmod.Ephemeris(issmod.parse_oem(data.decode("ascii", "replace"))) if data else None
-                    status["NASA"] = how
+                    sats[lab] = issmod.Satellite(t[1], t[2], t[0])
                 except ValueError as e:
-                    sats["NASA"], status["NASA"] = None, str(e)
-            now = time.time()
-            label, sat = issmod.pick_best(sats, now)
+                    status[lab] = str(e)
+        if cat == issmod.ISS_CATNR:
+            data, how = self._sat_get("iss_nasa_oem.txt", issmod.NASA_OEM_URL)
+            try:
+                sats["NASA"] = issmod.Ephemeris(issmod.parse_oem(data.decode("ascii", "replace"))) if data else None
+                status["NASA"] = how
+            except ValueError as e:
+                sats["NASA"], status["NASA"] = None, str(e)
+        now = time.time()
+        label, sat = issmod.pick_best(sats, now)
+        if not sat:
+            return None, None, {k: {"status": v} for k, v in status.items()}, 0, \
+                "no orbit data yet - Satellite Watch needs the internet once (N2YO, AMSAT, NASA or CelesTrak)"
+        src = {}
+        for lab, s in sats.items():
+            row = {"status": status.get(lab, "")}
+            if s is not None:
+                row["age_days"] = None if isinstance(s, issmod.Ephemeris) else round((now - s.epoch) / 86400, 1)
+                try:
+                    row["diff_km"] = 0.0 if lab == label else round(issmod.position_diff_km(s, sat, now), 1)
+                except ValueError:
+                    row["diff_km"] = None
+            src[lab] = row
+        for lab in status:
+            src.setdefault(lab, {"status": status[lab]})
+        worst = max([r["diff_km"] for r in src.values() if r.get("diff_km") is not None] or [0])
+        return label, sat, src, worst, ""
+
+    def _iss_load_tle(self):
+        """Load the watched satellite's orbit (freshest source) and check how far apart the sources put it.
+        Runs in its own thread."""
+        try:
+            label, sat, src, worst, err = self._fetch_orbit(self._sat_catnr())
             if not sat:
-                self.iss_err = "no orbit data yet - Satellite Watch needs the internet once (N2YO, AMSAT, NASA or CelesTrak)"
-                self.iss_sources = {k: {"status": v} for k, v in status.items()}
+                self.iss_err, self.iss_sources = err, src
                 self.iss_next_tle = time.time() + 600
                 return
-            src = {}
-            for lab, s in sats.items():
-                row = {"status": status.get(lab, "")}
-                if s is not None:
-                    row["age_days"] = None if isinstance(s, issmod.Ephemeris) else round((now - s.epoch) / 86400, 1)
-                    try:
-                        row["diff_km"] = 0.0 if lab == label else round(issmod.position_diff_km(s, sat, now), 1)
-                    except ValueError:
-                        row["diff_km"] = None
-                src[lab] = row
-            for lab in status:
-                src.setdefault(lab, {"status": status[lab]})
-            worst = max([r["diff_km"] for r in src.values() if r.get("diff_km") is not None] or [0])
             if not self.iss_sat or getattr(self.iss_sat, "epoch", None) != sat.epoch or self.iss_label != label:
                 self.add_log("SYS", f"Satellite Watch: orbit of {issmod.sat_name(sat)} from {label}"
                                     + (f"; sources agree within {worst:.0f} km" if len(src) > 1 and worst else ""))
             self.iss_sat, self.iss_label, self.iss_sources = sat, label, src
-            age = 0 if isinstance(sat, issmod.Ephemeris) else (now - sat.epoch) / 86400
+            age = 0 if isinstance(sat, issmod.Ephemeris) else (time.time() - sat.epoch) / 86400
             self.iss_err = (f"orbit data is {age:.0f} days old - pass times may be off by minutes" if age > 7 else
                             f"orbit sources disagree by {worst:.0f} km - pass times may be off by up to "
                             f"{worst / 7.7 / 60:.0f} min" if worst > 100 else "")
@@ -1415,43 +1452,171 @@ class Station:
             return False, "a chat has moved the radio off frequency"
         return True, ""
 
-    def _iss_tune(self, on):
-        """Satellite Switch: move the radio (IC-9100, FT-991A or another CAT radio) to the satellite frequency
-        in FM data mode, or back to the APRS frequency."""
+    def _sat_radio_rx(self):
+        """What the radio does on a pass of the watched satellite: {id, type, label, hz, mode}.
+        aprs = beacon through the digipeater; sstv / telemetry = receive and record (no transmitting)."""
+        cat = self._sat_catnr()
+        rx = {r["id"]: r for r in satrx.radio_receivers(cat)}
+        r = rx.get(self.cfg.get("sat_rx") or "") or next((x for x in rx.values() if x["type"] == "aprs"), None)
+        if not r or r["type"] == "aprs":
+            return {"id": r["id"] if r else "aprs", "type": "aprs", "label": r["label"] if r else "APRS digipeater",
+                    "hz": self._sat_freq_hz(), "mode": "fm"}
+        return {"id": r["id"], "type": r["type"], "label": r["label"], "hz": int(round(r["mhz"] * 1e6)),
+                "mode": r.get("mode", "fm")}
+
+    def _can_cat(self):
         tnc = self.tnc
-        sat_hz = self._sat_freq_hz()
-        if not (tnc and hasattr(tnc, "tune") and getattr(getattr(tnc, "ptt", None), "can_tune", False)):
-            if on and sat_hz:
-                self.add_log("ISS", f"Set the radio to {sat_hz / 1e6:.3f} MHz FM now (no CAT link for automatic switching)")
+        return bool(tnc and hasattr(tnc, "tune") and getattr(getattr(tnc, "ptt", None), "can_tune", False))
+
+    def _rx_doppler_hz(self, base_hz, now):
+        """Downlink frequency corrected for Doppler (received signal), from the range rate."""
+        sat, obs = self.iss_sat, self._iss_obs()
+        if not (sat and obs and base_hz):
+            return base_hz
+        try:
+            r1, r2 = issmod.look(sat, obs, now - 1)[2], issmod.look(sat, obs, now + 1)[2]
+        except ValueError:
+            return base_hz
+        return satrx.doppler_hz(base_hz, (r2 - r1) / 2.0)
+
+    def _iss_tune(self, on, now=None):
+        """Satellite Switch: move the radio (IC-9100, FT-991A or another CAT radio) to the satellite frequency
+        - FM data for APRS / SSTV, USB data for BPSK telemetry, Doppler-corrected when receiving - or back to APRS."""
+        tnc, rx = self.tnc, self._sat_radio_rx()
+        now = time.time() if now is None else now
+        base = rx["hz"]
+        hz = self._rx_doppler_hz(base, now) if on and rx["type"] != "aprs" and self.cfg.get("sat_doppler", True) else base
+        mode = rx["mode"].upper()
+        if not self._can_cat():
+            if on and base:
+                self.add_log("ISS", f"Set the radio to {base / 1e6:.3f} MHz {mode} now for {rx['label']} "
+                                    "(no CAT link for automatic switching)")
             return
-        target = sat_hz if on else (self.qsy_hz or tncmod.aprs_freq_hz(self.cfg))
+        target = hz if on else (self.qsy_hz or tncmod.aprs_freq_hz(self.cfg))
         radio = getattr(tnc.ptt, "name", "radio")
-        if target and tnc.tune(target):
+        if target and tnc.tune(target, rx["mode"] if on else None):
             self.iss_tuned = on
-            self.add_log("SYS", f"Satellite Switch: {radio} tuned to {target / 1e6:.3f} MHz FM for "
-                                + ("the pass" if on else "APRS"))
+            self.rx_tuned_hz = target if on else 0
+            self.add_log("SYS", f"Satellite Switch: {radio} tuned to {target / 1e6:.4f} MHz "
+                                + (f"{mode} for {rx['label']}" if on else "for APRS"))
         elif on:
             self.add_log("ISS", f"Could not switch the radio ({getattr(tnc, 'cat_status', '')}) - "
-                                f"set it to {(sat_hz or 0) / 1e6:.3f} MHz FM")
+                                f"set it to {(base or 0) / 1e6:.3f} MHz {mode}")
+
+    def _rx_doppler_step(self, now):
+        """Follow the Doppler shift while receiving: retune when it has moved by more than a step."""
+        rx = self._sat_radio_rx()
+        if rx["type"] == "aprs" or not self.cfg.get("sat_doppler", True) or not self._can_cat() \
+                or now < self.rx_next_dop or getattr(self.tnc, "tx_active", False):
+            return
+        self.rx_next_dop = now + 10
+        hz = self._rx_doppler_hz(rx["hz"], now)
+        step = 100 if rx["mode"] == "usb" else 500
+        if abs(hz - self.rx_tuned_hz) >= step and self.tnc.tune(hz, rx["mode"]):
+            self.rx_tuned_hz = hz
+
+    def _rx_dir(self, *parts):
+        d = os.path.join(RX_DIR, *parts)
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def _rx_start(self, sat_name):
+        """Start recording the radio's audio for this pass (SSTV / telemetry)."""
+        rx = self._sat_radio_rx()
+        if rx["type"] == "aprs" or self.rx_rec:
+            return
+        taps = getattr(self.tnc, "audio_taps", None)
+        if taps is None:
+            self.add_log("ISS", f"{rx['label']}: needs the built-in sound modem (MENU > RADIO / TNC) to record the pass")
+            return
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        safe = re.sub(r"[^A-Za-z0-9]+", "-", sat_name).strip("-")
+        wav = os.path.join(self._rx_dir(rx["type"]), f"{stamp}_{safe}.wav")
+        self.rx_rec = satrx.PassRecorder(wav, getattr(self.tnc, "rate", 48000))
+        self.rx_rec_info = (rx, sat_name, wav)
+        taps.append(self.rx_rec)
+        self.add_log("ISS", f"Recording {rx['label']} ({rx['hz'] / 1e6:.3f} MHz {rx['mode'].upper()})")
+
+    def _rx_stop(self):
+        """Pass over: stop recording and decode it in the background."""
+        rec, info = self.rx_rec, self.rx_rec_info
+        if not rec:
+            return
+        try:
+            self.tnc.audio_taps.remove(rec)
+        except (AttributeError, ValueError):
+            pass
+        secs = rec.close()
+        self.rx_rec = self.rx_rec_info = None
+        if secs < 5:
+            return
+        self.rx_busy = f"decoding {info[0]['label']}"
+        threading.Thread(target=self._rx_decode, args=(info, secs), daemon=True).start()
+
+    def _rx_decode(self, info, secs):
+        rx, sat_name, wav = info
+        self.rx_busy = f"decoding {rx['label']}"
+        keep = bool(self.cfg.get("rx_keep_wav"))
+        try:
+            if rx["type"] == "sstv":
+                audio, rate = satrx.read_wav(wav)
+                pics = satrx.sstv_decode(audio, rate)
+                for i, (mode, rgb) in enumerate(pics, 1):
+                    png = wav[:-4] + f"_{i}_{mode.replace(' ', '')}.png"
+                    satrx.write_png(png, rgb)
+                    self.add_log("ISS", f"SSTV picture received from {sat_name}: {mode}, {rgb.shape[1]}x{rgb.shape[0]}")
+                if not pics:
+                    self.add_log("ISS", f"No SSTV picture in this {sat_name} pass ({secs / 60:.0f} min recorded)")
+                    keep = True
+            else:                                               # BPSK telemetry
+                cat = next((s["catnr"] for s in satrx.CATALOG if rx in s["receivers"]), self._sat_catnr())
+                if not shutil.which("gr_satellites"):
+                    self.add_log("ISS", f"{sat_name} pass recorded ({secs / 60:.0f} min). Install gr-satellites to "
+                                        "decode telemetry; the recording is kept in the received folder")
+                    keep = True
+                else:
+                    kss, txt = wav[:-4] + ".kss", wav[:-4] + ".txt"
+                    with open(txt, "wb") as out:
+                        r = subprocess.run(satrx.gr_satellites_cmd(cat, wav, satrx.read_wav(wav)[1], kss),
+                                           stdout=out, stderr=subprocess.STDOUT, timeout=1800)
+                    n = 0
+                    if os.path.exists(kss):
+                        with open(kss, "rb") as f:
+                            n = f.read().count(b"\xc0") // 2
+                    self.add_log("ISS", f"{sat_name} telemetry: {n} frame{'s' if n != 1 else ''} decoded"
+                                 + ("" if r.returncode == 0 else f" (gr-satellites exit {r.returncode})"))
+                    keep = keep or n == 0
+        except Exception as e:
+            self.add_log("ERR", f"decoding {rx['label']}: {e}")
+            keep = True
+        finally:
+            self.rx_busy = ""
+            if not keep:
+                try:
+                    os.remove(wav)
+                except OSError:
+                    pass
 
     def _iss_tick(self, now):
-        """Every second while the station is ON: switch the radio before AOS, follow the pass and send beacons
-        on schedule from the moment the satellite clears the horizon (or the minimum elevation)."""
+        """Every second while the station is ON: switch the radio before AOS, follow the pass, and - for APRS -
+        send beacons on schedule from the horizon, or - for SSTV / telemetry - record and decode the pass."""
         self._iss_refresh(now)
         sat, obs, c = self.iss_sat, self._iss_obs(), self.cfg
+        rx = self._sat_radio_rx()
         if c.get("iss_tune", True) and not self.iss_tuned and self.running and self.tnc:
             nxt = next((x for x in self.iss_passes if x["aos"] - SAT_SWITCH_LEAD_S <= now < x["los"]), None)
             if nxt and nxt["aos"] != self.iss_switch_aos:
                 self.iss_switch_aos = nxt["aos"]
-                ok, why = self._iss_can_beacon() if c.get("iss_auto_beacon") else (True, "")
+                ok, why = self._iss_can_beacon() if c.get("iss_auto_beacon") and rx["type"] == "aprs" else (True, "")
                 if ok or "1200" not in why:
-                    self._iss_tune(True)
+                    self._iss_tune(True, now)
         p = next((x for x in self.iss_passes if x["aos"] <= now < x["los"]), None)
         if self.iss_cur and (not p or p["aos"] != self.iss_cur["aos"]):        # the pass has ended
             n = len(self.iss_pass_sent)
             self.iss_last = {"los": self.iss_cur["los"], "max_el": self.iss_cur["max_el"], "sent": n}
-            self.add_log("ISS", f"{issmod.sat_name(sat)} pass over: LOS az {self.iss_cur['los_az']} deg, "
-                                f"{n} beacon{'s' if n != 1 else ''} sent")
+            self.add_log("ISS", f"{issmod.sat_name(sat)} pass over: LOS az {self.iss_cur['los_az']} deg"
+                                + (f", {n} beacon{'s' if n != 1 else ''} sent" if rx["type"] == "aprs" else ""))
+            self._rx_stop()
             if self.iss_tuned:
                 self._iss_tune(False)
             self.iss_cur, self.iss_pass_sent, self.iss_warned = None, [], False
@@ -1459,11 +1624,18 @@ class Station:
             return
         if not self.iss_cur:
             self.iss_cur, self.iss_pass_sent, self.iss_warned = p, [], False
+            what = (" - beacon sequence starting" if c.get("iss_auto_beacon") else "") if rx["type"] == "aprs" \
+                else f" - receiving {rx['label']}"
             self.add_log("ISS", f"{issmod.sat_name(sat)} on the horizon: AOS az {p['aos_az']} deg "
                                 f"({issmod.compass8(p['aos_az'])}), max {p['max_el']:.0f} deg at az {p['tca_az']}, "
                                 f"LOS az {p['los_az']} deg ({issmod.compass8(p['los_az'])}) in "
-                                f"{round((p['los'] - now) / 60)} min"
-                                + (" - beacon sequence starting" if c.get("iss_auto_beacon") else ""))
+                                f"{round((p['los'] - now) / 60)} min" + what)
+            if rx["type"] != "aprs":
+                self._rx_start(issmod.sat_name(sat))
+        if rx["type"] != "aprs":
+            if self.iss_tuned:
+                self._rx_doppler_step(now)
+            return
         if not c.get("iss_auto_beacon"):
             return
         az, el, _ = issmod.look(sat, obs, now)
@@ -1478,10 +1650,150 @@ class Station:
                 self.add_log("ISS", f"No satellite beacons this pass: {why}")
             return
         if c.get("iss_tune", True) and not self.iss_tuned:
-            self._iss_tune(True)
+            self._iss_tune(True, now)
         self.iss_pass_sent.append(now)
         self.iss_recent.append(now)
         self.send_iss_beacon(len(self.iss_pass_sent), el, rising=now < p["tca"])
+
+    # ---- v3.16 SDR receivers: Meteor LRPT and HamTV on their passes, GOES HRIT/EMWIN continuously
+    def _rx_orbit(self, cat, now):
+        """Orbit for an SDR receiver's satellite (loaded in the background, refreshed twice a day)."""
+        sat, nxt = self.rx_orbits.get(cat, (None, 0))
+        if cat == self._sat_catnr() and self.iss_sat:
+            return self.iss_sat
+        if now >= nxt:
+            self.rx_orbits[cat] = (sat, now + 600)
+
+            def load():
+                label, s, _, _, err = self._fetch_orbit(cat)
+                self.rx_orbits[cat] = (s or sat, time.time() + (self.SAT_MAX_AGE if s else 600))
+            threading.Thread(target=load, daemon=True).start()
+        return sat
+
+    def _sdr_tick(self, now):
+        """Every few seconds while ON: run one SDR job at a time - a LEO pass beats the geostationary feed."""
+        if now < self.sdr_next:
+            return
+        self.sdr_next = now + 5
+        c = self.cfg
+        jobs = [j for j in (c.get("rx_jobs") or []) if satrx.receiver(j)[1] and satrx.receiver(j)[1]["hw"] != "radio"]
+        obs = self._iss_obs()
+        st = {}
+        job, info = self.sdr_job, self.sdr_info
+        if job and (not job.running() or (info["kind"] == "pass" and now > info["los"] + 60)
+                    or info["rid"] not in jobs):
+            self._sdr_finish()
+            job, info = None, None
+        if not jobs or not obs:
+            self.sdr_status = {j: ("set your grid square" if not obs else "") for j in jobs}
+            return
+        if c.get("tnc") == "sdr":
+            self.sdr_status = {j: "the RTL-SDR is in use as the APRS receiver (MENU > RADIO / TNC)" for j in jobs}
+            return
+        tools = satrx.tools_status()
+        want = None                                            # (rid, kind, los, pass)
+        for rid in jobs:
+            s, r = satrx.receiver(rid)
+            need = "satdump" if r["type"] in ("lrpt", "hrit") else "ffmpeg"
+            if not tools.get(need) or (r["type"] == "hamtv" and not (c.get("hamtv_cmd") or tools.get("leandvb"))):
+                st[rid] = f"install {need if tools.get('ffmpeg') or need != 'ffmpeg' else 'ffmpeg'}" \
+                          + (" and leandvb" if r["type"] == "hamtv" and not tools.get("leandvb") else "")
+                continue
+            if s["kind"] == "geo":
+                az, el, _ = satrx.geo_look(obs, s["geo_lon"])
+                if el < float(c.get("geo_min_el") or 5):
+                    st[rid] = f"{s['name']} is only {el:.1f} deg above your horizon"
+                    continue
+                st[rid] = f"ready - dish az {az:.0f} deg, el {el:.0f} deg"
+                if want is None:
+                    want = (rid, "geo", 0, None)
+                continue
+            sat = self._rx_orbit(s["catnr"], now)
+            if not sat:
+                st[rid] = "loading orbit"
+                continue
+            ps = self.rx_passes.get(rid)
+            if not ps or ps[0]["los"] < now or now - ps[0].get("_t", 0) > 1800:
+                try:
+                    ps = [dict(p, _t=now) for p in issmod.passes(sat, obs, start=now, hours=24, min_el=10)]
+                except ValueError as e:
+                    st[rid] = f"orbit: {e}"
+                    continue
+                self.rx_passes[rid] = ps
+            cur = next((p for p in ps if p["aos"] <= now < p["los"]), None)
+            nxt = next((p for p in ps if p["aos"] > now), None)
+            st[rid] = (f"receiving - LOS in {round((cur['los'] - now) / 60)} min" if cur else
+                       f"next pass {time.strftime('%H:%M', time.localtime(nxt['aos']))}, max {nxt['max_el']:.0f} deg"
+                       if nxt else "no pass in 24 h")
+            if cur and (want is None or want[1] == "geo"):
+                want = (rid, "pass", cur["los"], cur)
+        if job and want and (info["rid"] != want[0]) and want[1] == "pass" and info["kind"] == "geo":
+            self._sdr_finish()                                 # a pass pre-empts the geostationary feed
+            job = None
+        if not job and want and not (want[1] == "geo" and now < self.sdr_geo_retry):
+            self._sdr_start(*want[:3], now=now)
+        if self.sdr_info:
+            st[self.sdr_info["rid"]] = ("RUNNING - " + st.get(self.sdr_info["rid"], "")).rstrip(" -")
+            tail = self.sdr_job.tail()[0] if self.sdr_job else ""
+            if tail:
+                st[self.sdr_info["rid"]] += f" | {tail[-80:]}"
+        self.sdr_status = st
+
+    def _sdr_start(self, rid, kind, los, now=None):
+        now = time.time() if now is None else now
+        s, r = satrx.receiver(rid)
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(now))
+        out = self._rx_dir(r["type"], f"{stamp}_{re.sub(r'[^A-Za-z0-9]+', '-', s['name']).strip('-')}")
+        secs = int(los - now + 30) if kind == "pass" else 3600
+        try:
+            if r["type"] == "hamtv":
+                cmd, why = satrx.hamtv_cmd(r, os.path.join(out, "hamtv.ts"), self.cfg)
+                if not cmd:
+                    self.sdr_status[rid] = why
+                    self.sdr_next = now + 60
+                    return
+                self.sdr_job = satrx.Job(rid, cmd, out, shell=True)
+            else:
+                self.sdr_job = satrx.Job(rid, satrx.satdump_cmd(r, out, secs, self.cfg), out)
+        except OSError as e:
+            self.add_log("ERR", f"{r['label']}: {e}")
+            self.sdr_geo_retry = now + 300
+            return
+        self.sdr_info = {"rid": rid, "kind": kind, "los": los, "out": out, "start": now}
+        self.add_log("ISS", f"SDR: {r['label']} started ({r['mhz']:.1f} MHz)"
+                            + (f" until LOS in {round((los - now) / 60)} min" if kind == "pass" else ""))
+
+    def _sdr_finish(self):
+        job, info = self.sdr_job, self.sdr_info
+        self.sdr_job = self.sdr_info = None
+        if not job:
+            return
+        code = job.stop()
+        s, r = satrx.receiver(info["rid"])
+        if info["kind"] == "geo" and time.time() - info["start"] < 120:
+            self.sdr_geo_retry = time.time() + 300             # exits straight away: don't spin
+        if r["type"] == "hamtv":
+            def finish():
+                mp4, jpg, msg = satrx.video_finish(os.path.join(info["out"], "hamtv.ts"))
+                self.add_log("ISS", f"HamTV video saved ({satrx.probe_codec(mp4) or 'video'})" if mp4
+                             else f"HamTV: {msg}")
+            threading.Thread(target=finish, daemon=True).start()
+        else:
+            n = sum(1 for x in satrx.gallery(info["out"], 10000) if x["kind"] == "image")
+            self.add_log("ISS", f"SDR: {r['label']} stopped - {n} picture{'s' if n != 1 else ''}"
+                                + (f" (SatDump exit {code})" if code not in (0, None, -15) else ""))
+
+    def rx_state(self):
+        rx = self._sat_radio_rx()
+        return {"radio": {**rx, "choices": [{"id": r["id"], "label": r["label"], "mhz": r["mhz"],
+                                              "mode": r.get("mode", "fm"), "type": r["type"]}
+                                             for r in satrx.radio_receivers(self._sat_catnr())],
+                          "recording": bool(self.rx_rec), "tuned_hz": self.rx_tuned_hz if self.iss_tuned else 0,
+                          "busy": self.rx_busy},
+                "sdr": [{"id": r["id"], "label": r["label"], "sat": s["name"], "mhz": r["mhz"], "hw": r["hw"],
+                         "on": r["id"] in (self.cfg.get("rx_jobs") or []),
+                         "status": self.sdr_status.get(r["id"], "")} for s, r in satrx.sdr_receivers()],
+                "tools": satrx.tools_status(), "not_supported": satrx.NOT_SUPPORTED}
 
     def send_iss_beacon(self, seq, el, rising=True):
         """Position beacon through the satellite digipeater (path ARISS), RF only - stations that hear it gate it."""
@@ -2399,6 +2711,7 @@ class Station:
                 {**t, "open": t["name"] in self.dx_open, "evidence": self.dx_open.get(t["name"], {}).get("evidence")}
                 for t in self.dx_targets()]} if c.get("dx_enabled") else None,
             "iss": self.iss_state() if c.get("iss_enabled") else None,
+            "rx": self.rx_state() if c.get("iss_enabled") else None,
             "links": ([{"link": l, **v} for l, v in sorted(self.linkctl.links.items())] if self.linkctl else []),
             "link2": None if not self.tnc2 else {"kind": self.tnc2.kind, "error": self.tnc2.error,
                                                   "rx": self.tnc2.rx_count, "tx": self.tnc2.tx_count},
@@ -2623,6 +2936,20 @@ class Handler(BaseHTTPRequestHandler):
             self._json(STATION.chat.state() if STATION.chat else {"seq": 0, "peers": [], "events": [], "off": True})
         elif path == "/api/freqs":
             self._json([{"value": v, "label": l} for v, l in tncmod.APRS_FREQS])
+        elif path == "/api/rx":
+            self._json({"items": satrx.gallery(RX_DIR) if os.path.isdir(RX_DIR) else []})
+        elif path == "/api/rx/file":
+            from urllib.parse import parse_qs, urlsplit
+            rel = (parse_qs(urlsplit(self.path).query).get("p") or [""])[0]
+            root = os.path.realpath(RX_DIR)
+            full = os.path.realpath(os.path.join(root, rel))
+            ctype = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "mp4": "video/mp4",
+                     "txt": "text/plain; charset=utf-8", "wav": "audio/wav",
+                     "kss": "application/octet-stream"}.get(full.rsplit(".", 1)[-1].lower())
+            if not rel or not full.startswith(root + os.sep) or not ctype or not os.path.isfile(full):
+                return self._json({"error": "not found"}, 404)
+            with open(full, "rb") as f:
+                return self._bytes(f.read(), ctype, "private, max-age=3600")
         elif path == "/api/dx":
             self._json(STATION.dx_evidence())
         elif path == "/api/fieldtest":

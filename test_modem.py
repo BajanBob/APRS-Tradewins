@@ -1163,7 +1163,7 @@ def test_iss():
     sent = []
     st.transmit = lambda info, rf=True, net=True, mode=None, force_rf=False, path=None: sent.append((info, net, force_rf, path))
     st._iss_can_beacon = lambda: (True, "")
-    st._iss_tune = lambda on: None
+    st._iss_tune = lambda on, now=None: None
     for t in range(int(hi["aos"]) - 30, int(hi["los"]) + 30):
         st._iss_tick(t)
     assert len(sent) == len(iss.plan(hi["tca"], *w)), (len(sent), w)
@@ -1178,6 +1178,7 @@ def test_iss():
     assert "1200" in st2._iss_can_beacon()[1]
     test_sat_watch(s, hi)
     print(f"ISS passes ok ({len(ps)} passes/day, best {hi['max_el']} deg, {len(sent)} beacons)")
+    test_satrx(s, hi)
 
 
 def test_sat_watch(s, hi):
@@ -1270,6 +1271,163 @@ def test_sat_watch(s, hi):
     assert any("Satellite frequency" in e for e in app.validate(dict(app.DEFAULTS, call="8P5AB", grid="GK03ec",
                                                                        iss_enabled=True, sat_freq="100")))
     print("Satellite Watch ok (N2YO / AMSAT / NASA sources, IC-9100 + FT-991A switch)")
+
+
+def test_satrx(s, hi):
+    """v3.16 satellite receivers: SSTV codec, recording, Doppler, a received SSTV pass, telemetry tuning, SDR jobs."""
+    import math
+    import shutil
+    import struct
+    import tempfile
+    import zlib
+    import iss
+    import satrx
+    import app
+    tmp = tempfile.mkdtemp(prefix="tw_rx_")
+    rng = np.random.default_rng(5)
+    yy, xx = np.mgrid[0:496, 0:640]
+    img = np.stack([xx * 255 // 640, yy * 255 // 496, (xx + yy) * 255 // 1136], -1).astype(np.uint8)
+    img[100:200, 100:300] = [255, 0, 0]
+    for vis in (95, 44, 60, 8):                          # PD120 (ISS), Martin M1, Scottie S1, Robot 36
+        m = satrx.SSTV_MODES[vis]
+        a = satrx.sstv_encode(img, vis, 48000)
+        x = np.concatenate([rng.normal(0, 0.05, 24000), a, rng.normal(0, 0.05, 12000)])
+        pics = satrx.sstv_decode(x + rng.normal(0, 0.1, len(x)), 48000)
+        ref = img[(np.arange(m["h"]) * 496 // m["h"])][:, (np.arange(m["w"]) * 640 // m["w"])]
+        assert len(pics) == 1 and pics[0][0] == m["name"] and pics[0][1].shape == ref.shape, (vis, [p[0] for p in pics])
+        assert np.abs(pics[0][1].astype(int) - ref.astype(int)).mean() < 14, m["name"]
+    assert satrx.sstv_decode(rng.normal(0, 0.3, 48000 * 5), 48000) == []          # noise is not a picture
+    # PNG writer: valid signature, size and pixels
+    satrx.write_png(os.path.join(tmp, "t.png"), img[:4, :5])
+    raw = open(os.path.join(tmp, "t.png"), "rb").read()
+    assert raw[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">II", raw[16:24]) == (5, 4)
+    i = raw.index(b"IDAT")
+    data = zlib.decompress(raw[i + 4:i + 4 + struct.unpack(">I", raw[i - 4:i])[0]])
+    assert data[1:16] == img[0, :5].tobytes()
+    # pass recorder -> WAV -> back
+    rec = satrx.PassRecorder(os.path.join(tmp, "r", "p.wav"), 48000)
+    tone = (0.5 * np.sin(np.arange(4800) * 0.1)).astype(np.float32)
+    rec(tone[:2400]); rec(tone[2400:])
+    assert abs(rec.close() - 0.1) < 1e-9
+    back, rate = satrx.read_wav(os.path.join(tmp, "r", "p.wav"))
+    assert rate == 48000 and np.abs(back - tone).max() < 1e-3
+    # Doppler: approaching satellite is heard higher; geostationary look angles from Barbados
+    assert satrx.doppler_hz(145_800_000, -7.0) - 145_800_000 == 3404 and satrx.doppler_hz(145_800_000, 7.0) < 145_800_000
+    az, el, _ = satrx.geo_look((13.104, -59.625), -75.2)
+    assert 64 < el < 69 and 225 < az < 236, (az, el)
+    assert satrx.geo_look((13.104, -59.625), -137.0)[1] < 5
+    # commands for the external decoders
+    assert satrx.satdump_cmd(satrx.receiver("meteor_lrpt")[1], "/o", 900, {})[:4] == ["satdump", "live", "meteor_m2-x_lrpt", "/o"]
+    assert "137900000" in satrx.satdump_cmd(satrx.receiver("meteor_lrpt")[1], "/o", 900, {})
+    assert satrx.gr_satellites_cmd(39444, "a.wav", 48000, "a.kss")[:4] == ["gr_satellites", "39444", "--wavfile", "a.wav"]
+    hz = satrx.receiver("iss_hamtv")[1]
+    assert satrx.hamtv_cmd(hz, "/o/v.ts", {})[0] is None                            # 2.4 GHz: needs a downconverter
+    cmd, _ = satrx.hamtv_cmd(hz, "/o/v.ts", {"hamtv_lo_mhz": 1998})
+    assert "rtl_sdr -f 397000000" in cmd and "leandvb" in cmd and cmd.endswith("/o/v.ts")
+    # H.264 video from HamTV: MPEG-TS -> MP4 + thumbnail (when FFmpeg is on this PC)
+    if shutil.which("ffmpeg"):
+        ts = os.path.join(tmp, "v.ts")
+        import subprocess
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25",
+                        "-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "mpegts", ts], check=True, timeout=120)
+        mp4, jpg, msg = satrx.video_finish(ts)
+        assert mp4 and jpg and satrx.probe_codec(mp4) == "h264", msg
+    # the station: an ISS pass received as SSTV - radio to 145.800 FM (+Doppler) before AOS, pass recorded, picture saved
+    app.RX_DIR = tmp
+    for radio in ("IC-9100", "FT-991A"):
+        ptt = tnc.CivPTT("COMx", 9600, "7C") if radio == "IC-9100" else tnc.YaesuCatPTT("COMy", 38400)
+        ptt.ser = FakeIcom() if radio == "IC-9100" else FakeYaesu()
+        st = app.Station.__new__(app.Station)
+        app.Station.__init__(st)
+        st.cfg = dict(app.DEFAULTS, call="8P5AB-7", grid="GK03ec", iss_enabled=True, sat_rx="iss_sstv",
+                      tnc="sound", modem="1200", aprs_freq="144.390")
+        st.iss_sat, st.iss_cat, st.iss_next_tle, st.running = s, 25544, float("inf"), True
+        st.tnc = tnc.SoundModemTNC(ptt=ptt, tune_hz=144_390_000)
+        st.transmit = lambda *a, **k: (_ for _ in ()).throw(AssertionError("receive-only: must not transmit"))
+        st._iss_tick(hi["aos"] - 59)
+        f = ptt.ser.hz
+        assert st.iss_tuned and 145_800_000 < f <= 145_803_600, (radio, f)       # approaching: heard higher
+        assert (ptt.ser.mode[0] == 0x05) if radio == "IC-9100" else ptt.ser.mode == "A"
+        st._iss_tick(hi["aos"] + 1)
+        assert st.rx_rec and st.rx_rec in st.tnc.audio_taps
+        audio = satrx.sstv_encode(img, 95, 48000)
+        for k in range(0, len(audio), 4800):                         # the pass audio arrives through the tap
+            for tap in list(st.tnc.audio_taps):
+                tap(audio[k:k + 4800])
+        for t in range(int(hi["aos"]) + 2, int(hi["tca"]) + 1, 5):   # Doppler steps follow the pass
+            st._iss_tick(t)
+        assert ptt.ser.hz < f, (radio, ptt.ser.hz, f)                # past the highest point it reads lower
+        st._iss_tick(hi["los"] + 2)
+        assert not st.iss_tuned and ptt.ser.hz == 144_390_000 and st.rx_rec is None
+        assert st.rx_busy
+        t0 = time.time()
+        while st.rx_busy and time.time() - t0 < 60:
+            time.sleep(0.2)
+        time.sleep(1.1)                                          # next pass gets its own file name
+    imgs = [x for x in satrx.gallery(tmp) if x["kind"] == "image" and x["path"].startswith("sstv/")]
+    assert len(imgs) == 2 and "PD120" in imgs[0]["name"], imgs
+    assert not [x for x in satrx.gallery(tmp) if x["kind"] == "audio" and x["path"].startswith("sstv/")], "decoded pass WAVs are removed"
+    # BPSK telemetry: USB data mode on the IC-9100
+    ptt = tnc.CivPTT("COMx", 9600, "7C")
+    ptt.ser = FakeIcom()
+    st = app.Station.__new__(app.Station)
+    app.Station.__init__(st)
+    st.cfg = dict(app.DEFAULTS, call="8P5AB-7", grid="GK03ec", iss_enabled=True, sat_catnr=39444, sat_rx="ao73_tlm",
+                  tnc="sound", modem="1200", aprs_freq="144.390")
+    assert st._sat_radio_rx()["mode"] == "usb" and st._sat_radio_rx()["hz"] == 145_935_000
+    st.iss_sat, st.iss_cat, st.iss_next_tle, st.running = s, 39444, float("inf"), True
+    st.tnc = tnc.SoundModemTNC(ptt=ptt, tune_hz=144_390_000)
+    st._iss_tick(hi["aos"] - 59)
+    assert ptt.ser.mode[0] == 0x01 and abs(ptt.ser.hz - 145_935_000) < 4000, (ptt.ser.mode, ptt.ser.hz)
+    # SDR jobs: GOES-19 runs while idle; a Meteor pass pre-empts it, then GOES comes back
+    started = []
+
+    class FakeJob:
+        def __init__(self, name, cmd, cwd, shell=False, log=None):
+            self.name, self.cmd, self.alive = name, cmd, True
+            started.append(self)
+
+        def running(self):
+            return self.alive
+
+        def stop(self, wait=10):
+            self.alive = False
+            return 0
+
+        def tail(self, n=300):
+            return [""]
+    real_job, real_tools = satrx.Job, satrx.tools_status
+    satrx.Job = FakeJob
+    satrx.tools_status = lambda which=None: {t: True for t in satrx.TOOLS}
+    try:
+        st = app.Station.__new__(app.Station)
+        app.Station.__init__(st)
+        st.cfg = dict(app.DEFAULTS, call="8P5AB-7", grid="GK03ec", iss_enabled=True,
+                      rx_jobs=["goes19_hrit", "meteor_lrpt", "goes18_hrit"], tnc="sound")
+        st.rx_orbits[59051] = (s, float("inf"))               # an orbit for "Meteor" so it has passes
+        st._sdr_tick(hi["aos"] - 3600)
+        assert started and started[-1].name == "goes19_hrit" and "goes_hrit" in started[-1].cmd
+        assert "only" in st.sdr_status["goes18_hrit"] and "above your horizon" in st.sdr_status["goes18_hrit"]
+        mp = next(p for p in st.rx_passes["meteor_lrpt"] if p["aos"] > hi["aos"] - 3600)
+        st.sdr_next = 0
+        st._sdr_tick(mp["aos"] + 5)
+        assert started[-1].name == "meteor_lrpt" and not started[0].alive, [j.name for j in started]
+        secs = int(started[-1].cmd[started[-1].cmd.index("--timeout") + 1])
+        assert abs(secs - (mp["los"] - mp["aos"] - 5 + 30)) < 3
+        started[-1].alive = False                               # SatDump finishes at LOS
+        st.sdr_next, st.sdr_geo_retry = 0, 0
+        st._sdr_tick(mp["los"] + 90)
+        assert started[-1].name == "goes19_hrit", [j.name for j in started]
+        st.cfg["tnc"] = "sdr"
+        st.sdr_next = 0
+        st._sdr_finish()
+        st._sdr_tick(mp["los"] + 200)
+        assert "APRS receiver" in st.sdr_status["goes19_hrit"]
+    finally:
+        satrx.Job, satrx.tools_status = real_job, real_tools
+    shutil.rmtree(tmp, ignore_errors=True)
+    print("Satellite receivers ok (SSTV x4 modes, IC-9100 + FT-991A SSTV pass, USB telemetry, Doppler, SDR jobs"
+          + (", H.264 video)" if shutil.which("ffmpeg") else ")"))
 
 
 if __name__ == "__main__":

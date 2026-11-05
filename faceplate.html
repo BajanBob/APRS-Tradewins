@@ -164,7 +164,11 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
   font-size:13px;padding:10px 12px;border:1px solid #000;box-shadow:0 2px 10px rgba(0,0,0,.8) inset}
 .mon div{white-space:pre-wrap;word-break:break-all;line-height:1.45}
 .mon .t{color:var(--mon-dim)}
-.mon .k-TX{color:#ffd27a}.mon .k-ERR{color:#ff7b70}.mon .k-PROP{color:#7fd8ff}.mon .k-SYS{color:#b9c2cb}.mon .k-IGT{color:#c7a6ff}.mon .k-DIG{color:#9fe870}.mon .k-DX{color:#ffb35c}.mon .k-ISS{color:#c4b5fd}.mon .k-WX{color:#8ef0e0}.mon .k-MSG{color:#7dd3fc}
+.mon .k-TX{color:#ffd27a}.mon .k-ERR{color:#ff7b70}.mon .k-PROP{color:#7fd8ff}.mon .k-SYS{color:#b9c2cb}.mon .k-IGT{color:#c7a6ff}.mon .k-DIG{color:#9fe870}.mon .k-DX{color:#ffb35c}.mon .k-ISS{color:#c4b5fd}
+.rx-gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:6px 0}
+.rx-gal figure{margin:0;background:var(--mon-bg);border:1px solid var(--edge);border-radius:8px;overflow:hidden}
+.rx-gal img,.rx-gal video{display:block;width:100%;height:auto;max-height:180px;object-fit:contain;background:#000}
+.rx-gal figcaption{font-size:11px;padding:4px 6px;word-break:break-all;color:var(--engrave)}.mon .k-WX{color:#8ef0e0}.mon .k-MSG{color:#7dd3fc}
 .missed{margin-top:18px;border-radius:10px;border:1px solid #6b4a12;background:linear-gradient(180deg,#2a1d08,#1c1407);
   padding:14px 16px;box-shadow:0 0 0 1px rgba(255,181,71,.15) inset}
 .missed.hide{display:none}
@@ -1069,13 +1073,36 @@ details.more summary::-webkit-details-marker{display:none}
       <label class="chk" style="margin:8px 0"><input type="checkbox" data-k="iss_enabled" id="iss-on"> Satellite Watch: predict passes of the selected satellite over my grid square</label>
       <label class="chk" style="margin:0 0 8px"><input type="checkbox" data-k="iss_tune"> Satellite Switch: put the radio (IC-9100, FT-991A or other CAT radio) on the satellite frequency 1 minute before each pass, back to APRS at LOS</label>
       <label class="chk" style="margin:0 0 8px"><input type="checkbox" data-k="iss_auto_beacon" id="iss-auto"> Start the beacon sequence when the satellite reaches the horizon</label>
-      <div class="more-row"><label>Satellite<select class="inset" id="sat-pick" style="width:15em"><option value="25544">ISS (ARISS digipeater)</option><option value="">Other - NORAD number</option></select></label>
+      <div class="more-row"><label>Satellite and what to do<select class="inset" id="sat-pick" style="width:19em">
+          <option value="25544|iss_aprs">ISS - APRS beacons (145.825 FM)</option>
+          <option value="25544|iss_sstv">ISS - receive SSTV pictures (145.800 FM)</option>
+          <option value="39444|ao73_tlm">FUNcube-1 AO-73 - telemetry (145.935 USB)</option>
+          <option value="43803|jo97_tlm">JY1Sat JO-97 - telemetry (145.840 USB)</option>
+          <option value="60209|mo122_tlm">MESAT-1 MO-122 - telemetry (435.800 USB)</option>
+          <option value="">Other - NORAD number (APRS)</option></select></label>
+        <input type="hidden" data-k="sat_rx" id="sat-rx">
         <label>NORAD no.<input class="inset" data-k="sat_catnr" data-num type="number" min="1" max="999999" id="sat-cat" style="width:7em"></label>
         <label>Frequency (MHz)<input class="inset" data-k="sat_freq" placeholder="145.825" style="width:7em"></label></div>
       <div class="more-row"><label>Start at elevation (deg, 0 = horizon)<input class="inset" data-k="iss_min_el" data-num type="number" min="0" max="60" style="width:6em"></label>
         <label>Path<input class="inset" data-k="iss_path" placeholder="ARISS" style="width:8em"></label>
         <label>Beacon comment<input class="inset" data-k="iss_comment" maxlength="30" style="width:14em"></label></div>
       <div class="more-row"><label>N2YO API key (free at n2yo.com)<input class="inset" data-k="n2yo_key" autocomplete="off" style="width:16em"></label></div>
+      <label class="chk" style="margin:4px 0"><input type="checkbox" data-k="sat_doppler"> Doppler correction while receiving (radio retuned as the satellite passes)</label>
+      <label class="chk" style="margin:0 0 8px"><input type="checkbox" data-k="rx_keep_wav"> Keep the pass recordings (WAV)</label>
+      <div class="note" id="rx-radio"></div>
+      <div class="note" style="margin-top:10px"><b>SDR RECEIVERS</b> - run on their own, alongside the radio. One SDR job at a time; a Meteor or ISS pass interrupts the GOES feed.</div>
+      <label class="chk"><input type="checkbox" data-list="rx_jobs" value="meteor_lrpt"> Meteor-M N2-4 LRPT pictures, 137.9 MHz (RTL-SDR + V-dipole, SatDump)</label>
+      <label class="chk"><input type="checkbox" data-list="rx_jobs" value="goes19_hrit"> GOES-19 HRIT/EMWIN, 1694.1 MHz (SDR + dish + LNA, SatDump)</label>
+      <label class="chk"><input type="checkbox" data-list="rx_jobs" value="goes18_hrit"> GOES-18 HRIT/EMWIN, 1694.1 MHz (very low from the Caribbean)</label>
+      <label class="chk"><input type="checkbox" data-list="rx_jobs" value="iss_hamtv"> ISS HamTV video, 2395 MHz DVB-S, H.264 (SDR + dish + downconverter, leandvb + FFmpeg)</label>
+      <div class="more-row"><label>SDR (SatDump source)<input class="inset" data-k="sdr_source" placeholder="rtlsdr" style="width:7em"></label>
+        <label>SDR gain (dB)<input class="inset" data-k="sdr_gain_db" data-num type="number" min="0" max="60" style="width:5em"></label>
+        <label>GOES min elevation<input class="inset" data-k="geo_min_el" data-num type="number" min="0" max="30" style="width:5em"></label>
+        <label>HamTV downconverter LO (MHz)<input class="inset" data-k="hamtv_lo_mhz" data-num type="number" min="0" max="3000" style="width:6em"></label></div>
+      <div class="more-row"><label style="flex:1 1 100%">HamTV receive command (blank = rtl_sdr | leandvb | ffmpeg)<input class="inset" data-k="hamtv_cmd" placeholder="{if_hz} {gain} {symrate} {out_ts} {hz}" style="width:100%"></label></div>
+      <div class="note" id="rx-sdr"></div>
+      <div class="note" style="margin-top:10px"><b>RECEIVED</b> - pictures, video and telemetry <button class="btn" type="button" id="rx-refresh">REFRESH</button></div>
+      <div id="rx-gallery" class="rx-gal"><div class="chat-empty">Nothing received yet.</div></div>
       <div class="note">Orbit data: N2YO, AMSAT and NASA (ISS trajectory), plus CelesTrak - Tradewind uses the freshest and shows how closely they agree. Beacon schedule: one a minute while the satellite rises, at most 2 more after its highest point, never more than 5 in any 5 minutes. 1200 baud FM, RF only; ground stations that hear the satellite pass it to APRS-IS. Listen before you transmit.</div>
       <div id="iss-src" class="note"></div>
       <div id="iss-list"><div class="chat-empty">Turn Satellite Watch on. The next passes over your grid square appear here, with direction, highest elevation and how many beacons each gets.</div></div>
@@ -1192,10 +1219,46 @@ const hms = d => `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getU
 const mmss = s => s<=0 ? '00:00' : `${pad(Math.floor(s/60))}:${pad(Math.floor(s%60))}`;
 document.addEventListener('change', e=>{
   if (e.target && e.target.id === 'sat-pick' && e.target.value){
-    const n = document.getElementById('sat-cat'); n.value = e.target.value; n.dispatchEvent(new Event('change', {bubbles:true}));
-    const f = document.querySelector('[data-k="sat_freq"]'); if (f){ f.value = '145.825'; f.dispatchEvent(new Event('change', {bubbles:true})); }
+    const [cat, rid] = e.target.value.split('|'), set = (sel, v) => { const el = document.querySelector(sel); if (el){ el.value = v; el.dispatchEvent(new Event('change', {bubbles:true})); } };
+    set('#sat-cat', cat); set('#sat-rx', rid);
+    if (rid === 'iss_aprs') set('[data-k="sat_freq"]', '145.825');
   }
 });
+async function loadRxGallery(){
+  const g = document.getElementById('rx-gallery'); if (!g) return;
+  try {
+    const r = await fetch('/api/rx', {cache:'no-store'}); const d = await r.json();
+    const u = p => '/api/rx/file?p=' + encodeURIComponent(p);
+    g.innerHTML = (d.items||[]).length ? d.items.filter(x=>x.kind!=='audio' || true).map(x=>`<figure>${
+        x.kind==='image' ? `<a href="${u(x.path)}" target="_blank" rel="noopener"><img loading="lazy" src="${u(x.path)}" alt="${esc(x.name)}"></a>` :
+        x.kind==='video' ? `<video controls preload="metadata" src="${u(x.path)}"></video>` :
+        x.kind==='audio' ? `<audio controls preload="none" src="${u(x.path)}" style="width:100%"></audio>` :
+        `<a href="${u(x.path)}" target="_blank" rel="noopener" style="display:block;padding:18px 6px">📄 telemetry</a>`
+      }<figcaption>${esc(x.name)} · ${new Date(x.t*1000).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</figcaption></figure>`).join('')
+      : '<div class="chat-empty">Nothing received yet.</div>';
+  } catch (_) {}
+}
+document.addEventListener('click', e=>{ if (e.target && e.target.id === 'rx-refresh') loadRxGallery(); });
+document.addEventListener('toggle', e=>{ if (e.target && e.target.id === 'iss-box' && e.target.open) loadRxGallery(); }, true);
+let rxBusyWas = '';
+function renderRx(R){
+  const rr = document.getElementById('rx-radio'), sd = document.getElementById('rx-sdr');
+  if (!rr || !R) return;
+  const r = R.radio, T = R.tools || {};
+  rr.innerHTML = `<b>Radio:</b> ${esc(r.label)} on ${r.hz ? (r.hz/1e6).toFixed(3) : '?'} MHz ${esc((r.mode||'').toUpperCase())}` +
+    (r.tuned_hz ? ` · tuned ${(r.tuned_hz/1e6).toFixed(4)} MHz (Doppler)` : '') + (r.recording ? ' · <b style="color:#ff7b70">● RECORDING</b>' : '') +
+    (r.busy ? ` · ${esc(r.busy)}...` : '') +
+    (r.type==='telemetry' && !T.gr_satellites ? '<br><b style="color:#ffb35c">Install gr-satellites</b> to decode telemetry (passes are recorded meanwhile).' : '');
+  sd.innerHTML = R.sdr.filter(x=>x.on).map(x=>`<b>${esc(x.label)}:</b> ${esc(x.status||'waiting')}`).join('<br>') +
+    `<br><span class="sm">Decoders on this PC: ${Object.entries(T).map(([k,v])=>`${esc(k)} ${v?'✓':'✗'}`).join(' · ')}. ${esc(R.not_supported)}</span>`;
+  const pick = document.getElementById('sat-pick');
+  if (pick && document.activeElement !== pick){
+    const v = `${document.getElementById('sat-cat').value}|${document.getElementById('sat-rx').value}`;
+    pick.value = [...pick.options].some(o=>o.value===v) ? v : '';
+  }
+  if (rxBusyWas && !r.busy) loadRxGallery();
+  rxBusyWas = r.busy || '';
+}
 function renderIss(I){
   const box = document.getElementById('iss-list'), nowEl = document.getElementById('iss-now'), nEl = document.getElementById('iss-n');
   if (!box) return;
@@ -1205,8 +1268,6 @@ function renderIss(I){
         cmp = a => ['N','NE','E','SE','S','SW','W','NW'][Math.floor(((a+22.5)%360)/45)];
   const c = I.cur;
   nEl.textContent = c ? `(OVERHEAD - ${c.rising ? 'RISING' : 'SETTING'})` : (I.passes.length ? `(next ${tm(I.passes[0].aos)})` : '');
-  const pick = document.getElementById('sat-pick');
-  if (pick && document.activeElement !== pick) pick.value = String(I.catnr) === '25544' ? '25544' : '';
   const src = document.getElementById('iss-src');
   if (src) src.innerHTML = Object.entries(I.sources||{}).map(([k,v])=>`<b>${esc(k)}</b>${k===I.source?' ✓':''}: ${esc(v.status||'')}`+
       (v.age_days!=null ? `, ${v.age_days} d old` : '') + (v.diff_km!=null && k!==I.source ? `, ${v.diff_km} km from ${esc(I.source)}` : '')).join(' · ');
@@ -1261,7 +1322,7 @@ function readForm(){
     if (el.hasAttribute('data-num') && v!=='') v = Number(v);
     o[el.dataset.k] = v;
   });
-  for (const k of ['bands','regions','rf_modes','alert_modes','watch_modes']) o[k] = $$(`[data-list="${k}"]`).filter(e=>e.checked).map(e=>e.value);
+  for (const k of ['bands','regions','rf_modes','alert_modes','watch_modes','rx_jobs']) o[k] = $$(`[data-list="${k}"]`).filter(e=>e.checked).map(e=>e.value);
   o.call = (o.call||'').toUpperCase();
   return o;
 }
@@ -1833,6 +1894,7 @@ async function poll(){
       : '<div class="chat-empty">Set your grid square (MENU &gt; STATION) to see the islands.</div>';
   }
   renderIss(s.iss);
+  renderRx(s.rx);
   const dg = s.digi, dn = document.getElementById('digi-note');
   if (dn) dn.textContent = !dg ? (cfg.digi ? 'Fill-in digipeater: starts with the station.' : 'Fill-in digipeater off.')
     : `${dg.mode === 'wide' ? 'Wide-area' : 'Fill-in'} digipeater ON: ${dg.count} repeated, ${dg.skipped} skipped (duplicates / limit), ${dg.per_min}/${dg.max_per_min} this minute${dg.last ? ' · last: ' + dg.last.slice(0, 80) : ''}`;
@@ -2759,6 +2821,13 @@ const HELP = {
   fx25_tx:'Adds 16 Reed-Solomon check bytes in front of a normal APRS packet. Stations with FX.25 (Tradewind, Direwolf) can repair errors; ordinary APRS radios still decode the packet as usual. Makes each packet about 0.15 s longer.',
   fm_freq:'FM simplex frequency for Tradewind Robust FM, e.g. 145.570. Agree it with the other station and check it is free. Not 144.390 (APRS), 145.800-146.000 or 435-438 (satellites), and not a repeater input - Tradewind refuses the APRS and satellite frequencies.',
   dx_freq:'USB dial frequency for Tradewind Robust and Robust DX. 2 m weak-signal segment, e.g. 144.150 - agree one with the stations on the other islands. HF: e.g. 10.142 (30 m) or 7.105 (40 m).',
+  sat_rx:'What the radio does on a pass: APRS beacons through the ISS, or receive (no transmitting): ISS SSTV pictures decoded by Tradewind, or BPSK telemetry decoded by gr-satellites.',
+  sat_doppler:'While receiving, the radio is retuned every 10 s to follow the Doppler shift (about +-3.5 kHz on 2 m, +-10 kHz on 70 cm). Needs CAT (IC-9100, FT-991A...).',
+  rx_keep_wav:'Keep the audio of each received pass in the RECEIVED list (about 6 MB a minute). Recordings that could not be decoded are always kept.',
+  rx_jobs:'SDR receivers Tradewind starts by itself: Meteor LRPT on each pass (RTL-SDR), GOES HRIT/EMWIN all the time (dish + LNA), ISS HamTV on each pass (2.4 GHz dish + downconverter). Needs SatDump / leandvb / FFmpeg installed.',
+  sdr_source:'SatDump source name: rtlsdr, airspy, hackrf, sdrplay, plutosdr...',
+  hamtv_lo_mhz:'Local oscillator of your 2.4 GHz downconverter. The RTL-SDR is tuned to 2395 MHz minus this.',
+  hamtv_cmd:'Your own HamTV receive pipeline, e.g. for a HackRF or Pluto. {out_ts} must receive the MPEG-TS; Tradewind turns it into an H.264 MP4 at LOS.',
   sat_catnr:'NORAD catalogue number of the satellite to watch. ISS = 25544. Any APRS satellite works if it is in the N2YO, AMSAT, CelesTrak or NASA data.',
   sat_freq:'Uplink/downlink frequency for the satellite digipeater in MHz. ISS APRS: 145.825 FM. Satellite Switch tunes the radio here.',
   n2yo_key:'Free API key from n2yo.com (Account > API). Optional: AMSAT, NASA and CelesTrak are used without one.',

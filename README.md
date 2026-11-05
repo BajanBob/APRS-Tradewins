@@ -80,6 +80,37 @@ A **setup wizard** opens the first time (and any time from MENU > SETUP WIZARD):
 To reach the face plate from a phone on the same Wi-Fi, run `python3 app.py --host 0.0.0.0` and set a **station PIN**
 (MENU > STATION). Open it by IP address (e.g. `http://192.168.1.20:8073`) or a `.local` name; other host names are refused.
 
+## What's new in 3.16: satellite receivers - pictures, video, telemetry
+
+In **SATELLITE WATCH MODE**, choose the satellite *and what to do* on its passes. Tradewind predicts the pass,
+switches the radio, follows the Doppler shift, records, and decodes.
+
+| Satellite | What | Frequency | Hardware | Decoded by |
+|---|---|---|---|---|
+| ISS | APRS beacons (v3.15) | 145.825 FM | IC-9100 / FT-991A | Tradewind |
+| ISS | **SSTV pictures** | 145.800 FM | IC-9100 / FT-991A | **Tradewind (built in)**: PD120, PD180, Robot 36, Martin M1, Scottie S1 |
+| FUNcube-1 (AO-73) | telemetry, BPSK 1200 | 145.935 USB | IC-9100 / FT-991A | [gr-satellites](https://gr-satellites.readthedocs.io) from the recorded pass |
+| JY1Sat (JO-97) | telemetry, BPSK 1200 | 145.840 USB | IC-9100 / FT-991A | gr-satellites |
+| MESAT-1 (MO-122) | telemetry, BPSK 1200 | 435.800 USB | IC-9100 / FT-991A | gr-satellites |
+| Meteor-M N2-4 | LRPT pictures | 137.900 | RTL-SDR + V-dipole | [SatDump](https://www.satdump.org), started for each pass |
+| GOES-19 (75.2 W) | HRIT/EMWIN weather | 1694.1 | SDR + dish + LNA | SatDump, runs continuously (66 deg up from Barbados) |
+| GOES-18 (137 W) | HRIT/EMWIN weather | 1694.1 | SDR + dish + LNA | SatDump (only ~4 deg up from Barbados) |
+| ISS | **HamTV video** (DVB-S, 2 Msym/s) | 2395 MHz | SDR + 2.4 GHz dish + downconverter | leandvb, then FFmpeg saves **H.264 MP4** |
+
+- **Radio receivers** (receive only, nothing is transmitted): the radio goes to the downlink 1 minute before AOS
+  in the right mode (FM data for SSTV, USB data for BPSK), is retuned every 10 s to follow the Doppler shift,
+  and the pass audio is recorded. At LOS, SSTV pictures are decoded by Tradewind itself; telemetry goes through
+  gr-satellites (`gr_satellites <NORAD> --wavfile ...`), giving a hex dump and a KISS file.
+- **SDR receivers** run alongside the radio, one at a time on the SDR: a Meteor or ISS pass interrupts the GOES
+  feed, which resumes afterwards. Tradewind runs `satdump live meteor_m2-x_lrpt` / `goes_hrit` with your SDR,
+  gain and the pass length. HamTV uses `rtl_sdr | leandvb | ffmpeg` through a downconverter (set its LO), or your
+  own command for a HackRF / Pluto; at LOS the MPEG-TS becomes an MP4 (H.264) with a thumbnail.
+- **RECEIVED**: every picture, video and telemetry file, playable in the face plate (also from a phone).
+- Not receivable with this kind of station: NOAA-20/21 and Suomi NPP (X-band HRD, 15-25 Mbps, needs a tracking
+  dish) and FOSSASAT-2E1 (LoRa, needs a LoRa module).
+- External decoders are optional: install SatDump, gr-satellites, leandvb and FFmpeg for the receivers you use;
+  the panel shows which are found.
+
 ## What's new in 3.15: Satellite Watch Mode (ISS and APRS satellites)
 
 Open **SATELLITE WATCH MODE** on the face plate and tick *Satellite Watch*.
@@ -510,6 +541,7 @@ Save a PSKReporter response from `https://retrieve.pskreporter.info/query?frange
 | `afsk.py` | AFSK 1200 modem and AX.25 framing |
 | `tnc.py` | Sound modem, KISS TCP/serial, PTT drivers, APRS-IS client |
 | `vhf_prop_aprs.py` | PSKReporter fetch and opening detection; also runs alone from the command line |
+| `satrx.py` | Satellite receivers: built-in SSTV decoder, pass recording, SatDump / gr-satellites / HamTV (H.264) drivers |
 | `iss.py` | Satellite Watch: SGP4 orbits, N2YO / AMSAT / NASA / CelesTrak data, passes from your grid square, beacon schedule |
 
 Settings are stored in `~/.tradewind/config.json`.

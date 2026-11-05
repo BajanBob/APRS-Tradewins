@@ -543,6 +543,7 @@ class SoundModemTNC(BaseTNC):
         self.txdelay, self.txtail, self.level = txdelay, txtail, level
         self.busy_hold = busy_hold
         self.audio_level = 0.0
+        self.audio_taps = []       # v3.16 satellite receivers: callables given each block of received audio
         self.noise_floor = None    # quietest recent audio level: the reference for carrier sense
         self.txq = queue.Queue()
         if afsk.is_robust(self.modem):
@@ -567,9 +568,9 @@ class SoundModemTNC(BaseTNC):
         threading.Thread(target=self._rx_loop, daemon=True).start()
         threading.Thread(target=self._tx_loop, daemon=True).start()
 
-    def tune(self, hz):
-        """Put the radio on the APRS frequency in FM data mode (CAT radios only).
-        A CAT problem is reported but never stops the station."""
+    def tune(self, hz, mode=None):
+        """Put the radio on the APRS frequency in FM data mode (CAT radios only); mode "fm" / "usb"
+        overrides the modem's own (satellite receivers). A CAT problem is reported but never stops the station."""
         if not self.ptt.can_tune:
             self.cat_status = "set the frequency on the radio (this PTT method has no CAT tuning)"
             return False
@@ -580,7 +581,7 @@ class SoundModemTNC(BaseTNC):
                         self.cat_saved = self.ptt.read_state() or None
                     except Exception:
                         self.cat_saved = None
-                usb = afsk.is_ssb(self.modem)
+                usb = (mode == "usb") if mode else afsk.is_ssb(self.modem)
                 self.ptt.tune(hz, "usb" if usb else "fm")
                 self.cat_status = f"tuned {hz / 1e6:.3f} MHz {'USB' if usb else 'FM'} data"
                 return True
@@ -611,6 +612,11 @@ class SoundModemTNC(BaseTNC):
                     except queue.Empty:
                         continue
                     self.audio_level = float((chunk ** 2).mean() ** 0.5)
+                    for tap in list(self.audio_taps):
+                        try:
+                            tap(chunk)
+                        except Exception:
+                            self.audio_taps.remove(tap)
                     if not self.tx_active:             # follow the quiet level: down fast, up slowly
                         nf = self.noise_floor
                         self.noise_floor = self.audio_level if nf is None or self.audio_level < nf else \

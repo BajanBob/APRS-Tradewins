@@ -29,7 +29,7 @@ jobs:
         run: |
           mkdir -p android_build/src
           cp buildozer.spec android_build/
-          cp app.py afsk.py digi.py dxmode.py fx25.py iss.py tnc.py vhf_prop_aprs.py wx.py faceplate.html icon.png android_build/src/
+          cp app.py afsk.py digi.py dxmode.py fx25.py iss.py satrx.py tnc.py vhf_prop_aprs.py wx.py faceplate.html icon.png android_build/src/
           cp android_main.py android_build/src/main.py
           # the container runs as a different user; let it write here
           chmod -R a+rwX android_build

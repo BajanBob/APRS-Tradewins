@@ -1062,6 +1062,7 @@ def test_dx_mode():
     assert tnc.dx_freq_hz({"dx_freq": "100.0"}) is None
     test_robust_fm()
     print("DX mode ok")
+    test_iss()
 
 
 def test_robust_fm():
@@ -1092,6 +1093,183 @@ def test_robust_fm():
                                  "145.570FM").startswith(">DX OPEN St Vincent 175km brg272 8P5AB RFM 145.570FM")
     assert tnc.aprsis_error_text(ConnectionResetError(10054, "forcibly closed")).startswith("APRS-IS server dropped")
     print("Robust FM ok")
+
+
+def _tle_line(body):
+    """Complete a 68-character TLE line with its checksum."""
+    return body[:68] + str(sum(int(c) if c.isdigit() else (1 if c == "-" else 0) for c in body[:68]) % 10)
+
+
+def test_iss():
+    """v3.15 ISS passes: SGP4 against the published reference, look angles, passes, beacon schedule, app wiring."""
+    import math
+    import iss
+    import app
+    # SGP4 verification case 00005 (Vallado et al. 2006, tcppver.out): km and km/s in TEME
+    sat = iss.Satellite("1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4753",
+                        "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82419157413667")
+    ref = {0: ((7022.46529266, -1400.08296755, 0.03995155), (1.893841015, 6.405893759, 4.534807250)),
+           360: ((-7154.03120202, -3783.17682504, -3536.19412294), (4.741887409, -4.151817765, -2.093935425)),
+           4320: ((-9060.47373569, 4658.70952502, 813.68673153), (-2.232832783, -4.110453490, -3.157345433))}
+    for t, (r0, v0) in ref.items():
+        r, v = sat.propagate(t)
+        assert max(abs(a - b) for a, b in zip(r, r0)) < 1e-6 and max(abs(a - b) for a, b in zip(v, v0)) < 1e-9, (t, r, v)
+    assert iss.parse_tle_text("ISS (ZARYA)\n1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4753\n"
+                              "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82419157413667\n")[0] == "ISS (ZARYA)"
+    assert iss.parse_tle_text("1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4754\n"
+                              "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82419157413667") is None   # bad checksum
+    # an ISS-like orbit: straight overhead from its sub-point, passes of the right shape over Barbados
+    l1 = _tle_line("1 25544U 98067A   26309.50000000  .00012000  00000-0  21000-3 0  999 ")
+    l2 = _tle_line("2 25544  51.6400 120.0000 0005000  90.0000 270.0000 15.50000000 1000 ")
+    s = iss.Satellite(l1, l2)
+    t = s.epoch + 3600
+    (x, y, z), _ = s.at(t)
+    g = iss.gmst(t)
+    xe, ye = math.cos(g) * x + math.sin(g) * y, -math.sin(g) * x + math.cos(g) * y
+    lat = math.degrees(math.atan(math.tan(math.atan2(z, math.hypot(xe, ye))) / (1 - 1 / 298.257223563) ** 2))
+    az, el, rng = iss.look(s, (lat, math.degrees(math.atan2(ye, xe))), t)
+    assert el > 89.5 and 380 < rng < 460, (el, rng)
+    me = (13.104, -59.625)
+    ps = iss.passes(s, me, start=s.epoch, hours=24)
+    assert 2 <= len(ps) <= 8 and all(60 < p["duration"] < 720 and p["aos"] < p["tca"] < p["los"] for p in ps), ps
+    hi = max(ps, key=lambda p: p["max_el"])
+    assert abs(iss.elevation(s, me, hi["aos"])) < 0.2 and abs(iss.elevation(s, me, hi["los"])) < 0.2
+    assert iss.elevation(s, me, hi["tca"]) >= iss.elevation(s, me, hi["tca"] + 20) - 1e-6
+    assert len(iss.passes(s, me, start=s.epoch, hours=24, min_el=30)) < len(ps)
+    w = iss.window_above(s, me, hi, 10)
+    assert hi["aos"] < w[0] < hi["tca"] < w[1] < hi["los"] and abs(iss.elevation(s, me, w[0]) - 10) < 0.2
+    mid = (hi["aos"] + hi["los"]) / 2                       # a pass already in progress keeps its true AOS
+    assert abs(iss.passes(s, me, start=mid, hours=2)[0]["aos"] - hi["aos"]) < 2
+    # beacon schedule: 1/min rising, <=2 while setting, <=5 in any 5 minutes
+    assert iss.plan(tca=600, start=0, end=900) == [0, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600, 660]
+    assert iss.plan(tca=150, start=0, end=600) == [0, 60, 120, 180, 240]
+    assert iss.plan(tca=0, start=0, end=600) == [0, 60]
+    for tca, end in ((600, 900), (200, 700), (30, 400)):
+        times = iss.plan(tca, 0, end)
+        assert all(sum(1 for u in times if 0 <= u - t0 < 300) <= 5 for t0 in times), times
+        assert sum(1 for u in times if u >= tca) <= 2
+    assert iss.beacon_due(100, 500, 5.0, 10, [], [])[0] is False                       # too low
+    assert iss.beacon_due(100, 500, 20, 10, [50], [50])[0] is False                    # under a minute
+    assert iss.beacon_due(400, 300, 20, 10, [310, 370], [310, 370])[0] is False        # 2 already while setting
+    assert iss.beacon_due(400, 900, 20, 10, [], [110, 170, 230, 290, 340])[0] is False  # 5 in 5 minutes
+    assert iss.beacon_due(400, 900, 20, 10, [], [100, 170, 230, 290, 340])[0] is True
+    cm = iss.beacon_comment({"grid": "GK03ec", "iss_comment": "x" * 60}, 12, 34.6)
+    assert len(cm) <= 43 and cm.endswith(" GK03 #12 el35"), cm
+    # app: a simulated pass sends beacons on the schedule, on path ARISS, RF only
+    st = app.Station.__new__(app.Station)
+    app.Station.__init__(st)
+    st.cfg = dict(app.DEFAULTS, call="8P5AB-7", grid="GK03ec", iss_enabled=True, iss_auto_beacon=True, iss_min_el=10)
+    st.iss_sat, st.iss_cat, st.iss_next_tle = s, 25544, float("inf")
+    sent = []
+    st.transmit = lambda info, rf=True, net=True, mode=None, force_rf=False, path=None: sent.append((info, net, force_rf, path))
+    st._iss_can_beacon = lambda: (True, "")
+    st._iss_tune = lambda on: None
+    for t in range(int(hi["aos"]) - 30, int(hi["los"]) + 30):
+        st._iss_tick(t)
+    assert len(sent) == len(iss.plan(hi["tca"], *w)), (len(sent), w)
+    assert all(not n and f and p == ["ARISS"] and i.startswith("=") for i, n, f, p in sent), sent[0]
+    assert st.iss_cur is None and st.iss_last["sent"] == len(sent)
+    assert not [e for e in app.validate(dict(st.cfg)) if "ISS" in e]
+    assert any("Satellite minimum" in e for e in app.validate(dict(st.cfg, iss_min_el=80)))
+    st2 = app.Station.__new__(app.Station)
+    app.Station.__init__(st2)
+    st2.cfg = dict(app.DEFAULTS, call="8P5AB-7", grid="GK03ec", tnc="sound", modem="robust", rf_announce=True)
+    st2.tnc = object()
+    assert "1200" in st2._iss_can_beacon()[1]
+    test_sat_watch(s, hi)
+    print(f"ISS passes ok ({len(ps)} passes/day, best {hi['max_el']} deg, {len(sent)} beacons)")
+
+
+def test_sat_watch(s, hi):
+    """Satellite Watch Mode: N2YO / AMSAT / NASA orbit sources, and Satellite Switch on the IC-9100 and FT-991A."""
+    import json
+    import math
+    import iss
+    import app
+    # N2YO JSON and AMSAT's multi-satellite file
+    tle1 = "1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4753"
+    tle2 = "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82419157413667"
+    n2 = json.dumps({"info": {"satid": 5, "satname": "VANGUARD 1", "transactionscount": 1}, "tle": tle1 + "\r\n" + tle2})
+    assert iss.parse_n2yo(n2.encode()) == ("VANGUARD 1", tle1, tle2)
+    assert iss.parse_n2yo(b'{"error":"Invalid API Key!"}') is None and iss.parse_n2yo(b"<html>") is None
+    other1 = _tle_line("1 07530U 74089B   26308.02040639 -.00000039  00000-0  46821-4 0  999 ")
+    other2 = _tle_line("2 07530 101.9884 322.7152 0012062 223.6405 162.0645 12.53700304 3780 ")
+    amsat = f"AO-07\n{other1}\n{other2}\nVANGUARD\n{tle1}\n{tle2}\n"
+    assert iss.parse_tle_text(amsat, 5)[0] == "VANGUARD" and iss.parse_tle_text(amsat, 7530)[0] == "AO-07"
+    assert iss.parse_tle_text(amsat, 25544) is None
+    # NASA: precession goes the right way (J2000 equinox at RA +0.34 deg, Dec +0.15 deg by 2026.85)
+    t = iss._unix_of_year(2026) + 309 * 86400
+    P = iss.precession_matrix(t)
+    ra, dec = math.degrees(math.atan2(P[1][0], P[0][0])), math.degrees(math.asin(P[2][0]))
+    assert 0.33 < ra < 0.355 and 0.14 < dec < 0.155, (ra, dec)
+    assert all(abs(sum(P[i][k] * P[j][k] for k in range(3)) - (i == j)) < 1e-12 for i in range(3) for j in range(3))
+    # an OEM file made from the SGP4 orbit (taken back to J2000) reproduces it after interpolation
+    lines = ["CCSDS_OEM_VERS = 2.0", "META_START", "OBJECT_NAME = ISS", "REF_FRAME = EME2000", "TIME_SYSTEM = UTC", "META_STOP",
+             "COMMENT test"]
+    t0 = s.epoch
+    for k in range(0, 24 * 15):
+        tk = t0 + k * 240
+        r, v = s.at(tk)
+        Pt = iss.precession_matrix(tk)
+        rj = tuple(sum(Pt[i][n] * r[i] for i in range(3)) for n in range(3))      # transpose: date -> J2000
+        vj = tuple(sum(Pt[i][n] * v[i] for i in range(3)) for n in range(3))
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(tk)) + ".000"
+        lines.append(ts + " " + " ".join(f"{x:.6f}" for x in rj + vj))
+    lines += ["COVARIANCE_START", "EPOCH = 2026-11-05T12:00:00.000", "1 2 3 4 5 6 7", "COVARIANCE_STOP"]
+    eph = iss.Ephemeris(iss.parse_oem("\n".join(lines)))
+    for dt in (1000, 7777, 30000):
+        assert iss.position_diff_km(eph, s, t0 + dt) < 0.05, dt
+    ps2 = iss.passes(eph, (13.104, -59.625), start=hi["aos"] - 600, hours=1)
+    assert ps2 and abs(ps2[0]["aos"] - hi["aos"]) < 3 and abs(ps2[0]["max_el"] - hi["max_el"]) < 0.2, (ps2, hi)
+    try:
+        eph.at(t0 - 3600)
+        raise AssertionError("outside the ephemeris must raise")
+    except ValueError:
+        pass
+    # freshest source wins; NASA is the fallback when the TLEs are old
+    old_tle = iss.Satellite(tle1, tle2)
+    assert iss.pick_best({"AMSAT": s, "CelesTrak": old_tle, "N2YO": None}, t0 + 3600)[0] == "AMSAT"
+    assert iss.pick_best({"AMSAT": old_tle, "NASA": eph}, t0 + 3600)[0] == "NASA"
+    assert iss.pick_best({"N2YO": None}) == (None, None)
+    # Satellite Switch: 1 minute before AOS the radio goes to 145.825 FM data, back to APRS at LOS
+    for radio in ("IC-9100", "FT-991A"):
+        if radio == "IC-9100":
+            ptt = tnc.CivPTT("COMx", 9600, "7C")
+            ptt.ser = FakeIcom()
+            freq = lambda: ptt.ser.hz                                      # noqa: E731
+            fm = lambda: ptt.ser.mode[0] == 0x05                          # noqa: E731
+        else:
+            ptt = tnc.YaesuCatPTT("COMy", 38400)
+            ptt.ser = FakeYaesu()
+            freq = lambda: ptt.ser.hz                                      # noqa: E731
+            fm = lambda: ptt.ser.mode == "A"                              # noqa: E731
+        st = app.Station.__new__(app.Station)
+        app.Station.__init__(st)
+        st.cfg = dict(app.DEFAULTS, call="8P5AB-7", grid="GK03ec", iss_enabled=True, iss_auto_beacon=True,
+                      tnc="sound", modem="1200", rf_announce=True, aprs_freq="144.390")
+        st.iss_sat, st.iss_cat, st.iss_next_tle, st.running = s, 25544, float("inf"), True
+        st.tnc = tnc.SoundModemTNC(ptt=ptt, tune_hz=144_390_000)
+        sent = []
+        st.transmit = lambda info, rf=True, net=True, mode=None, force_rf=False, path=None: sent.append((info, freq()))
+        st._iss_tick(hi["aos"] - 120)
+        assert not st.iss_tuned
+        st._iss_tick(hi["aos"] - 59)
+        assert st.iss_tuned and freq() == 145_825_000 and fm(), (radio, freq())
+        for tk in range(int(hi["aos"]) - 58, int(hi["aos"]) + 1):
+            st._iss_tick(tk)
+        assert not sent
+        st._iss_tick(hi["aos"] + 1)                                            # on the horizon: sequence starts
+        assert len(sent) == 1 and sent[0][1] == 145_825_000, (radio, sent)
+        for tk in range(int(hi["aos"]) + 2, int(hi["los"]) + 5):
+            st._iss_tick(tk)
+        assert not st.iss_tuned and freq() == 144_390_000, (radio, freq())
+        times = [x for x in range(int(hi["aos"]) + 1, int(hi["los"]) + 1)]
+        want = iss.plan(hi["tca"], times[0], times[-1])
+        assert len(sent) == len(want) and sum(1 for x in want if x >= hi["tca"]) <= 2, (radio, len(sent), len(want))
+    assert any("NORAD" in e for e in app.validate(dict(app.DEFAULTS, call="8P5AB", grid="GK03ec", iss_enabled=True, sat_catnr="x")))
+    assert any("Satellite frequency" in e for e in app.validate(dict(app.DEFAULTS, call="8P5AB", grid="GK03ec",
+                                                                       iss_enabled=True, sat_freq="100")))
+    print("Satellite Watch ok (N2YO / AMSAT / NASA sources, IC-9100 + FT-991A switch)")
 
 
 if __name__ == "__main__":

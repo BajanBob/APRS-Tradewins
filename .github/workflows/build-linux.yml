@@ -40,7 +40,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p Tradewind
-          cp app.py afsk.py digi.py dxmode.py fx25.py tnc.py vhf_prop_aprs.py wx.py faceplate.html icon.png \
+          cp app.py afsk.py digi.py dxmode.py fx25.py iss.py tnc.py vhf_prop_aprs.py wx.py faceplate.html icon.png \
              requirements.txt test_modem.py install_linux.sh README.md LICENSE Tradewind/
           chmod +x Tradewind/install_linux.sh
           tar czf Tradewind-linux.tar.gz Tradewind

@@ -164,7 +164,7 @@ select.inset{font-size:15px;appearance:none;padding-right:30px;
   font-size:13px;padding:10px 12px;border:1px solid #000;box-shadow:0 2px 10px rgba(0,0,0,.8) inset}
 .mon div{white-space:pre-wrap;word-break:break-all;line-height:1.45}
 .mon .t{color:var(--mon-dim)}
-.mon .k-TX{color:#ffd27a}.mon .k-ERR{color:#ff7b70}.mon .k-PROP{color:#7fd8ff}.mon .k-SYS{color:#b9c2cb}.mon .k-IGT{color:#c7a6ff}.mon .k-DIG{color:#9fe870}.mon .k-DX{color:#ffb35c}.mon .k-WX{color:#8ef0e0}.mon .k-MSG{color:#7dd3fc}
+.mon .k-TX{color:#ffd27a}.mon .k-ERR{color:#ff7b70}.mon .k-PROP{color:#7fd8ff}.mon .k-SYS{color:#b9c2cb}.mon .k-IGT{color:#c7a6ff}.mon .k-DIG{color:#9fe870}.mon .k-DX{color:#ffb35c}.mon .k-ISS{color:#c4b5fd}.mon .k-WX{color:#8ef0e0}.mon .k-MSG{color:#7dd3fc}
 .missed{margin-top:18px;border-radius:10px;border:1px solid #6b4a12;background:linear-gradient(180deg,#2a1d08,#1c1407);
   padding:14px 16px;box-shadow:0 0 0 1px rgba(255,181,71,.15) inset}
 .missed.hide{display:none}
@@ -1063,6 +1063,23 @@ details.more summary::-webkit-details-marker{display:none}
       <div class="note">For DX beyond the horizon use <b>Robust DX</b> (MENU &gt; RADIO / TNC &gt; Modem) on 2 m USB, with a yagi on the beam heading below. When 2 m is closed, the same mode on 30 m or 40 m (USB) reaches all the islands.</div>
       <div id="dx-list"><div class="chat-empty">Turn DX watch on. The islands, their distance and beam heading from your grid square appear here, marked OPEN when PSKReporter shows the band open in that direction.</div></div>
     </details>
+    <details class="heard" id="iss-box">
+      <summary>SATELLITE WATCH MODE <span id="iss-n"></span></summary>
+      <div class="note" id="iss-now" style="margin-top:8px"></div>
+      <label class="chk" style="margin:8px 0"><input type="checkbox" data-k="iss_enabled" id="iss-on"> Satellite Watch: predict passes of the selected satellite over my grid square</label>
+      <label class="chk" style="margin:0 0 8px"><input type="checkbox" data-k="iss_tune"> Satellite Switch: put the radio (IC-9100, FT-991A or other CAT radio) on the satellite frequency 1 minute before each pass, back to APRS at LOS</label>
+      <label class="chk" style="margin:0 0 8px"><input type="checkbox" data-k="iss_auto_beacon" id="iss-auto"> Start the beacon sequence when the satellite reaches the horizon</label>
+      <div class="more-row"><label>Satellite<select class="inset" id="sat-pick" style="width:15em"><option value="25544">ISS (ARISS digipeater)</option><option value="">Other - NORAD number</option></select></label>
+        <label>NORAD no.<input class="inset" data-k="sat_catnr" data-num type="number" min="1" max="999999" id="sat-cat" style="width:7em"></label>
+        <label>Frequency (MHz)<input class="inset" data-k="sat_freq" placeholder="145.825" style="width:7em"></label></div>
+      <div class="more-row"><label>Start at elevation (deg, 0 = horizon)<input class="inset" data-k="iss_min_el" data-num type="number" min="0" max="60" style="width:6em"></label>
+        <label>Path<input class="inset" data-k="iss_path" placeholder="ARISS" style="width:8em"></label>
+        <label>Beacon comment<input class="inset" data-k="iss_comment" maxlength="30" style="width:14em"></label></div>
+      <div class="more-row"><label>N2YO API key (free at n2yo.com)<input class="inset" data-k="n2yo_key" autocomplete="off" style="width:16em"></label></div>
+      <div class="note">Orbit data: N2YO, AMSAT and NASA (ISS trajectory), plus CelesTrak - Tradewind uses the freshest and shows how closely they agree. Beacon schedule: one a minute while the satellite rises, at most 2 more after its highest point, never more than 5 in any 5 minutes. 1200 baud FM, RF only; ground stations that hear the satellite pass it to APRS-IS. Listen before you transmit.</div>
+      <div id="iss-src" class="note"></div>
+      <div id="iss-list"><div class="chat-empty">Turn Satellite Watch on. The next passes over your grid square appear here, with direction, highest elevation and how many beacons each gets.</div></div>
+    </details>
     <details class="heard" id="relay-box">
       <summary>SEND THROUGH A RELAY STATION</summary>
       <form class="hail" id="relay-form" style="margin-top:8px">
@@ -1173,6 +1190,37 @@ async function api(path, body){
 const pad = n => String(n).padStart(2,'0');
 const hms = d => `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
 const mmss = s => s<=0 ? '00:00' : `${pad(Math.floor(s/60))}:${pad(Math.floor(s%60))}`;
+document.addEventListener('change', e=>{
+  if (e.target && e.target.id === 'sat-pick' && e.target.value){
+    const n = document.getElementById('sat-cat'); n.value = e.target.value; n.dispatchEvent(new Event('change', {bubbles:true}));
+    const f = document.querySelector('[data-k="sat_freq"]'); if (f){ f.value = '145.825'; f.dispatchEvent(new Event('change', {bubbles:true})); }
+  }
+});
+function renderIss(I){
+  const box = document.getElementById('iss-list'), nowEl = document.getElementById('iss-now'), nEl = document.getElementById('iss-n');
+  if (!box) return;
+  if (!I){ nEl.textContent = ''; nowEl.textContent = ''; return; }
+  const now = Date.now()/1000, tm = t => new Date(t*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
+        day = t => new Date(t*1000).toLocaleDateString([], {weekday:'short'}),
+        cmp = a => ['N','NE','E','SE','S','SW','W','NW'][Math.floor(((a+22.5)%360)/45)];
+  const c = I.cur;
+  nEl.textContent = c ? `(OVERHEAD - ${c.rising ? 'RISING' : 'SETTING'})` : (I.passes.length ? `(next ${tm(I.passes[0].aos)})` : '');
+  const pick = document.getElementById('sat-pick');
+  if (pick && document.activeElement !== pick) pick.value = String(I.catnr) === '25544' ? '25544' : '';
+  const src = document.getElementById('iss-src');
+  if (src) src.innerHTML = Object.entries(I.sources||{}).map(([k,v])=>`<b>${esc(k)}</b>${k===I.source?' ✓':''}: ${esc(v.status||'')}`+
+      (v.age_days!=null ? `, ${v.age_days} d old` : '') + (v.diff_km!=null && k!==I.source ? `, ${v.diff_km} km from ${esc(I.source)}` : '')).join(' · ');
+  let line = I.loading ? 'Loading orbit data...' : '';
+  if (I.now) line = `${esc(I.name || 'Satellite')} now: ${I.now.up ? '<b style="color:#46e0b4">UP</b> ' : ''}az ${I.now.az}° ${cmp(I.now.az)}, el ${I.now.el}°, ${Number(I.now.km).toLocaleString()} km` +
+    (c ? ` · ${c.sent} beacon${c.sent===1?'':'s'} sent, LOS in ${mmss(c.los-now)}` : '') + (I.tuned ? ` · radio on ${I.freq} MHz` : '');
+  if (I.blocked) line += `<br><b style="color:#ff7b70">No ISS beacons:</b> ${esc(I.blocked)}`;
+  if (I.error) line += `<br><b style="color:#ffb35c">${esc(I.error)}</b>`;
+  if (I.last) line += `<br><span class="sm">Last pass: max ${Math.round(I.last.max_el)}°, ${I.last.sent} beacon${I.last.sent===1?'':'s'} sent</span>`;
+  nowEl.innerHTML = line;
+  box.innerHTML = I.passes.length ? I.passes.map(p=>`<div class="wolf-row"><span><b>${day(p.aos)} ${tm(p.aos)}–${tm(p.los)}</b>${now>=p.aos && now<p.los ? ' <b style="color:#46e0b4">NOW</b>' : ''}<br><span class="sm">${Math.round(p.duration/60)} min · ${p.planned} beacon${p.planned===1?'':'s'}</span></span>`+
+      `<span class="sm">rises ${cmp(p.aos_az)} ${p.aos_az}° › highest <b>${Math.round(p.max_el)}°</b> ${cmp(p.tca_az)} at ${tm(p.tca)} › sets ${cmp(p.los_az)} ${p.los_az}°</span><span></span></div>`).join('')
+    : `<div class="chat-empty">${I.loading ? 'Loading orbit data...' : 'No passes high enough in the next 36 hours, or set your grid square (MENU &gt; STATION).'}</div>`;
+}
 
 /* ---------- matrix ---------- */
 function drawMatrix(cells){
@@ -1784,6 +1832,7 @@ async function poll(){
     dxl.innerHTML = DX.targets.length ? DX.targets.map(t=>`<div class="wolf-row"><span><b>${esc(t.name)}</b> ${t.open ? '<b style="color:#46e0b4">OPEN</b>' : ''}<br><span class="sm">${Number(t.km).toLocaleString()} km · beam ${t.bearing}° ${t.compass} · ${esc(t.path)}${t.evidence ? ' · ' + esc(t.evidence.tx) + '›' + esc(t.evidence.rx) + ' ' + t.evidence.km + ' km ' + esc(t.evidence.mode) + ' (' + esc(t.evidence.kind) + ')' : ''}</span></span></div>`).join('')
       : '<div class="chat-empty">Set your grid square (MENU &gt; STATION) to see the islands.</div>';
   }
+  renderIss(s.iss);
   const dg = s.digi, dn = document.getElementById('digi-note');
   if (dn) dn.textContent = !dg ? (cfg.digi ? 'Fill-in digipeater: starts with the station.' : 'Fill-in digipeater off.')
     : `${dg.mode === 'wide' ? 'Wide-area' : 'Fill-in'} digipeater ON: ${dg.count} repeated, ${dg.skipped} skipped (duplicates / limit), ${dg.per_min}/${dg.max_per_min} this minute${dg.last ? ' · last: ' + dg.last.slice(0, 80) : ''}`;
@@ -2710,6 +2759,15 @@ const HELP = {
   fx25_tx:'Adds 16 Reed-Solomon check bytes in front of a normal APRS packet. Stations with FX.25 (Tradewind, Direwolf) can repair errors; ordinary APRS radios still decode the packet as usual. Makes each packet about 0.15 s longer.',
   fm_freq:'FM simplex frequency for Tradewind Robust FM, e.g. 145.570. Agree it with the other station and check it is free. Not 144.390 (APRS), 145.800-146.000 or 435-438 (satellites), and not a repeater input - Tradewind refuses the APRS and satellite frequencies.',
   dx_freq:'USB dial frequency for Tradewind Robust and Robust DX. 2 m weak-signal segment, e.g. 144.150 - agree one with the stations on the other islands. HF: e.g. 10.142 (30 m) or 7.105 (40 m).',
+  sat_catnr:'NORAD catalogue number of the satellite to watch. ISS = 25544. Any APRS satellite works if it is in the N2YO, AMSAT, CelesTrak or NASA data.',
+  sat_freq:'Uplink/downlink frequency for the satellite digipeater in MHz. ISS APRS: 145.825 FM. Satellite Switch tunes the radio here.',
+  n2yo_key:'Free API key from n2yo.com (Account > API). Optional: AMSAT, NASA and CelesTrak are used without one.',
+  iss_enabled:'Satellite Watch Mode. Works out when the satellite passes over your grid square from its orbit (downloaded twice a day from CelesTrak and kept for offline use). A 6-character grid square gives the most accurate times.',
+  iss_auto_beacon:'During each pass, sends your position through the ISS APRS digipeater: one a minute while it rises, at most 2 after its highest point, never more than 5 in any 5 minutes. Needs Modem 1200 and RF switched on.',
+  iss_min_el:'The beacon sequence starts when the satellite reaches this elevation; 0 = on the horizon (AOS). Passes that never get this high are not listed. Try 10 if trees or buildings block the horizon.',
+  iss_path:'Digipeater path for ISS beacons. ARISS is the standard alias; RS0ISS also works.',
+  iss_comment:'Text sent with your ISS beacons; your grid square, the beacon number and the elevation are added.',
+  iss_tune:'Satellite Switch: with a CAT radio (IC-9100 over CI-V, FT-991A over Yaesu CAT, and others) Tradewind moves it to the satellite frequency in FM data mode 1 minute before AOS and back to your APRS frequency at LOS. The normal position beacon waits until then.',
   dx_height_m:'Height of your antenna above sea level, used for the line-of-sight estimate to each island\'s high ground.',
   igate_tx:'Messages from the internet for stations your radio hears locally are passed on to them on RF, as a standard iGate does. Limited to 30 an hour.',
   kiss_server:'Other APRS programs on this computer can connect to Tradewind on this port as if it were a hardware TNC. Packets they send must use your callsign.',

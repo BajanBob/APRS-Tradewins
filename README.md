@@ -80,6 +80,33 @@ A **setup wizard** opens the first time (and any time from MENU > SETUP WIZARD):
 To reach the face plate from a phone on the same Wi-Fi, run `python3 app.py --host 0.0.0.0` and set a **station PIN**
 (MENU > STATION). Open it by IP address (e.g. `http://192.168.1.20:8073`) or a `.local` name; other host names are refused.
 
+## What's new in 3.15: Satellite Watch Mode (ISS and APRS satellites)
+
+Open **SATELLITE WATCH MODE** on the face plate and tick *Satellite Watch*.
+
+- **Pass prediction from your grid square** for the selected satellite (ISS = NORAD 25544 by default, or any
+  NORAD number). The panel lists the passes in the next 36 hours - rise and set times and directions, the
+  highest elevation and when it comes, how many beacons each pass gets - and, during a pass, where the
+  satellite is now (azimuth, elevation, range). A 6-character grid square (e.g. GK03ec) gives the best times.
+- **Orbit data from N2YO, AMSAT and NASA**, plus CelesTrak. Tradewind uses the freshest, shows each source's
+  age and how many km it differs from the one in use, and warns if they disagree. NASA's own ISS trajectory
+  file (J2000 state vectors, precessed to date) is the ISS fallback when no TLE can be reached. N2YO needs a
+  free API key (n2yo.com > Account > API); the others need nothing. Everything is cached, so passes keep
+  working offline. The orbit is computed with SGP4 in pure Python (`iss.py`), checked against the published
+  reference values - no extra packages, so it works on Android too.
+- **Satellite Switch** (CAT radios: Icom IC-9100 over CI-V, Yaesu FT-991A over CAT, and the other radios
+  Tradewind already tunes): 1 minute before each pass the radio moves to **145.825 MHz FM data** (or the
+  frequency you set), and back to your APRS frequency at LOS. The normal position beacon waits meanwhile.
+  Without CAT, the log tells you when to change frequency.
+- **Beacon sequence from the horizon** (tick *Start the beacon sequence*). As soon as the prediction puts the
+  satellite on the horizon (or the start elevation you set), your position goes out on path `ARISS`, RF only:
+  - **one a minute while it is rising** (before its highest point);
+  - **at most 2 more after the highest point**, while it sets;
+  - **never more than 5 in any 5 minutes**.
+
+  Each beacon carries your grid square, its number in the pass and the elevation (e.g. `Tradewind via ISS GK03 #3 el42`).
+  Needs RF switched on and Modem 1200 (satellite digipeaters decode 1200 baud AFSK).
+
 ## What's new in 3.13
 
 - **Caribbean map on the DX radar**: coastlines and borders from Puerto Rico in the north to Suriname and French Guiana in the south, Venezuela in the west and the Atlantic to 1,000 miles east of Barbados (Natural Earth 1:50m, public domain). Ranges 200 / 400 / 800 km and 1,000 miles; rings show km and miles when zoomed out.
@@ -423,6 +450,7 @@ Use **MENU → STATION → BCN** to send a beacon while you adjust the TX audio 
 
 - **Bulletins.** `BLN1VHF`–`BLN6VHF` carry one line each for 2m and 70cm × NA/EU/LA, e.g. `2m OPEN CAR-NA 2 paths best 8P6XX>K4ABC 2582km FT8`. Each is repeated every 30 minutes while the opening lasts. `BLN9` is the TEST button.
 - **Position beacon.** The centre of your grid square, every 30 minutes (optional).
+- **Satellite beacons** (optional, v3.15 Satellite Watch Mode). Your position on path `ARISS` during ISS passes, from the horizon: 1 a minute while it rises, at most 2 while it sets, never more than 5 in 5 minutes. RF only.
 - **Optional RX iGate.** Packets heard on RF are gated to APRS-IS.
 
 ## Propagation modes
@@ -482,6 +510,7 @@ Save a PSKReporter response from `https://retrieve.pskreporter.info/query?frange
 | `afsk.py` | AFSK 1200 modem and AX.25 framing |
 | `tnc.py` | Sound modem, KISS TCP/serial, PTT drivers, APRS-IS client |
 | `vhf_prop_aprs.py` | PSKReporter fetch and opening detection; also runs alone from the command line |
+| `iss.py` | Satellite Watch: SGP4 orbits, N2YO / AMSAT / NASA / CelesTrak data, passes from your grid square, beacon schedule |
 
 Settings are stored in `~/.tradewind/config.json`.
 

@@ -34,7 +34,7 @@ import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.12"
+APP_VERSION = "3.13"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -566,7 +566,7 @@ def validate(cfg):
         if cfg.get("tnc") == "sound" and cfg.get("modem") in ("robust", "robust_dx", "300"):
             errs.append("The digipeater works on 1200-baud VHF/UHF APRS, not on the Robust or HF modems.")
         if cfg.get("digi_alias") and not digimod.valid_call(cfg.get("digi_alias")):
-            errs.append("Digipeater alias must look like a callsign, e.g. BARBADOS or 8P5AB-1 (or leave it blank).")
+            errs.append("Digipeater alias: at most 6 letters/digits plus an optional -SSID, e.g. BRBDOS or 8P5AB-1 (or leave it blank).")
         try:
             if not 1 <= int(cfg.get("digi_max_per_min") or 10) <= 60:
                 raise ValueError

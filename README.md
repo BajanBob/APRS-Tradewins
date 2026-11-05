@@ -80,6 +80,11 @@ A **setup wizard** opens the first time (and any time from MENU > SETUP WIZARD):
 To reach the face plate from a phone on the same Wi-Fi, run `python3 app.py --host 0.0.0.0` and set a **station PIN**
 (MENU > STATION). Open it by IP address (e.g. `http://192.168.1.20:8073`) or a `.local` name; other host names are refused.
 
+## What's new in 3.13
+
+- **Caribbean map on the DX radar**: coastlines and borders from Puerto Rico in the north to Suriname and French Guiana in the south, Venezuela in the west and the Atlantic to 1,000 miles east of Barbados (Natural Earth 1:50m, public domain). Ranges 200 / 400 / 800 km and 1,000 miles; rings show km and miles when zoomed out.
+- Digipeater alias: the example now fits the 6-character limit (e.g. BRBDOS or 8P6GC-1).
+
 ## What's new in 3.12
 
 - **DX radar** (APRS DX - Islands): a radar-style globe centred on your station, with true bearings and distances. It shows the islands (green and flashing when open, with the path drawn from you), stations heard on RF (orange, with call signs), and the PSKReporter stations behind each opening (blue). Range 200-800 km.
@@ -114,7 +119,7 @@ the **TNC** (built-in 1200-baud sound modem), an **iGate** (MENU > APRS-IS) and 
 
 Switch on **Digipeater** under MENU > RADIO / TNC and choose **Fill-in** or **Wide-area**. It repeats a packet once when:
 - its first hop is **WIDE1-1**, for example `8P6XX>APRS,WIDE1-1,WIDE2-1:...` goes out as `8P6XX>APRS,8P5AB-10*,WIDE1*,WIDE2-1:...`, or
-- the sender routes it through your callsign or your optional **alias** (e.g. `BARBADOS`).
+- the sender routes it through your callsign or your optional **alias** (up to 6 characters, e.g. `BRBDOS`).
 
 It never repeats its own packets, a packet heard again within 30 s, internet-gated traffic (TCPIP/TCPXX), RELAY/TRACE paths,
 or WIDE1-1 that isn't the first hop. It repeats at most 10 packets a minute by default (1-60), and the station's

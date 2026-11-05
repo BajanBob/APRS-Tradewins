@@ -114,7 +114,7 @@ def dx_beacon_text(target, cfg, freq_label, seq=1, of=1):
     if modem == "robust_dx":
         text = f"DX {target['name']} {call} RDX {freq_label}{n}"
     else:
-        via = "R" if modem == "robust" else "APRS"
+        via = {"robust": "R", "robust_fm": "RFM"}.get(modem, "APRS")
         text = f"DX OPEN {target['name']} {target['km']}km brg{target['bearing']} {call} {via} {freq_label}{n}"
     return ">" + text[:62]
 

@@ -416,11 +416,19 @@ _IGRAY = [_GRAY.index(i) for i in range(8)]
 # rate (15.625 baud, tones 15.625 Hz apart, 125 Hz wide) for about 3 dB more sensitivity, and a wider
 # tuning search (+/- 300 Hz) for VHF SSB radios that are a little off frequency.
 ROBUST = {"robust": {"baud": 31.25, "base": 1375.0, "max_off": 6.5},
-          "robust_dx": {"baud": 15.625, "base": 1437.5, "max_off": 19.5}}
+          "robust_dx": {"baud": 15.625, "base": 1437.5, "max_off": 19.5},
+          # Robust FM: the Robust waveform sent through an FM radio in FM data mode on a simplex frequency
+          # (never 144.390). Same tones as "robust", so Robust and Robust FM stations decode each other.
+          "robust_fm": {"baud": 31.25, "base": 1375.0, "max_off": 6.5}}
 
 
 def is_robust(modem):
     return modem in ROBUST
+
+
+def is_ssb(modem):
+    """Modems sent in USB (SSB) data mode; everything else goes in FM data mode."""
+    return modem in ("robust", "robust_dx", "300")
 
 
 def _conv_encode(bits):

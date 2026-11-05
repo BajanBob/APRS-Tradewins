@@ -375,6 +375,34 @@ def dx_freq_hz(cfg):
     return int(round(mhz * 1e6)) if any(lo <= mhz <= hi for lo, hi in DX_BANDS_MHZ) else None
 
 
+# Robust FM: FM simplex only, and never on a shared APRS channel, the satellite / ISS segments or the
+# weak-signal SSB/CW segment.
+FM_BANDS_MHZ = [(29.5, 29.7), (50.5, 54.0), (144.3, 148.0), (420.0, 450.0)]
+FM_REFUSED_MHZ = [(144.38, 144.40, "144.390 is the shared 1200-baud APRS channel"),
+                  (144.79, 144.81, "144.800 is an APRS channel"),
+                  (145.80, 146.00, "145.800-146.000 is for satellites and the ISS"),
+                  (145.17, 145.19, "145.175 is an APRS channel"),
+                  (435.0, 438.0, "435-438 MHz is for satellites")]
+
+
+def fm_freq_check(cfg):
+    """(Hz, "") for a usable Robust FM frequency, or (None, reason)."""
+    try:
+        mhz = float(str(cfg.get("fm_freq") or "").replace(",", "."))
+    except ValueError:
+        return None, "Robust FM frequency must be in MHz, e.g. 145.570"
+    for lo, hi, why in FM_REFUSED_MHZ:
+        if lo <= mhz <= hi:
+            return None, f"Robust FM can't use {mhz:.3f} MHz: {why}. Pick a free FM simplex frequency, e.g. 145.570"
+    if not any(lo <= mhz <= hi for lo, hi in FM_BANDS_MHZ):
+        return None, "Robust FM frequency must be an FM simplex frequency on 10 m, 6 m, 2 m or 70 cm, e.g. 145.570"
+    return int(round(mhz * 1e6)), ""
+
+
+def fm_freq_hz(cfg):
+    return fm_freq_check(cfg)[0]
+
+
 def aprs_freq_hz(cfg):
     """The chosen APRS frequency in Hz (custom value allowed), or None if invalid."""
     v = str(cfg.get("aprs_freq") or "auto")
@@ -454,7 +482,7 @@ class BaseTNC:
 AIRTIME_WINDOW_S = 600       # this station may transmit at most...
 AIRTIME_PCT = 10             # ...10% of any 10 minutes (60 s) on VHF/UHF packet
 AIRTIME_PCT_ROBUST = 25      # Robust HF: one message takes 12-45 s, so 25% (150 s) there
-PTT_MAX_S = {"1200": 10, "300": 20, "robust": 50, "robust_dx": 100}   # longest single transmission (watchdog)
+PTT_MAX_S = {"1200": 10, "300": 20, "robust": 50, "robust_dx": 100, "robust_fm": 50}   # longest single transmission (watchdog)
 
 
 class AirtimeGuard:
@@ -552,7 +580,7 @@ class SoundModemTNC(BaseTNC):
                         self.cat_saved = self.ptt.read_state() or None
                     except Exception:
                         self.cat_saved = None
-                usb = afsk.is_robust(self.modem) or self.modem == "300"
+                usb = afsk.is_ssb(self.modem)
                 self.ptt.tune(hz, "usb" if usb else "fm")
                 self.cat_status = f"tuned {hz / 1e6:.3f} MHz {'USB' if usb else 'FM'} data"
                 return True
@@ -1020,6 +1048,7 @@ def make_tnc(cfg):
                              cfg.get("txdelay", 300), cfg.get("txtail", 50),
                              cfg.get("tx_level", 0.5),
                              tune_hz=(com_freq_hz(cfg) if cfg.get("op_mode") == "commercial" else
+                                      fm_freq_hz(cfg) if str(cfg.get("modem")) == "robust_fm" else
                                       dx_freq_hz(cfg) if afsk.is_robust(str(cfg.get("modem"))) else aprs_freq_hz(cfg))
                              if cfg.get("cat_tune") else None,
                              cat_restore=cfg.get("cat_restore", True),
@@ -1039,6 +1068,18 @@ def make_tnc(cfg):
 # --------------------------------------------------------------------------
 # Persistent APRS-IS client (for announcements and iGate)
 # --------------------------------------------------------------------------
+
+def aprsis_error_text(e):
+    """Plain-language APRS-IS connection problems (Tradewind reconnects by itself every 30 s)."""
+    s = str(e)
+    if isinstance(e, ConnectionResetError) or "10054" in s or "10053" in s or "closed connection" in s:
+        return "APRS-IS server dropped the connection - reconnecting in 30 s (nothing to do)"
+    if isinstance(e, socket.timeout) or "timed out" in s:
+        return "APRS-IS server not answering - retrying in 30 s (check the internet connection)"
+    if isinstance(e, socket.gaierror) or "11001" in s or "getaddrinfo" in s:
+        return "No internet / can't find the APRS-IS server - retrying in 30 s"
+    return f"APRS-IS: {s} - retrying in 30 s"
+
 
 class AprsIsClient:
     def __init__(self, call, passcode, server="rotate.aprs2.net", port=14580,
@@ -1075,7 +1116,7 @@ class AprsIsClient:
                         self._send_raw("#keepalive")
                         last_ka = time.time()
             except Exception as e:
-                self.error = str(e)
+                self.error = aprsis_error_text(e)
             self.connected = self.verified = False
             if self.sock:
                 try:
@@ -1125,9 +1166,15 @@ class AprsIsClient:
                 pass
 
 
-def list_audio_devices():
+def list_audio_devices(rescan=False):
     try:
         import sounddevice as sd
+        if rescan:                      # PortAudio only sees devices plugged in before it started
+            try:
+                sd._terminate()
+                sd._initialize()
+            except Exception:
+                pass
         devs = []
         for i, d in enumerate(sd.query_devices()):
             devs.append({"index": i, "name": d["name"],

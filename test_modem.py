@@ -1060,7 +1060,38 @@ def test_dx_mode():
     assert tr.tune(144_150_000) and ic.ser.mode == [0x01, 0x01] and "USB" in tr.cat_status, tr.cat_status
     assert tnc.dx_freq_hz({"dx_freq": "144.150"}) == 144_150_000 and tnc.dx_freq_hz({"dx_freq": "145.9"}) == 145_900_000
     assert tnc.dx_freq_hz({"dx_freq": "100.0"}) is None
+    test_robust_fm()
     print("DX mode ok")
+
+
+def test_robust_fm():
+    """Robust FM: FM data mode on a simplex frequency, refuses APRS / satellite channels, decodes Robust."""
+    import numpy as np
+    import app
+    ic = tnc.CivPTT("COMx", 9600, "7C")
+    ic.ser = FakeIcom()
+    tr = tnc.SoundModemTNC(ptt=ic, tune_hz=145_570_000, modem="robust_fm")
+    assert tr.tune(145_570_000) and ic.ser.mode[0] == 0x05 and "FM" in tr.cat_status, (ic.ser.mode, tr.cat_status)
+    assert tnc.fm_freq_check({"fm_freq": "145.570"}) == (145_570_000, "")
+    for bad in ("144.390", "144.39", "145.825", "436.795", "144.150", "100", "x"):
+        assert tnc.fm_freq_check({"fm_freq": bad})[0] is None, bad
+    assert "144.390" in tnc.fm_freq_check({"fm_freq": "144.390"})[1]
+    base = dict(app.DEFAULTS, call="8P5AB-10", grid="GK03gc", tnc="sound", ptt="CIV", ptt_port="COM4", modem="robust_fm")
+    assert not [e for e in app.validate(dict(base, fm_freq="145.570")) if "Robust FM" in e]
+    assert any("144.390" in e for e in app.validate(dict(base, fm_freq="144.390")))
+    assert any("CP210" in e for e in app.validate(dict(base, ptt_port="")))
+    # same waveform as Robust: a Robust FM packet decodes with both receivers
+    payload = b"8P5AB-10>APTW01:>Robust FM test"
+    x = afsk.robust_modulate(payload, 48000, 0.5, modem="robust_fm")
+    x = x + np.random.default_rng(3).normal(0, 0.05, len(x))
+    for m in ("robust_fm", "robust"):
+        rd = afsk.RobustDemodulator(48000, m)
+        out = rd.process(x) + rd.process(np.zeros(8000))
+        assert payload in out, m
+    assert dxmode.dx_beacon_text({"name": "St Vincent", "km": 175, "bearing": 272}, {"call": "8P5AB", "modem": "robust_fm"},
+                                 "145.570FM").startswith(">DX OPEN St Vincent 175km brg272 8P5AB RFM 145.570FM")
+    assert tnc.aprsis_error_text(ConnectionResetError(10054, "forcibly closed")).startswith("APRS-IS server dropped")
+    print("Robust FM ok")
 
 
 if __name__ == "__main__":

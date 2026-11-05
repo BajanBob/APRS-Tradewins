@@ -95,6 +95,7 @@ To reach the face plate from a phone on the same Wi-Fi, run `python3 app.py --ho
 | Feature | Where | What it does |
 |---|---|---|
 | **Robust DX** (SSB APRS) | MENU > RADIO / TNC > Modem | Tradewind Robust at half speed (8-FSK, 15.625 baud, 125 Hz wide) for 2 m / 70 cm DX in USB and weak HF paths. In simulation it decodes 8 of 8 frames at **-14 dB SNR** (2.5 kHz), where Robust stops at about -12 dB, and tolerates radios up to ±300 Hz off frequency. Tradewind tunes the radio to USB data mode on the **Robust / DX dial frequency** (default 144.150 - agree one with the other islands). |
+| **Robust FM** | MENU > RADIO / TNC > Modem | The Robust waveform (8-FSK, ~44 bit/s, ~11 s per packet) sent through an FM radio in FM data mode on a **simplex frequency you choose** (default 145.570). For FM-only radios and FM links between Tradewind stations. Decodes a few dB below 1200 baud on FM, but FM mutes below about +10 dB, so Robust DX in USB reaches much further. Tradewind refuses 144.390 / 144.800 / 145.175 (APRS), 145.800-146.000 and 435-438 (satellites) and the 144.0-144.3 weak-signal segment. Robust and Robust FM decode each other. |
 | **APRS DX - Islands** | Home screen, under the chat | Distance, beam heading and path type (line of sight to high ground, or tropo duct / HF) from your grid square to St Vincent, St Lucia, Grenada, Martinique, Dominica, Tobago, Trinidad, Guadeloupe and Antigua. After each PSKReporter check it marks an island **OPEN** when spots show the band open toward it, and can send a DX beacon (once an hour per island). |
 | **Wide-area digipeater** | MENU > RADIO / TNC > Digipeater type | Besides fill-in (WIDE1-1), a wide-area mode for a high site serving a whole island: WIDE2-1 and WIDE2-2, counted down, never more than 2 hops. |
 | **Weak-signal 1200 baud** | MENU > RADIO / TNC | Four decoders in parallel (different tone balance and clock tracking), repair of packets with 1-2 bad bits, and FX.25 receive. Optional FX.25 transmit (Reed-Solomon, 16 check bytes) that ordinary APRS radios still decode. In simulation the 50%-decode point improves by about 1 dB, and about 2 dB with FX.25. |
@@ -493,3 +494,10 @@ Tradewind was created by **Brandon St Rose (8P5DG)** and **Kammie Holder (8P5AB)
 It's released under the [MIT License](LICENSE). You're free to use, share and modify it, including
 in your own projects, as long as you keep the copyright notice and licence text. Spot data comes from
 [PSKReporter](https://pskreporter.info). Transmitting requires an amateur licence; use your own callsign.
+
+## v3.14
+- **Tradewind Robust FM** modem: Robust through an FM radio (FM-D) on a chosen simplex frequency; APRS and satellite channels refused.
+- CAT tuning sets the right mode per modem (FM data: 1200 baud, Robust FM; USB data: 300 baud, Robust, Robust DX) and the note under *Tune the radio* says which.
+- Radio set-up: **RESCAN DEVICES** button (no restart needed after plugging in the radio), found COM ports listed with a click-to-use link, and the IC-9100 / Icom 'USB Audio CODEC' and CP210x CAT port picked automatically when the fields are blank.
+- Clearer error when the CI-V / CAT port is missing; APRS-IS drops (WinError 10054) now read "server dropped the connection - reconnecting in 30 s".
+- Fix: the digipeater never repeats while the main modem is Robust DX.

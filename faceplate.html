@@ -677,13 +677,16 @@ details.more summary::-webkit-details-marker{display:none}
           <option value="none">None - APRS-IS only</option>
         </select></div>
       <div class="set m-sound"><label>Modem</label>
-        <select class="inset" data-k="modem">
+        <select class="inset" data-k="modem" id="f-modem">
           <option value="1200">1200 baud AFSK - VHF/UHF FM (APRS)</option>
           <option value="300">300 baud AFSK - HF SSB (USB, 1600/1800 Hz)</option>
           <option value="robust">Tradewind Robust - HF weak signal, down to about -12 dB (8-FSK, ~44 bit/s)</option>
           <option value="robust_dx">Tradewind Robust DX - SSB APRS for 2 m / 70 cm DX and weak HF, down to about -14 dB (~22 bit/s)</option>
+          <option value="robust_fm">Tradewind Robust FM - Robust through an FM radio (FM-D) on a simplex frequency, not 144.390</option>
         </select></div>
-      <div class="set m-sound"><label>Robust / DX dial frequency (MHz, USB)</label><input class="inset" data-k="dx_freq" placeholder="144.150" inputmode="decimal"></div>
+      <div class="set m-sound m-dxf"><label>Robust / DX dial frequency (MHz, USB)</label><input class="inset" data-k="dx_freq" placeholder="144.150" inputmode="decimal"></div>
+      <div class="set m-sound m-fmf"><label>Robust FM simplex frequency (MHz, FM)</label><input class="inset" data-k="fm_freq" placeholder="145.570" inputmode="decimal"></div>
+      <div class="set wide note m-sound m-fmf" id="fm-note">Robust FM sends the Robust waveform (8-FSK, ~44 bit/s, about 11 s per packet) through the FM radio in FM data mode. It decodes a few dB below 1200 baud on FM, but FM radios mute below about +10 dB, so for real weak-signal DX use Robust DX in USB. Never on 144.390 (shared APRS channel), 145.800-146.000 or 435-438 (satellites): Tradewind refuses those. Agree the frequency with the other station and listen first - it must be a free simplex frequency, not a repeater input. Robust and Robust FM stations decode each other; ordinary APRS radios cannot.</div>
       <div class="set wide m-sound"><label class="chk"><input type="checkbox" data-k="multi_decoder"> Weak-signal decoding: 4 decoders in parallel + bit repair + FX.25 receive (1200 / 300 baud)</label></div>
       <div class="set wide m-sound"><label class="chk"><input type="checkbox" data-k="fx25_tx"> Send FX.25 (error-corrected; ordinary APRS radios still decode it)</label></div>
       <div class="set m-sound"><label>Audio input (from radio)</label><select class="inset" data-k="audio_in" id="f-ain"></select></div>
@@ -704,7 +707,7 @@ details.more summary::-webkit-details-marker{display:none}
       <div class="set m-sound m-cat"><label>CAT baud rate</label>
         <select class="inset" data-k="cat_baud" data-num><option>4800</option><option>9600</option><option>19200</option><option>38400</option><option>115200</option></select></div>
       <div class="set m-sound m-civ"><label>CI-V address (hex)</label><input class="inset" data-k="civ_addr" maxlength="2" placeholder="7C"></div>
-      <div class="set m-sound"><label class="chk"><input type="checkbox" data-k="cat_tune" id="f-cattune"> Tune the radio to the APRS frequency (CAT)</label></div>
+      <div class="set m-sound"><label class="chk"><input type="checkbox" data-k="cat_tune" id="f-cattune"> Tune the radio (frequency and mode, by CAT)</label></div>
       <div class="set m-sound m-tune"><label>APRS frequency (MHz)</label>
         <select class="inset" data-k="aprs_freq" id="f-freq"><option value="144.390">144.390</option></select></div>
       <div class="set m-sound m-tune m-custom"><label>Custom frequency (MHz)</label><input class="inset" data-k="aprs_freq_custom" placeholder="144.390" inputmode="decimal"></div>
@@ -773,6 +776,7 @@ details.more summary::-webkit-details-marker{display:none}
         <div class="note">Start Direwolf with:  direwolf -c direwolf-tradewind.conf  &middot; Both stations must use the same speed and error correction.</div>
       </div>
       <div class="set wide note" id="dev-note"></div>
+      <div class="set m-sound"><button class="btn" id="b-rescan" type="button">RESCAN DEVICES</button></div>
     </div>
 
     <div class="pane" id="p-station">
@@ -1257,6 +1261,9 @@ function updateVisibility(){
   $$('.m-rf').forEach(e=>e.classList.toggle('hide', t==='none'));
   if (t!=='none') $$('.m-rfsel').forEach(e=>e.classList.toggle('hide', $('#f-rfwhen').value!=='selected'));
   if (t==='sound'){
+    const md = $('#f-modem').value;
+    $$('.m-dxf').forEach(e=>e.classList.toggle('hide', !['robust','robust_dx'].includes(md)));
+    $$('.m-fmf').forEach(e=>e.classList.toggle('hide', md!=='robust_fm'));
     $$('.m-ptt').forEach(e=>e.classList.toggle('hide', p==='VOX'));
     $$('.m-cm108').forEach(e=>e.classList.toggle('hide', p!=='CM108'));
     $$('.m-cat').forEach(e=>e.classList.toggle('hide', !['CIV','YAESU_CAT'].includes(p)));
@@ -1268,7 +1275,11 @@ function updateVisibility(){
     const canTune = ['CIV','YAESU_CAT','RIGCTLD'].includes(p);
     $('#tune-note').innerHTML = !canTune
       ? '<b>Automatic tuning needs a CAT link.</b> Set PTT method to Icom CI-V, Yaesu CAT or Hamlib rigctld - or set the frequency on the radio by hand. The FT-2980 and other radios without a CAT port must be tuned by hand.'
-      : 'At power-on Tradewind sets the radio to this frequency in FM data mode (FM-D / DATA-FM).' +
+      : ({robust_fm:`At power-on Tradewind sets the radio to the Robust FM frequency (${esc($('[data-k="fm_freq"]').value||'145.570')} MHz) in FM data mode (FM-D / DATA-FM).`,
+          robust:`At power-on Tradewind sets the radio to the Robust / DX dial frequency (${esc($('[data-k="dx_freq"]').value||'144.150')} MHz) in USB data mode (USB-D / DATA-USB).`,
+          robust_dx:`At power-on Tradewind sets the radio to the Robust / DX dial frequency (${esc($('[data-k="dx_freq"]').value||'144.150')} MHz) in USB data mode (USB-D / DATA-USB).`,
+          '300':'At power-on Tradewind sets the radio to this frequency in USB data mode (USB-D / DATA-USB).'}[$('#f-modem').value]
+         || 'At power-on Tradewind sets the radio to this frequency in FM data mode (FM-D / DATA-FM).') +
         (f==='145.825' ? ' <b>ISS:</b> set RF path to <b>ARISS</b>, and only transmit while the ISS is overhead.' : '');
     $('#ptt-port-lbl').textContent = p==='CM108' ? 'HID device' : p==='RIGCTLD' ? 'rigctld host:port' :
       p==='CIV' ? 'CI-V / CAT serial port' : p==='YAESU_CAT' ? 'CAT serial port' : 'PTT serial port';
@@ -1295,9 +1306,9 @@ function applyPreset(id){
 }
 function markDirty(){ dirty = true; $('#b-save-top').textContent='SAVE *'; $('#b-save').textContent='SAVE *'; }
 
-async function loadDevices(){
+async function loadDevices(rescan){
   if (document.body.dataset.android) return;
-  const d = await api('/api/devices');
+  const d = await api('/api/devices' + (rescan ? '?rescan=1' : ''));
   const fill = (sel, list, cur) => {
     sel.innerHTML = '<option value="">System default</option>' +
       list.map(a=>`<option value="${a.index}">${a.index}: ${a.name}</option>`).join('');
@@ -1306,9 +1317,27 @@ async function loadDevices(){
   fill($('#f-ain'), d.audio.filter(a=>a.inputs>0), cfg.audio_in);
   fill($('#f-aout'), d.audio.filter(a=>a.outputs>0), cfg.audio_out);
   $('#serial-list').innerHTML = d.serial.map(p=>`<option value="${p.device}">${p.desc||''}</option>`).join('');
+  // Radios with a built-in USB sound card (IC-9100, IC-7300, IC-705, FT-991A...): pick its codec and CAT port if still blank
+  let picked = [];
+  if ($('#f-tnc').value==='sound'){
+    if (!$('#f-ain').value){ const a = d.audio.find(a=>a.inputs>0 && /USB Audio CODEC/i.test(a.name)); if (a){ $('#f-ain').value=String(a.index); picked.push('audio in'); } }
+    if (!$('#f-aout').value){ const a = d.audio.find(a=>a.outputs>0 && /USB Audio CODEC/i.test(a.name)); if (a){ $('#f-aout').value=String(a.index); picked.push('audio out'); } }
+    const pp = $('[data-k="ptt_port"]');
+    if (!pp.value && ['CIV','YAESU_CAT'].includes($('#f-ptt').value)){
+      const s = d.serial.find(p=>/CP210|Silicon Labs|Icom|Enhanced COM/i.test(p.desc||'')) || (d.serial.length===1 ? d.serial[0] : null);
+      if (s){ pp.value = s.device; picked.push('CAT port ' + s.device); }
+    }
+    if (picked.length) markDirty();
+  }
+  const ports = d.serial.map(p=>`<a href="#" class="port-pick" data-dev="${esc(p.device)}">${esc(p.device)}</a>${p.desc ? ' ('+esc(p.desc)+')' : ''}`).join(', ');
   const notes = [d.audio_error, d.serial_error].filter(Boolean);
-  $('#dev-note').textContent = notes.length ? notes.join(' · ') + '. Install with: pip install sounddevice pyserial numpy' :
-    `${d.audio.length} audio device(s), ${d.serial.length} serial port(s) found.`;
+  $('#dev-note').innerHTML = notes.length ? esc(notes.join(' · ')) + '. Install with: pip install sounddevice pyserial numpy' :
+    `${d.audio.length} audio device(s), ${d.serial.length} serial port(s) found` + (ports ? `: ${ports} - click one to use it as the CAT / PTT port.` : '.') +
+    (d.serial.length ? '' : ' <b>No serial ports:</b> turn the radio on, check its USB cable and driver, then press RESCAN DEVICES.') +
+    (picked.length ? ` <b>Picked automatically: ${esc(picked.join(', '))} - press SAVE.</b>` : '') +
+    ' <button class="btn" id="b-rescan2" type="button">RESCAN DEVICES</button>';
+  $$('.port-pick').forEach(a=>a.onclick = e=>{ e.preventDefault(); $('[data-k="ptt_port"]').value = a.dataset.dev; markDirty(); toast('CAT / PTT port set to ' + a.dataset.dev + ' - press SAVE', true); });
+  const rb = $('#b-rescan2'); if (rb) rb.onclick = ()=>loadDevices(true);
 }
 
 async function save(){
@@ -2597,7 +2626,7 @@ const HELP = {
   grid:'Your Maidenhead grid square (4 or 6 characters, e.g. GK03fd). Used for your position and for the "near me" list.',
   preset:'Pick your radio or interface. It fills in sensible settings and shows the cable and menu settings to use.',
   tnc:'How Tradewind reaches the radio: its own sound-card modem, an external modem (Direwolf, UZ7HO) over the network, a radio with a built-in TNC, or no radio (internet only).',
-  modem:'1200 baud: standard VHF/UHF FM packet and APRS. 300 baud: HF packet on SSB (upper sideband), e.g. 10.1476 MHz. Tradewind Robust: slow, error-corrected text for weak HF or SSB paths. It decodes far below the noise (about -12 dB) but takes 10-20 s per message, and both stations need Tradewind Robust.',
+  modem:'1200 baud: standard VHF/UHF FM packet and APRS. 300 baud: HF packet on SSB (upper sideband), e.g. 10.1476 MHz. Tradewind Robust: slow, error-corrected text for weak HF or SSB paths. It decodes far below the noise (about -12 dB) but takes 10-20 s per message, and both stations need Tradewind Robust. Robust DX: slower, in USB on 2 m / 70 cm for inter-island DX (about -14 dB). Robust FM: the Robust waveform through an FM radio on a simplex frequency you choose (never 144.390) - easier with FM-only radios, but FM mutes weak signals, so it does not reach as far as Robust DX.',
   audio_in:'The sound device that carries audio FROM the radio (receive). For radios with a USB sound card this is usually "USB Audio CODEC".',
   audio_out:'The sound device that sends audio TO the radio (transmit). Usually the same USB sound card as the input.',
   sample_rate:'Sound card rate. 48000 suits almost every device; try 44100 only if the device refuses 48000.',
@@ -2606,7 +2635,7 @@ const HELP = {
   cat_baud:'Speed of the CAT / CI-V port. It must match the radio menu (IC-9100: 9600).',
   civ_addr:'Icom CI-V address in hex: IC-9100 7C, IC-7300 94, IC-7610 98, IC-705 A4, IC-9700 A2, IC-7100 88.',
   ptt_invert:'Tick only if the radio transmits when it should be receiving (some home-made interfaces invert the line).',
-  cat_tune:'With a CAT link, Tradewind sets the radio to the chosen frequency in FM data mode when the station turns on.',
+  cat_tune:'With a CAT link, Tradewind sets the radio when the station turns on: the APRS frequency in FM data mode (1200 baud), the Robust FM frequency in FM data mode (Robust FM), or the Robust / DX dial frequency in USB data mode (Robust, Robust DX, 300 baud).',
   aprs_freq:'Automatic follows your band-plan zone. The APRS frequency to tune to. 144.390 is used in North America and much of the Caribbean; 145.825 is the ISS digipeater.',
   aprs_freq_custom:'Type any 2m or 70cm frequency in MHz, e.g. 144.930.',
   cat_restore:'Put the radio back on the frequency and mode it was using before Tradewind tuned it.',
@@ -2679,6 +2708,7 @@ const HELP = {
   digi_mode:'Fill-in: only WIDE1-1 as the first hop, for areas that already have wide-area digipeaters. Wide-area: also WIDE2-1 and WIDE2-2 (never more than 2 hops) - for a high site serving a whole island that has no other digipeater.',
   multi_decoder:'Runs four 1200-baud decoders with different tone balance and clock tracking on the same audio, repairs packets with one or two bad bits, and decodes FX.25. In tests this gains about 1 dB, and about 2 dB with FX.25.',
   fx25_tx:'Adds 16 Reed-Solomon check bytes in front of a normal APRS packet. Stations with FX.25 (Tradewind, Direwolf) can repair errors; ordinary APRS radios still decode the packet as usual. Makes each packet about 0.15 s longer.',
+  fm_freq:'FM simplex frequency for Tradewind Robust FM, e.g. 145.570. Agree it with the other station and check it is free. Not 144.390 (APRS), 145.800-146.000 or 435-438 (satellites), and not a repeater input - Tradewind refuses the APRS and satellite frequencies.',
   dx_freq:'USB dial frequency for Tradewind Robust and Robust DX. 2 m weak-signal segment, e.g. 144.150 - agree one with the stations on the other islands. HF: e.g. 10.142 (30 m) or 7.105 (40 m).',
   dx_height_m:'Height of your antenna above sea level, used for the line-of-sight estimate to each island\'s high ground.',
   igate_tx:'Messages from the internet for stations your radio hears locally are passed on to them on RF, as a standard iGate does. Limited to 30 an hour.',
@@ -2731,7 +2761,9 @@ $('#b-close').onclick = ()=>{ $('#drawer').classList.remove('open'); $('#b-menu'
 $('#b-save').onclick = save; $('#b-save-top').onclick = save;
 $$('.tab').forEach(t=>t.onclick=()=>{ $$('.tab').forEach(x=>x.classList.toggle('on',x===t)); $$('.pane').forEach(p=>p.classList.toggle('on',p.id===t.dataset.p)); });
 $('#f-preset').onchange = e=>applyPreset(e.target.value);
-$('#f-tnc').onchange = updateVisibility; $('#f-rfwhen').onchange = updateVisibility; $('#f-ptt').onchange = updateVisibility;
+$('#f-tnc').onchange = updateVisibility; $('#f-modem').addEventListener('change', updateVisibility);
+['dx_freq','fm_freq'].forEach(k=>$(`[data-k="${k}"]`).addEventListener('input', updateVisibility));
+$('#b-rescan').onclick = ()=>loadDevices(true); $('#f-rfwhen').onchange = updateVisibility; $('#f-ptt').onchange = updateVisibility;
 const MAILPROV = {
   gmail:{smtp_host:'smtp.gmail.com',smtp_port:587,smtp_tls:true,imap_host:'imap.gmail.com',imap_port:993,
     note:'Gmail: turn on 2-Step Verification, then Google Account > Security > App passwords. User = your full Gmail address.'},

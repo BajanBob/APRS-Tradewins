@@ -34,7 +34,7 @@ import vhf_prop_aprs as eng
 import wx
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.13"
+APP_VERSION = "3.14"
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 def _conf_dir():
@@ -219,7 +219,7 @@ DEFAULTS = {
     "digi_mode": "fill",                                                        # fill = WIDE1-1 only, wide = high site
     "multi_decoder": True, "fx25_tx": False,                                    # modem: parallel decoders, FX.25 FEC
     "dx_enabled": False, "dx_auto_beacon": False, "dx_height_m": 30,            # APRS DX mode (inter-island)
-    "dx_freq": "144.150", "dx_path": "", "dx_beacon_min": 60,
+    "dx_freq": "144.150", "fm_freq": "145.570", "dx_path": "", "dx_beacon_min": 60,
     "dx_burst_count": 4,                                                        # DX beacons in the minute after an opening
     "sdr_gain": "", "sdr_ppm": 0, "sdr_index": 0,                             # RTL-SDR receive
     "window": 60, "interval": 10, "min_km": 800, "min_paths": 2,
@@ -283,7 +283,7 @@ PRESETS = [
      "note": "Audio: 'USB Audio CODEC'. Set USB SEND to RTS and DATA MOD to USB; use FM-D. For automatic tuning, set PTT to 'Icom CI-V' with address 88 and tick 'Tune the radio'."},
     {"id": "ic9100", "label": "Icom IC-9100 (built-in USB sound card, CI-V PTT)",
      "tnc": "sound", "ptt": "CIV", "civ_addr": "7C", "cat_baud": 9600, "cat_tune": True,
-     "note": "One USB cable carries audio and CI-V. Audio: 'USB Audio CODEC'. PTT port: the IC-9100's USB serial port. On the radio set DATA MOD to USB, USB MOD Level about 25-50%, CI-V address 7C and CI-V baud 9600. With 'Tune the radio' on, Tradewind sets the APRS frequency and FM data mode for you at power-on (2m on the main band) and puts the radio back when you switch off. Close other CAT software (logger, WSJT-X) first - only one program can use the port."},
+     "note": "One USB cable carries audio and CI-V. Audio: 'USB Audio CODEC'. PTT port: the IC-9100's USB serial port. On the radio set DATA MOD to USB, USB MOD Level about 25-50%, CI-V address 7C and CI-V baud 9600. With 'Tune the radio' on, Tradewind sets the frequency for you at power-on (2m on the main band): FM data for 1200 baud and Robust FM, USB data for Robust and Robust DX, and puts the radio back when you switch off. Close other CAT software (logger, WSJT-X) first - only one program can use the port."},
     {"id": "ft991a", "label": "Yaesu FT-991A (built-in USB sound card)",
      "tnc": "sound", "ptt": "RTS",
      "note": "Audio: 'USB Audio CODEC'. PTT port: the 'Enhanced' COM port. Set the radio's PC keying / data PTT option to RTS and use DATA-FM. For automatic tuning to the APRS frequency, choose PTT 'Yaesu CAT' on the 'Standard' COM port at the radio's CAT baud rate (menu 031) and tick 'Tune the radio'."},
@@ -540,7 +540,9 @@ def validate(cfg):
     if not GRID_RE.match(cfg.get("grid", "").strip()):
         errs.append("Enter a 4 or 6 character Maidenhead grid square (e.g. GK03 or GK03fd).")
     if cfg.get("tnc") == "sound" and cfg.get("ptt") in ("RTS", "DTR", "CM108", "CIV", "YAESU_CAT") and not cfg.get("ptt_port"):
-        errs.append("Choose the serial / HID port used for PTT.")
+        errs.append("Choose the CI-V / CAT serial port (the radio's COM port - for the IC-9100 it is "
+                    "'Silicon Labs CP210x' in Device Manager > Ports)." if cfg.get("ptt") in ("CIV", "YAESU_CAT") else
+                    "Choose the serial / HID port used for PTT.")
     if cfg.get("ptt") == "CIV" and cfg.get("tnc") == "sound":
         try:
             int(str(cfg.get("civ_addr") or "7C"), 16)
@@ -563,7 +565,7 @@ def validate(cfg):
     if cfg.get("digi"):
         if cfg.get("tnc") in ("none",) or (cfg.get("tnc") == "sdr" and not cfg.get("link2_enabled")):
             errs.append("The fill-in digipeater needs a radio that transmits (MENU > RADIO / TNC).")
-        if cfg.get("tnc") == "sound" and cfg.get("modem") in ("robust", "robust_dx", "300"):
+        if cfg.get("tnc") == "sound" and cfg.get("modem") in ("robust", "robust_dx", "robust_fm", "300"):
             errs.append("The digipeater works on 1200-baud VHF/UHF APRS, not on the Robust or HF modems.")
         if cfg.get("digi_alias") and not digimod.valid_call(cfg.get("digi_alias")):
             errs.append("Digipeater alias: at most 6 letters/digits plus an optional -SSID, e.g. BRBDOS or 8P5AB-1 (or leave it blank).")
@@ -572,8 +574,12 @@ def validate(cfg):
                 raise ValueError
         except (TypeError, ValueError):
             errs.append("Digipeater limit must be 1-60 packets a minute.")
-    if cfg.get("modem") == "robust_dx" and cfg.get("tnc") != "sound":
-        errs.append("Robust DX needs the built-in sound modem (MENU > RADIO / TNC > TNC type: sound card).")
+    if cfg.get("modem") in ("robust_dx", "robust_fm") and cfg.get("tnc") != "sound":
+        errs.append("Robust DX and Robust FM need the built-in sound modem (MENU > RADIO / TNC > TNC type: sound card).")
+    if cfg.get("modem") == "robust_fm" and cfg.get("tnc") == "sound":
+        hz, why = tncmod.fm_freq_check(cfg)
+        if not hz:
+            errs.append(why + ".")
     if cfg.get("modem") in ("robust", "robust_dx") and cfg.get("tnc") == "sound" and cfg.get("cat_tune") \
             and not tncmod.dx_freq_hz(cfg):
         errs.append("Robust / DX frequency must be in an amateur band (160 m to 70 cm), e.g. 144.150 or 10.142 (MHz, USB dial).")
@@ -693,7 +699,7 @@ class Station:
                     self.add_log("ERR", f"Second radio link not started: {e}")
             if self.tnc2 is not None and c.get("tnc") not in ("none", "sdr"):
                 s1 = 22 if c.get("tnc") == "sound" and c.get("modem") == "robust_dx" else \
-                    44 if c.get("tnc") == "sound" and c.get("modem") == "robust" else \
+                    44 if c.get("tnc") == "sound" and c.get("modem") in ("robust", "robust_fm") else \
                     300 if c.get("tnc") == "sound" and str(c.get("modem")) == "300" else \
                     (1200 if c.get("tnc") == "sound" else int(c.get("link1_speed") or 1200))
                 self.linkctl = tncmod.LinkController({
@@ -735,7 +741,7 @@ class Station:
                 self.chat.store_forward = bool(c.get("store_forward", True))
                 self.chat.relay_enabled = bool(c.get("relay_enabled"))
                 self.chat.retry = (150, 300, 480) if (c.get("tnc") == "sound" and c.get("modem") == "robust_dx") else \
-                    (90, 150, 240) if (c.get("tnc") == "sound" and c.get("modem") == "robust") else tncmod.RETRY_S
+                    (90, 150, 240) if (c.get("tnc") == "sound" and c.get("modem") in ("robust", "robust_fm")) else tncmod.RETRY_S
             if not self.commercial and (not self.chat or self.chat.mycall != c["call"]
                                         or getattr(self.chat, "send_fn", None) != self._chat_send):
                 self.chat = tncmod.ChatManager(c["call"], self._chat_send)
@@ -1209,9 +1215,10 @@ class Station:
     def send_dx_beacon(self, target, seq=1, of=1):
         """Status beacon announcing the opening, on the DX path (default: direct, no digipeaters)."""
         c = self.cfg
-        robust = c.get("tnc") == "sound" and c.get("modem") in ("robust", "robust_dx")
-        freq = tncmod.dx_freq_hz(c) if robust else tncmod.aprs_freq_hz(c)
-        label = f"{freq / 1e6:.3f}{'USB' if robust else 'FM'}" if freq else ""
+        modem = c.get("modem") if c.get("tnc") == "sound" else "1200"
+        freq = (tncmod.fm_freq_hz(c) if modem == "robust_fm" else
+                tncmod.dx_freq_hz(c) if modem in ("robust", "robust_dx") else tncmod.aprs_freq_hz(c))
+        label = f"{freq / 1e6:.3f}{'USB' if modem in ('robust', 'robust_dx') else 'FM'}" if freq else ""
         path = [p.strip() for p in (c.get("dx_path") or "").split(",") if p.strip()]
         self.transmit(dxmode.dx_beacon_text(target, c, label, seq, of), path=path)
 
@@ -1245,7 +1252,7 @@ class Station:
         self.chat.is_ok = lambda: bool(self.isc and self.isc.verified)
         self.chat.on_tw = lambda call: self._tw_seen(call, "chat")
         self.chat.links = self.linkctl
-        robust = self.cfg.get("tnc") == "sound" and self.cfg.get("modem") in ("robust", "robust_dx")
+        robust = self.cfg.get("tnc") == "sound" and self.cfg.get("modem") in ("robust", "robust_dx", "robust_fm")
         self.chat.on_qsy = None if self.commercial else self._on_qsy   # a licensed commercial channel never moves
         tncmod.set_zone(tncmod.zone_of(self.cfg))
         tncmod.set_uhf(self.cfg.get("uhf_range") or "430-440")
@@ -2042,7 +2049,7 @@ class Station:
             if not r:
                 return
             tx = self.tnc2 if link == "B" else self._tx_tnc()
-            if not tx or getattr(tx, "modem", "1200") in ("robust", "300"):
+            if not tx or getattr(tx, "modem", "1200") in ("robust", "robust_dx", "robust_fm", "300"):
                 return
             src, dst, path, info = r
             tx.send(src, dst, path, info)
@@ -2276,7 +2283,7 @@ class Handler(BaseHTTPRequestHandler):
             q = self.path.partition("since=")[2]
             self._json(STATION.state(int(q) if q.isdigit() else 0))
         elif path == "/api/devices":
-            audio, aerr = tncmod.list_audio_devices()
+            audio, aerr = tncmod.list_audio_devices(rescan="rescan=1" in self.path)
             ports, perr = tncmod.list_serial_ports()
             self._json({"audio": audio, "audio_error": aerr, "serial": ports, "serial_error": perr})
         elif path == "/api/history":

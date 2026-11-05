@@ -1,28 +1,33 @@
 #!/usr/bin/env python3
 # Tradewind - Copyright (c) 2026 Brandon St Rose (8P5DG) and Kammie Holder (8P5AB)
 # Released under the MIT License - see LICENSE
-"""Apply code sent by the Da Vinci AI assistant to a working copy of the repository.
+"""Apply code written by Venice.ai to a working copy of the repository.
 
-Used by .github/workflows/davinci-intake.yml. The payload (JSON) is:
+Used by .github/workflows/venice-intake.yml (and tools/venice_bridge.py to check Venice's work before it is
+sent). The payload (JSON) is:
 
     {
       "title":   "Short title for the pull request",          (required)
-      "branch":  "davinci/short-name",                         (optional; made from the title if missing)
+      "branch":  "venice/short-name",                          (optional; made from the title if missing)
       "message": "Commit message",                             (optional; the title if missing)
       "body":    "What changed and why (pull request text)",   (optional)
       "dry_run": false,                                        (optional; true = test only, push nothing)
       "files": [                                               (required, 1-50 entries)
         {"path": "satrx.py", "content": "...full new text..."},
         {"path": "icon.png", "content_b64": "...base64..."},
-        {"path": "old_file.py", "delete": true}
+        {"path": "old_file.py", "delete": true},
+        {"path": "app.py", "edits": [{"find": "exact old text", "replace": "new text"}]}
       ]
     }
+
+"edits" change part of an existing file: each "find" must appear in the file exactly once (include enough
+surrounding lines to make it unique); edits are applied in order.
 
 Every path is checked: relative, inside the repository, not in .git/ or .github/ (workflows can only be
 changed by a person), no '..', at most 1 MB per file and 50 files per send.
 
-    python tools/davinci_apply.py plan  payload.json        -> prints branch, title (for the workflow)
-    python tools/davinci_apply.py apply payload.json [--root DIR] [--summary FILE]
+    python tools/venice_apply.py plan  payload.json        -> prints branch, title (for the workflow)
+    python tools/venice_apply.py apply payload.json [--root DIR] [--summary FILE]
 """
 import argparse
 import base64
@@ -36,7 +41,7 @@ MAX_FILES = 50
 MAX_BYTES = 1_000_000
 PATH_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-/]*$")
 PROTECTED_DIRS = (".git", ".github")
-BRANCH_PREFIX = "davinci/"
+BRANCH_PREFIX = "venice/"
 
 
 class PayloadError(ValueError):
@@ -49,7 +54,7 @@ def slug(text, n=40):
 
 
 def clean_branch(payload):
-    """davinci/<name> - always under davinci/, never main or anything else."""
+    """venice/<name> - always under venice/, never main or anything else."""
     raw = str(payload.get("branch") or "").strip()
     name = raw[len(BRANCH_PREFIX):] if raw.startswith(BRANCH_PREFIX) else raw
     parts = [slug(p, 40) for p in name.split("/") if re.search(r"[A-Za-z0-9]", p)]
@@ -100,8 +105,19 @@ def load(path):
         f["path"] = p
         if f.get("delete"):
             continue
+        if "edits" in f:
+            if "content" in f or "content_b64" in f:
+                raise PayloadError(f"{p}: give 'edits' or the whole file, not both")
+            ed = f["edits"]
+            if not isinstance(ed, list) or not ed or len(ed) > 200:
+                raise PayloadError(f"{p}: 'edits' must be a list of 1-200 {{find, replace}}")
+            for e in ed:
+                if not isinstance(e, dict) or not isinstance(e.get("find"), str) or not e["find"] \
+                        or not isinstance(e.get("replace"), str):
+                    raise PayloadError(f"{p}: each edit needs a non-empty 'find' and a 'replace' (text)")
+            continue
         if ("content" in f) == ("content_b64" in f):
-            raise PayloadError(f"{p}: give either 'content' (text) or 'content_b64' (base64), not both/neither")
+            raise PayloadError(f"{p}: give either 'content' (text), 'content_b64' (base64) or 'edits'")
         if "content" in f:
             if not isinstance(f["content"], str):
                 raise PayloadError(f"{p}: 'content' must be text")
@@ -137,6 +153,24 @@ def apply(payload, root):
             else:
                 done.append(("not found (delete skipped)", f["path"], 0))
             continue
+        if "edits" in f:
+            if not os.path.isfile(full):
+                raise PayloadError(f"{f['path']}: 'edits' need an existing file - send the whole file to create it")
+            with open(full, encoding="utf-8") as fh:
+                text = fh.read()
+            for i, e in enumerate(f["edits"], 1):
+                n = text.count(e["find"])
+                if n != 1:
+                    raise PayloadError(f"{f['path']}: edit {i} - the 'find' text appears {n} times (must be exactly once): "
+                                       f"{e['find'][:80]!r}")
+                text = text.replace(e["find"], e["replace"], 1)
+            data = text.encode("utf-8")
+            if len(data) > MAX_BYTES * 2:
+                raise PayloadError(f"{f['path']}: too big after the edits")
+            with open(full, "wb") as out:
+                out.write(data)
+            done.append((f"edited ({len(f['edits'])} change{'s' if len(f['edits']) != 1 else ''})", f["path"], 0))
+            continue
         existed = os.path.exists(full)
         os.makedirs(os.path.dirname(full), exist_ok=True)
         with open(full, "wb") as out:
@@ -161,7 +195,7 @@ def main(argv=None):
             return 0
         done = apply(payload, a.root)
     except PayloadError as e:
-        print(f"Da Vinci payload refused: {e}", file=sys.stderr)
+        print(f"Venice payload refused: {e}", file=sys.stderr)
         return 2
     lines = [f"- {act}: `{p}`" + (f" ({n:,} bytes)" if n else "") for act, p, n in done]
     if a.summary:

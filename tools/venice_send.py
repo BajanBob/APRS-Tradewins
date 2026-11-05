@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 # Tradewind - Copyright (c) 2026 Brandon St Rose (8P5DG) and Kammie Holder (8P5AB)
 # Released under the MIT License - see LICENSE
-"""Export code Da Vinci wrote (saved on this computer) to the repository as a pull request.
+"""Export code Venice.ai wrote (saved on this computer) to the repository as a pull request.
 
-    set GITHUB_TOKEN=github_pat_...            (fine-grained token, this repository only - docs/davinci/README.md)
-    python tools/davinci_send.py --title "Add PD90 SSTV" satrx.py test_modem.py
-    python tools/davinci_send.py --title "Rename" --delete old.py new.py
-    python tools/davinci_send.py --dry-run ...    show the payload, send nothing
-    python tools/davinci_send.py --test-only ...  GitHub applies and self-tests, pushes nothing
+    set GITHUB_TOKEN=github_pat_...            (fine-grained token, this repository only - docs/venice/README.md)
+    python tools/venice_send.py --title "Add PD90 SSTV" satrx.py test_modem.py
+    python tools/venice_send.py --title "Rename" --delete old.py new.py
+    python tools/venice_send.py --payload change.json   a payload Venice wrote (e.g. with find/replace edits)
+    python tools/venice_send.py --dry-run ...    show the payload, send nothing
+    python tools/venice_send.py --test-only ...  GitHub applies and self-tests, pushes nothing
+
+To have Venice write the code itself, use tools/venice_bridge.py.
 
 Paths are sent relative to --base (default: the current folder), exactly as they should appear in the repo.
 """
@@ -47,10 +50,10 @@ def build_payload(paths, title, base=".", branch="", message="", body="", delete
 def send(payload, token, repo=REPO):
     req = urllib.request.Request(
         f"{API}/repos/{repo}/dispatches", method="POST",
-        data=json.dumps({"event_type": "davinci-code", "client_payload": payload}).encode(),
+        data=json.dumps({"event_type": "venice-code", "client_payload": payload}).encode(),
         headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                  "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json",
-                 "User-Agent": "Tradewind-davinci-send"})
+                 "User-Agent": "Tradewind-venice-send"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return r.status, ""
@@ -59,9 +62,10 @@ def send(payload, token, repo=REPO):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Send Da Vinci's code to GitHub as a pull request")
+    ap = argparse.ArgumentParser(description="Send Venice's code to GitHub as a pull request")
     ap.add_argument("files", nargs="*")
-    ap.add_argument("--title", required=True)
+    ap.add_argument("--title", default="")
+    ap.add_argument("--payload", help="send this payload JSON file as it is")
     ap.add_argument("--branch", default="")
     ap.add_argument("--message", default="")
     ap.add_argument("--body", default="")
@@ -71,19 +75,27 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="print the payload and send nothing")
     ap.add_argument("--test-only", action="store_true", help="GitHub applies and tests, pushes nothing")
     a = ap.parse_args(argv)
-    if not a.files and not a.delete:
-        ap.error("give at least one file (or --delete)")
-    payload = build_payload(a.files, a.title, a.base, a.branch, a.message, a.body, a.delete, a.test_only)
+    if a.payload:
+        with open(a.payload, encoding="utf-8") as f:
+            payload = json.load(f)
+        if a.test_only:
+            payload["dry_run"] = True
+    else:
+        if not a.files and not a.delete:
+            ap.error("give at least one file (or --delete, or --payload)")
+        if not a.title:
+            ap.error("--title is required")
+        payload = build_payload(a.files, a.title, a.base, a.branch, a.message, a.body, a.delete, a.test_only)
     if a.dry_run:
         print(json.dumps(payload, indent=2)[:4000])
         return 0
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("DAVINCI_TOKEN")
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("VENICE_GITHUB_TOKEN")
     if not token:
-        print("Set GITHUB_TOKEN to a fine-grained token for this repository (docs/davinci/README.md).", file=sys.stderr)
+        print("Set GITHUB_TOKEN to a fine-grained token for this repository (docs/venice/README.md).", file=sys.stderr)
         return 2
     code, err = send(payload, token, a.repo)
     if code == 204:
-        print(f"Sent. GitHub is building the pull request: https://github.com/{a.repo}/actions/workflows/davinci-intake.yml")
+        print(f"Sent. GitHub is building the pull request: https://github.com/{a.repo}/actions/workflows/venice-intake.yml")
         return 0
     print(f"GitHub refused the send ({code}): {err[:300]}", file=sys.stderr)
     return 1

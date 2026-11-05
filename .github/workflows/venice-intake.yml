@@ -1,23 +1,32 @@
-# Da Vinci code intake: code written by the Da Vinci AI assistant arrives here and becomes a pull request.
+# Venice code intake: code written by Venice.ai arrives here and becomes a pull request.
 #
-#  Da Vinci (GPT Action or tools/davinci_send.py)
-#     -> POST /repos/BajanBob/APRS-Tradewins/dispatches  {"event_type": "davinci-code", "client_payload": {...}}
-#     -> this workflow: files written to branch davinci/<name>, self-test run, pull request opened (or updated)
-#     -> you review and merge; merging to main runs the normal Windows / Linux / Android builds.
+#  Three ways in:
+#   1. Actions -> "Venice code intake" -> Run workflow -> type a TASK (works from a phone):
+#        GitHub runs tools/venice_bridge.py with the VENICE_API_KEY secret; Venice reads the code and writes the change.
+#   2. tools/venice_bridge.py "task" --send   (or tools/venice_send.py) on a computer:
+#        POST /repos/BajanBob/APRS-Tradewins/dispatches {"event_type": "venice-code", "client_payload": {...}}
+#   3. Run workflow with a ready-made PAYLOAD (JSON).
+#  Then: files written to branch venice/<name>, self-test run, pull request opened (or updated) for you to review.
 #
-# Da Vinci never pushes to main and cannot change anything in .github/.
-# Payload format: tools/davinci_apply.py.  Set-up: docs/davinci/README.md.
-# Also runnable by hand: Actions -> "Da Vinci code intake" -> Run workflow, paste the payload JSON.
-name: Da Vinci code intake
+# Venice never pushes to main and cannot change anything in .github/.
+# Payload format: tools/venice_apply.py.  Set-up: docs/venice/README.md.
+name: Venice code intake
 
 on:
   repository_dispatch:
-    types: [davinci-code]
+    types: [venice-code]
   workflow_dispatch:
     inputs:
+      task:
+        description: 'Task for Venice.ai, in plain words (e.g. "Add the PD90 SSTV mode to satrx.py with a test")'
+        required: false
       payload:
-        description: 'Payload JSON: {"title": "...", "files": [{"path": "...", "content": "..."}]}'
-        required: true
+        description: 'Or: a ready-made payload JSON {"title": "...", "files": [...]}'
+        required: false
+      dry_run:
+        description: 'Test only - open no pull request'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -26,7 +35,7 @@ permissions:
 jobs:
   intake:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,32 +46,50 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The payload only ever goes through files and environment variables, never into a command line.
-      - name: Read the payload
+      - name: Check the intake tools
+        run: python tools/test_venice.py
+
+      # Inputs only ever go through files and environment variables, never into a command line.
+      - name: Get the change (from Venice, or as sent)
         env:
           EVENT_NAME: ${{ github.event_name }}
           DISPATCH_PAYLOAD: ${{ toJSON(github.event.client_payload) }}
           INPUT_PAYLOAD: ${{ github.event.inputs.payload }}
+          INPUT_TASK: ${{ github.event.inputs.task }}
+          INPUT_DRY: ${{ github.event.inputs.dry_run }}
+          VENICE_API_KEY: ${{ secrets.VENICE_API_KEY }}
+          VENICE_MODEL: ${{ vars.VENICE_MODEL }}
         run: |
+          P="$RUNNER_TEMP/payload.json"
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            printf '%s' "$DISPATCH_PAYLOAD" > "$RUNNER_TEMP/payload.json"
+            printf '%s' "$DISPATCH_PAYLOAD" > "$P"
+          elif [ -n "$INPUT_TASK" ]; then
+            if [ -z "$VENICE_API_KEY" ]; then
+              echo "::error title=No Venice key::Add the VENICE_API_KEY secret (Settings > Secrets and variables > Actions) - see docs/venice/README.md"
+              exit 1
+            fi
+            printf '%s' "$INPUT_TASK" > "$RUNNER_TEMP/task.txt"
+            python tools/venice_bridge.py "@$RUNNER_TEMP/task.txt" --root . --out "$P"
+          elif [ -n "$INPUT_PAYLOAD" ]; then
+            printf '%s' "$INPUT_PAYLOAD" > "$P"
           else
-            printf '%s' "$INPUT_PAYLOAD" > "$RUNNER_TEMP/payload.json"
+            echo "::error title=Nothing to do::Give a task or a payload."
+            exit 1
           fi
-
-      - name: Check the intake tool
-        run: python tools/test_davinci_apply.py
+          if [ "$INPUT_DRY" = "true" ]; then
+            python -c "import json,sys; p=json.load(open(sys.argv[1])); p['dry_run']=True; json.dump(p, open(sys.argv[1],'w'))" "$P"
+          fi
 
       - name: Plan
         id: plan
         run: |
-          python tools/davinci_apply.py plan "$RUNNER_TEMP/payload.json" > "$RUNNER_TEMP/plan.json"
+          python tools/venice_apply.py plan "$RUNNER_TEMP/payload.json" > "$RUNNER_TEMP/plan.json"
           python - "$RUNNER_TEMP/plan.json" "$RUNNER_TEMP" >> "$GITHUB_OUTPUT" <<'EOF'
           import json, sys
           p = json.load(open(sys.argv[1]))
           tmp = sys.argv[2]
           open(f"{tmp}/title.txt", "w").write(p["title"])
-          open(f"{tmp}/message.txt", "w").write(p["message"] + "\n\nSent-by: Da Vinci (AI assistant) via davinci-intake\n")
+          open(f"{tmp}/message.txt", "w").write(p["message"] + "\n\nSent-by: Venice.ai via venice-intake\n")
           open(f"{tmp}/body.txt", "w").write(p["body"])
           print(f"branch={p['branch']}")
           print(f"dry_run={'true' if p['dry_run'] else 'false'}")
@@ -79,8 +106,8 @@ jobs:
             git checkout -b "$BRANCH"
           fi
 
-      - name: Apply Da Vinci's files
-        run: python tools/davinci_apply.py apply "$RUNNER_TEMP/payload.json" --root . --summary "$RUNNER_TEMP/changes.md"
+      - name: Apply Venice's change
+        run: python tools/venice_apply.py apply "$RUNNER_TEMP/payload.json" --root . --summary "$RUNNER_TEMP/changes.md"
 
       - name: Self-test
         id: test
@@ -102,7 +129,7 @@ jobs:
           TEST_OK: ${{ steps.test.outputs.ok }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          git config user.name "Da Vinci (via davinci-intake)"
+          git config user.name "Venice.ai (via venice-intake)"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
@@ -116,7 +143,7 @@ jobs:
             echo "### Files"; cat "$RUNNER_TEMP/changes.md"; echo
             if [ "$TEST_OK" = "true" ]; then echo "### Self-test: passed ✅"; else echo "### Self-test: FAILED ❌"; fi
             echo '```'; tail -n 25 "$RUNNER_TEMP/test.log"; echo '```'
-            echo "[Intake run]($RUN_URL) · sent by Da Vinci. Review before merging."
+            echo "[Intake run]($RUN_URL) · written by Venice.ai. Review before merging."
           } > "$RUNNER_TEMP/pr.md"
           if gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -q OPEN; then
             gh pr comment "$BRANCH" --body-file "$RUNNER_TEMP/pr.md"
@@ -136,5 +163,5 @@ jobs:
       - name: Fail the run if the self-test failed
         if: steps.test.outputs.ok != 'true'
         run: |
-          echo "::error title=Self-test failed::Da Vinci's change breaks test_modem.py - see the pull request (opened as a draft)."
+          echo "::error title=Self-test failed::Venice's change breaks test_modem.py - see the pull request (opened as a draft)."
           exit 1

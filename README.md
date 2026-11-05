@@ -80,11 +80,12 @@ A **setup wizard** opens the first time (and any time from MENU > SETUP WIZARD):
 To reach the face plate from a phone on the same Wi-Fi, run `python3 app.py --host 0.0.0.0` and set a **station PIN**
 (MENU > STATION). Open it by IP address (e.g. `http://192.168.1.20:8073`) or a `.local` name; other host names are refused.
 
-## Da Vinci → GitHub: code from the AI assistant as pull requests
+## Venice.ai → GitHub: AI-written code as pull requests
 
-Code written by the **Da Vinci** assistant can be sent straight to this repository: GitHub writes it to a
-`davinci/...` branch, runs the self-test and opens a pull request for review - nothing reaches `main` without
-a person merging it. Set-up and the GPT Action: [docs/davinci/README.md](docs/davinci/README.md).
+Give **Venice.ai** a coding task - from GitHub on your phone (Actions → *Venice code intake* → Run workflow →
+type the task) or from a computer (`python tools/venice_bridge.py "task" --send`). Venice reads the code, writes
+the change, and GitHub puts it on a `venice/...` branch, runs the self-test and opens a pull request for review -
+nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.md](docs/venice/README.md).
 
 ## What's new in 3.16: satellite receivers - pictures, video, telemetry
 

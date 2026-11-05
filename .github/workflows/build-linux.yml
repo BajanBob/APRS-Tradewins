@@ -37,6 +37,9 @@ jobs:
       - name: Self-test
         run: python test_modem.py
 
+      - name: Self-test (Da Vinci intake)
+        run: python tools/test_davinci_apply.py
+
       - name: Package
         run: |
           mkdir -p Tradewind

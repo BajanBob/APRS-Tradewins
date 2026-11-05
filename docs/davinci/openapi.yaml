@@ -1,0 +1,141 @@
+openapi: 3.1.0
+info:
+  title: Tradewind repository (Da Vinci)
+  version: "1.0"
+  description: >
+    Lets the Da Vinci assistant read Tradewind's code and send changes. A send becomes a pull request on a
+    davinci/... branch after Tradewind's self-test runs; a person reviews and merges it. Nothing goes to main
+    directly and .github/ cannot be changed.
+servers:
+  - url: https://api.github.com
+paths:
+  /repos/BajanBob/APRS-Tradewins/dispatches:
+    post:
+      operationId: sendCode
+      summary: Send new or changed files; GitHub tests them and opens (or updates) a pull request.
+      description: >
+        Send whole files (the complete new text, never a diff). Up to 50 files per send; for bigger changes
+        send several times with the same branch. Returns 204 with no body when accepted - the pull request
+        appears about 2-4 minutes later (check with listPullRequests).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_type, client_payload]
+              properties:
+                event_type:
+                  type: string
+                  enum: [davinci-code]
+                client_payload:
+                  type: object
+                  required: [title, files]
+                  properties:
+                    title:
+                      type: string
+                      description: Pull request title, e.g. "Add PD90 SSTV mode".
+                    branch:
+                      type: string
+                      description: davinci/short-name. Reuse the same branch to add to an open pull request.
+                    message:
+                      type: string
+                      description: Commit message (defaults to the title).
+                    body:
+                      type: string
+                      description: What changed and why, and how it was tested.
+                    dry_run:
+                      type: boolean
+                      description: true = apply and run the self-test only, push nothing.
+                    files:
+                      type: array
+                      maxItems: 50
+                      items:
+                        type: object
+                        required: [path]
+                        properties:
+                          path:
+                            type: string
+                            description: Path in the repository, e.g. satrx.py or docs/guide.md. Not .github/.
+                          content:
+                            type: string
+                            description: The complete new text of the file (UTF-8).
+                          content_b64:
+                            type: string
+                            description: Base64 contents, for binary files (images). Use instead of content.
+                          delete:
+                            type: boolean
+                            description: true = delete this file.
+      responses:
+        "204":
+          description: Accepted. The intake workflow is running.
+        "401":
+          description: Token missing or wrong.
+        "404":
+          description: Token cannot see this repository (fine-grained token not given access to it).
+        "422":
+          description: Bad request body.
+  /repos/BajanBob/APRS-Tradewins/contents/{path}:
+    get:
+      operationId: getFile
+      summary: Read a file (or list a folder) from the repository.
+      description: >
+        Files come back base64-encoded in "content". Use ref=main for the released code, or a davinci/ branch.
+        For files over 1 MB use getRawFile.
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema: {type: string}
+          description: e.g. satrx.py, or an empty string for the top folder.
+        - name: ref
+          in: query
+          required: false
+          schema: {type: string, default: main}
+      responses:
+        "200":
+          description: The file or folder listing.
+  /repos/BajanBob/APRS-Tradewins/git/trees/main:
+    get:
+      operationId: listAllFiles
+      summary: List every file in the repository (main branch).
+      parameters:
+        - name: recursive
+          in: query
+          required: true
+          schema: {type: string, enum: ["1"]}
+      responses:
+        "200":
+          description: The file tree.
+  /repos/BajanBob/APRS-Tradewins/pulls:
+    get:
+      operationId: listPullRequests
+      summary: Open pull requests (find the one a send created).
+      parameters:
+        - name: state
+          in: query
+          schema: {type: string, enum: [open, closed, all], default: open}
+        - name: per_page
+          in: query
+          schema: {type: integer, default: 10}
+      responses:
+        "200":
+          description: Pull requests, newest first.
+  /repos/BajanBob/APRS-Tradewins/actions/workflows/davinci-intake.yml/runs:
+    get:
+      operationId: listIntakeRuns
+      summary: Recent intake runs - status and conclusion (success = self-test passed and PR made).
+      parameters:
+        - name: per_page
+          in: query
+          schema: {type: integer, default: 5}
+      responses:
+        "200":
+          description: Workflow runs, newest first.
+components:
+  securitySchemes:
+    githubToken:
+      type: http
+      scheme: bearer
+security:
+  - githubToken: []

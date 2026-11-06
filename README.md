@@ -96,6 +96,7 @@ nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.
   - `--tle FILE`, `--catnr N` and `--hours H` pick another orbit file, satellite or time span.
 - **Tradewind is now clear text only.** Encrypted commercial messaging moved to the separate Tradewind Commander edition, and the
   `cryptography` package is no longer needed. Settings saved in commercial mode come back in amateur mode.
+- **3.17.1:** on Windows, a serial port typed as `12` now becomes `COM12`. Hailing your own callsign now says so plainly.
 - **Packages for live testing:** `python tools/build_editions.py` makes the Linux and Raspberry Pi zips. The installer now works for both editions.
 
 ## What's new in 3.16: satellite receivers - pictures, video, telemetry

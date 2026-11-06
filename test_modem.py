@@ -81,6 +81,7 @@ def main():
     test_v36()
     test_v37()
     test_edition()
+    test_v3171()
     print("All self-tests passed")
 
 
@@ -103,6 +104,32 @@ def test_edition():
     else:
         from commander import test_commander
         test_commander.run()
+
+
+def test_v3171():
+    """v3.17.1: bare COM-port numbers on Windows, and clear hail errors (own ID / other station's ID)."""
+    import app
+    f = app.serial_port_name
+    assert [f(x, True) for x in ("12", "COM12", "com 3", "012", "/dev/ttyUSB0", "127.0.0.1:4532", "")] == \
+        ["COM12", "COM12", "COM3", "COM12", "/dev/ttyUSB0", "127.0.0.1:4532", ""]
+    assert f("12", False) == "12"
+    cfg = app._migrate(dict(app.DEFAULTS, ptt_port="12", kiss_serial="com5", link2_serial="/dev/ttyACM0"))
+    if sys.platform.startswith("win"):
+        assert (cfg["ptt_port"], cfg["kiss_serial"]) == ("COM12", "COM5")
+    assert cfg["link2_serial"] == "/dev/ttyACM0"
+    m = tnc.ChatManager("8P5AB-7", lambda *a: None)
+    for call, want in (("8P5AB-7", "own callsign"), ("", "Enter the other station's callsign")):
+        try:
+            m.hail(call)
+            raise AssertionError("hail must refuse " + call)
+        except ValueError as e:
+            assert want in str(e), e
+    m.id_word, m.id_example = "unit ID", "PX2"
+    try:
+        m.hail("8P5AB-7")
+    except ValueError as e:
+        assert "own unit ID" in str(e) and "PX2" in str(e), e
+    print("v3.17.1 ok (COM12 port names, hail errors)")
 
 
 def test_chat():

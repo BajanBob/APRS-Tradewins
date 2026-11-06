@@ -47,7 +47,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.17"
+APP_VERSION = "3.17.1"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -402,6 +402,15 @@ def _modes_from_regions(regions):
     return out
 
 
+def serial_port_name(p, windows=sys.platform.startswith("win")):
+    """Windows names serial ports COM1, COM2...: a bare number or "com 12" becomes "COM12".
+    Anything else (/dev/ttyUSB0, 127.0.0.1:4532 for rigctld) is left alone."""
+    p = str(p or "").strip()
+    if windows and re.fullmatch(r"(?i)(com)?\s*0*([1-9]\d{0,2})", p):
+        return "COM" + re.fullmatch(r"(?i)(com)?\s*0*([1-9]\d{0,2})", p).group(2)
+    return p
+
+
 def _migrate(cfg):
     """Convert settings saved by earlier versions (path-based -> mode-based)."""
     if cfg.get("rf_when") == "tep":
@@ -415,6 +424,8 @@ def _migrate(cfg):
     if "alert_regions" in cfg:
         regs = cfg.pop("alert_regions")
         cfg["alert_modes"] = list(ALL_MODES) if set(regs) >= {"NA", "EU", "LA"} else _modes_from_regions(regs)
+    for k in ("ptt_port", "kiss_serial", "link2_serial"):     # v3.17.1: "12" -> "COM12" on Windows
+        cfg[k] = serial_port_name(cfg.get(k))
     return cfg
 
 
@@ -793,6 +804,7 @@ class Station:
                 self.sec = comstation.open_link(c)
                 unit = c["com_unit"].upper()
                 self.chat = tncmod.ChatManager(unit, self._com_send)
+                self.chat.id_word, self.chat.id_example = "unit ID", ("PX2" if unit != "PX2" else "PX1")
                 self._attach_chat()
             elif c.get("aprsis"):
                 pc = c.get("passcode") or eng.aprs_passcode(c["call"])

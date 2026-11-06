@@ -1578,6 +1578,7 @@ class ChatManager:
 
     def __init__(self, mycall, send_fn, now=time.time):
         self.mycall = norm_call(mycall)
+        self.id_word, self.id_example = "callsign", "8P6XX-9"   # Commander: "unit ID", "PX2"
         self.send_fn = send_fn
         self.now = now
         self.lock = threading.RLock()
@@ -1859,13 +1860,19 @@ class ChatManager:
         except Exception:
             pass
 
+    def _check_other(self, call):
+        w, ex = self.id_word, self.id_example
+        if call and call == self.mycall:
+            raise ValueError(f"{call} is this station's own {w} - enter the other station's {w}, e.g. {ex}")
+        if not valid_call(call):
+            raise ValueError(f"Enter the other station's {w}, e.g. {ex}")
+
     # ---- user actions
     def hail(self, call, route="rf", tries=None, interval=None, forever=False):
         """Call a station. tries: how many times to send the call (default 4),
         interval: seconds between calls, forever: keep calling until it is received."""
         call = norm_call(call)
-        if not valid_call(call) or call == self.mycall:
-            raise ValueError("Enter the other station's callsign, e.g. 8P6XX-9")
+        self._check_other(call)
         if self.rf_block and route != "is":
             raise ValueError(self.rf_block)
         with self.lock:
@@ -2099,8 +2106,7 @@ class ChatManager:
     def open_direct(self, call, route="smart"):
         """Message a station without the hail handshake (plain APRS, works with any app)."""
         call = norm_call(call)
-        if not valid_call(call) or call == self.mycall:
-            raise ValueError("Choose another station's callsign.")
+        self._check_other(call)
         with self.lock:
             p = self._peer(call)
             p["direct"] = True

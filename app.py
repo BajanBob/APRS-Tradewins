@@ -37,19 +37,32 @@ import tnc as tncmod
 import vhf_prop_aprs as eng
 import wx
 
+try:                                    # present only in the Tradewind Commander edition
+    import commander
+    from commander import seclink as secmod
+    from commander import station as comstation
+    from commander import ui as comui
+except ImportError:
+    commander = secmod = comstation = comui = None
+EDITION = commander.EDITION if commander else "amateur"
+
 APP_NAME = "Tradewind"
-APP_VERSION = "3.16"
+APP_VERSION = "3.17"
+APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+_CONF_NAME = commander.CONF_NAME if commander else ".tradewind"
+
+
 def _conf_dir():
     # Android (python-for-android) has no normal home folder: use the app's private storage
     for var in ("TRADEWIND_HOME", "ANDROID_PRIVATE", "ANDROID_APP_PATH"):
         if os.environ.get(var):
-            return os.path.join(os.environ[var], ".tradewind")
+            return os.path.join(os.environ[var], _CONF_NAME)
     home = os.path.expanduser("~")
     if home in ("~", "/", "") or not os.access(home, os.W_OK):
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), ".tradewind")
-    return os.path.join(home, ".tradewind")
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), _CONF_NAME)
+    return os.path.join(home, _CONF_NAME)
 
 
 CONF_DIR = _conf_dir()
@@ -469,6 +482,8 @@ def load_config():
     if saved and "qsy_mode" not in saved:          # v3.6: a hand-edited channel list stays as the manual list
         cfg["qsy_mode"] = "auto" if cfg.get("qsy_freqs") == DEFAULTS["qsy_freqs"] else "manual"
     cfg["cfg_ver"] = 4
+    if not commander:
+        cfg["op_mode"] = "amateur"      # Commercial / EmComm mode is only in Tradewind Commander
     return cfg
 
 
@@ -478,24 +493,6 @@ def save_config(cfg):
     with open(tmp, "w") as f:
         json.dump(cfg, f, indent=1)
     os.replace(tmp, CONF_PATH)
-
-
-def validate_commercial(cfg):
-    errs = []
-    missing = tncmod.crypto_available()
-    if missing:
-        errs.append("Commercial mode: " + missing + ".")
-    if cfg.get("tnc") not in ("sound", "kiss_tcp", "kiss_serial"):
-        errs.append("Commercial mode needs a radio: choose a TNC under MENU > RADIO / TNC.")
-    if not tncmod.com_freq_hz(cfg):
-        errs.append("Commercial channel must be 148.000 - 174.000 MHz (your licensed frequency).")
-    if not re.match(r"^[A-Z0-9]{1,6}(-([0-9]|1[0-5]))?$", str(cfg.get("com_unit") or "").upper()):
-        errs.append("Enter this unit's ID: 1-6 letters/numbers, e.g. RC01 or BDF7.")
-    if not str(cfg.get("com_callsign") or "").strip() or not str(cfg.get("com_licensee") or "").strip():
-        errs.append("Enter the licence holder and the station call sign / licence number from your licence.")
-    if not cfg.get("com_key"):
-        errs.append("Set the network name and passphrase (MENU > COMMERCIAL).")
-    return errs
 
 
 PATH_WIDE_RE = re.compile(r"^WIDE([1-7])-([1-7])$")
@@ -528,7 +525,9 @@ def check_path(path):
 
 def validate(cfg):
     if cfg.get("op_mode") == "commercial":
-        return validate_commercial(cfg)
+        if not comstation:
+            return ["Commercial / EmComm mode is part of Tradewind Commander. This is the amateur edition: clear text only."]
+        return comstation.validate_commercial(cfg)
     errs = []
     if IS_ANDROID and cfg.get("tnc") in ("sound", "kiss_serial"):
         errs.append("On Android use 'APRS-IS only' or 'KISS over TCP' - the sound modem and USB/serial radios need the Windows/PC version.")
@@ -791,7 +790,7 @@ class Station:
                     self.kiss_srv = None
                     self.add_log("ERR", f"KISS server not started: {e}")
             if self.commercial:
-                self.sec = tncmod.SecureLink(bytes.fromhex(c["com_key"]))
+                self.sec = comstation.open_link(c)
                 unit = c["com_unit"].upper()
                 self.chat = tncmod.ChatManager(unit, self._com_send)
                 self._attach_chat()
@@ -1888,7 +1887,7 @@ class Station:
             with open(self._chat_file(), "rb") as f:
                 raw = f.read()
             if self.commercial:                      # stored encrypted with the network key
-                raw = tncmod.seal_open(bytes.fromhex(self.cfg["com_key"]), raw)
+                raw = secmod.seal_open(bytes.fromhex(self.cfg["com_key"]), raw)
             d = json.loads(raw)
             self.chat.load(d.get("chat"))
             self.commlog = d.get("log", [])[-5000:]
@@ -1903,7 +1902,7 @@ class Station:
             os.makedirs(CHAT_DIR, exist_ok=True)
             raw = json.dumps({"chat": self.chat.to_dict(), "log": self.commlog[-5000:]}).encode()
             if self.commercial:
-                raw = tncmod.seal_close(bytes.fromhex(self.cfg["com_key"]), raw)
+                raw = secmod.seal_close(bytes.fromhex(self.cfg["com_key"]), raw)
             tmp = self._chat_file() + ".tmp"
             with open(tmp, "wb") as f:
                 f.write(raw)
@@ -2451,45 +2450,6 @@ class Station:
         self.add_log("MSG", f"[{'+'.join(sent)}] {c['call']}>{call}: {info[11:]}")
         return link or "IS"
 
-    def _com_id(self, force=False):
-        """Clear-text station identification required by most commercial licences."""
-        c, now = self.cfg, time.time()
-        if force or now - self.last_id >= max(5, int(c.get("com_id_min") or 30)) * 60:
-            text = f">ID {c['com_callsign'].strip()} {c['com_licensee'].strip()}"[:80]
-            self.tnc.send(c["com_unit"].upper(), "ID", [], text)
-            if self.tnc2:
-                self.tnc2.send(c["com_unit"].upper(), "ID", [], text)
-            self.last_id = now
-            self.add_log("SEC", f"station ID sent in clear: {text[1:]}")
-
-    def _com_send(self, call, info, route):
-        if not (self.tnc and self.sec):
-            raise IOError("station is off")
-        if self.tnc.kind == "none":
-            raise IOError("commercial mode needs a radio (TNC)")
-        self._com_id()
-        unit = self.cfg["com_unit"].upper()
-        frame = self.sec.seal(unit, info)
-        link = self._pick_link(call, route if route in ("auto",) or str(route).startswith("link:") else "rf") or "A"
-        self._link_send(link, unit, tncmod.SEC_DEST, [], frame)
-        self.add_log("SEC", f"encrypted message to {call} on link {link} ({len(frame)} bytes on air)")
-        return link
-
-    def _com_rx(self, line, link="A"):
-        head, _, info = line.partition(":")
-        if ">" not in head:
-            return
-        src = head.split(">", 1)[0].rstrip("*").upper()
-        dst = head.split(">", 1)[1].split(",")[0].rstrip("*").upper()
-        if dst != tncmod.SEC_DEST or not info.startswith(tncmod.SEC_TAG):
-            return
-        plain = self.sec.open(src, info)
-        if plain is None:
-            self.add_log("SEC", f"frame from {src} refused (wrong key, altered or replayed)")
-            return
-        if self.chat:
-            self.chat.on_packet(f"{src}>{tncmod.SEC_DEST}:{plain}", "RF" if link == "A" else f"RF:{link}")
-
     def set_block(self, call, block):
         call = tncmod.norm_call(call)
         if not tncmod.valid_call(call):
@@ -2538,17 +2498,6 @@ class Station:
 
     def session_token(self):
         return hmac.new(bytes.fromhex(self.cfg["pin_hash"]), b"tradewind-session", hashlib.sha256).hexdigest()
-
-    def set_com_key(self, net, passphrase):
-        key = tncmod.derive_key(net, passphrase)
-        fp = tncmod.key_fingerprint(key)
-        with self.lock:
-            self.cfg.update(com_net=net.strip().upper(), com_key=key.hex(), com_fp=fp)
-            save_config(self.cfg)
-            if self.running and self.commercial:
-                self.sec = tncmod.SecureLink(key)
-        self.add_log("SEC", f"network key set for {net.strip().upper()} - fingerprint {fp}")
-        return fp
 
     def on_is_line(self, line):
         if self.wolf:
@@ -2689,7 +2638,7 @@ class Station:
                 matrix.append(cell)
         tst = self.tnc.status if self.tnc else None
         return {
-            "app": APP_NAME, "version": APP_VERSION, "running": self.running,
+            "app": APP_TITLE, "edition": EDITION, "licence": commander.LICENCE_LABEL if commander else "MIT License", "version": APP_VERSION, "running": self.running,
             "platform": "android" if IS_ANDROID else sys.platform,
             "config": {k: v for k, v in c.items() if k not in SECRET_KEYS}, "matrix": matrix, "utc": time.time(),
             "pin_set": bool(c.get("pin_hash")),
@@ -2718,7 +2667,7 @@ class Station:
             "commlog_count": len(self.commlog),
             "com": {"net": c.get("com_net", ""), "fp": c.get("com_fp", ""), "freq": c.get("com_freq", ""),
                     "unit": c.get("com_unit", ""), "has_key": bool(c.get("com_key")),
-                    "crypto": tncmod.crypto_available(), "active": bool(self.running and self.commercial)},
+                    "crypto": secmod.crypto_available() if secmod else "not in this edition", "active": bool(self.running and self.commercial)},
             "last_check": self.last_check, "next_check": self.next_check if self.running and not self.prop_off else 0,
             "next_beacon": self.next_beacon if self.running else 0,
             "spots": self.spot_count, "car_spots": self.car_count, "local": self.local,
@@ -2744,12 +2693,13 @@ main{max-width:760px;margin:0 auto;padding:20px 16px}h1{font-size:20px}h2{font-s
 <body><main><h1>Tradewind licences and credits</h1>
 <p>Tradewind &copy; 2026 Brandon St Rose (8P5DG) and Kammie Holder (8P5AB). Released under the MIT License: free to use, copy, change and share,
 provided this notice is kept. The software is provided "as is", without warranty of any kind.</p>
+<!--TW:COM-NOTICE-P-->
 <h2>Software Tradewind is built with</h2><table>
 <tr><td>Python</td><td>Python Software Foundation License</td></tr>
 <tr><td>NumPy</td><td>BSD 3-Clause</td></tr>
 <tr><td>python-sounddevice / PortAudio</td><td>MIT</td></tr>
 <tr><td>pySerial</td><td>BSD 3-Clause</td></tr>
-<tr><td>cryptography (commercial mode)</td><td>Apache 2.0 or BSD 3-Clause</td></tr>
+<!--TW:COM-NOTICE-->
 <tr><td>certifi</td><td>Mozilla Public License 2.0</td></tr>
 <tr><td>Leaflet (map)</td><td>BSD 2-Clause</td></tr>
 <tr><td>PyInstaller (Windows build)</td><td>GPL 2.0 with bootloader exception</td></tr>
@@ -2871,7 +2821,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "unknown host name refused - use the IP address, or add the name under MENU > STATION"}, 403)
         path = self.path.split("?")[0]
         if path == "/notices":
-            return self._html(NOTICES_PAGE)
+            return self._html(NOTICES_PAGE.replace("<!--TW:COM-NOTICE-->", comui.NOTICE_ROW if comui else "")
+                              .replace("<!--TW:COM-NOTICE-P-->", comui.NOTICE_P if comui else ""))
         if path == "/manifest.json":          # iPhone / Android "Add to Home Screen"
             return self._bytes(json.dumps({
                 "name": APP_NAME, "short_name": APP_NAME, "start_url": "/", "display": "standalone",
@@ -2891,6 +2842,8 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             with open(os.path.join(HERE, "faceplate.html"), "rb") as f:
                 body = f.read()
+            if comui:
+                body = comui.inject(body.decode("utf-8")).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -3080,6 +3033,8 @@ class Handler(BaseHTTPRequestHandler):
                 save_config(STATION.cfg)
             return self._json({"ok": True})
         elif path == "/api/comkey":
+            if not comstation:
+                return self._json({"ok": False, "errors": ["Commercial / EmComm mode is part of Tradewind Commander."]})
             b = self._body()
             try:
                 fp = STATION.set_com_key(str(b.get("net") or ""), str(b.get("passphrase") or ""))
@@ -3207,6 +3162,10 @@ def main():
         pass
     finally:
         STATION.stop()
+
+
+if comstation:                         # Commander: add the commercial station methods
+    comstation.install(sys.modules[__name__])
 
 
 if __name__ == "__main__":

@@ -41,6 +41,7 @@ jobs:
           pyinstaller --noconfirm --onefile --name Tradewind --icon icon.ico
           --add-data "faceplate.html;."
           --collect-all sounddevice
+          --exclude-module commander --exclude-module cryptography
           app.py
 
       - name: Package

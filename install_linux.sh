@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tradewind installer for Linux and Raspberry Pi (Raspberry Pi OS, Debian, Ubuntu, Mint).
+# Tradewind / Tradewind Commander installer for Linux and Raspberry Pi (Raspberry Pi OS, Debian, Ubuntu, Mint).
 # Copyright (c) 2026 Brandon St Rose (8P5DG) and Kammie Holder (8P5AB) - MIT License
 #
 #   bash install_linux.sh            install, then run with:  tradewind
@@ -24,6 +24,16 @@ if [ ! -f "$DIR/app.py" ]; then
   echo "Run this script from the Tradewind folder (the one with app.py)."; exit 1
 fi
 
+# Tradewind Commander (commercial edition) when its commander/ folder is here
+if [ -f "$DIR/commander/__init__.py" ]; then
+  NAME="Tradewind Commander"; CMD="tradewind-commander"; SVC="tradewind-commander"
+  COMMENT="Encrypted EmComm messaging on licensed VHF, plus Tradewind's APRS tools"
+else
+  NAME="Tradewind"; CMD="tradewind"; SVC="tradewind"
+  COMMENT="Caribbean VHF/UHF propagation alerts and APRS chat"
+fi
+echo "== Installing $NAME =="
+
 echo "== Installing system packages (asks for your password) =="
 PKGS="python3 python3-venv python3-pip libportaudio2"
 [ "$SDR" = 1 ] && PKGS="$PKGS rtl-sdr"
@@ -34,6 +44,9 @@ echo "== Setting up Python packages =="
 python3 -m venv "$DIR/.venv"
 "$DIR/.venv/bin/pip" install --upgrade pip
 "$DIR/.venv/bin/pip" install -r "$DIR/requirements.txt"
+if [ -f "$DIR/commander/requirements.txt" ]; then
+  "$DIR/.venv/bin/pip" install -r "$DIR/commander/requirements.txt"
+fi
 
 echo "== Self-test =="
 (cd "$DIR" && "$DIR/.venv/bin/python" test_modem.py) || echo "Self-test reported a problem - Tradewind may still run; see above."
@@ -42,28 +55,28 @@ echo "== Self-test =="
 sudo usermod -aG dialout,audio,plugdev "$USER" || true
 
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
-cat > "$HOME/.local/bin/tradewind" <<EOF
+cat > "$HOME/.local/bin/$CMD" <<EOF
 #!/usr/bin/env bash
 cd "$DIR" && exec "$DIR/.venv/bin/python" app.py "\$@"
 EOF
-chmod +x "$HOME/.local/bin/tradewind"
+chmod +x "$HOME/.local/bin/$CMD"
 
-cat > "$HOME/.local/share/applications/tradewind.desktop" <<EOF
+cat > "$HOME/.local/share/applications/$CMD.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Tradewind
-Comment=Caribbean VHF/UHF propagation alerts and APRS chat
-Exec=$HOME/.local/bin/tradewind
+Name=$NAME
+Comment=$COMMENT
+Exec=$HOME/.local/bin/$CMD
 Icon=$DIR/icon.png
 Terminal=true
 Categories=HamRadio;Network;
 EOF
 
 if [ "$SERVICE" = 1 ]; then
-  echo "== Starting Tradewind at power-on =="
-  sudo tee /etc/systemd/system/tradewind.service > /dev/null <<EOF
+  echo "== Starting $NAME at power-on =="
+  sudo tee /etc/systemd/system/$SVC.service > /dev/null <<EOF
 [Unit]
-Description=Tradewind APRS station
+Description=$NAME station
 After=network-online.target sound.target
 Wants=network-online.target
 
@@ -78,14 +91,14 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
   sudo systemctl daemon-reload
-  sudo systemctl enable --now tradewind
+  sudo systemctl enable --now $SVC
   IP=$(hostname -I 2>/dev/null | awk '{print $1}')
   echo
-  echo "Tradewind is running. Open http://${IP:-<this-computer>}:8073 on a phone or PC on your network."
+  echo "$NAME is running. Open http://${IP:-<this-computer>}:8073 on a phone or PC on your network."
   echo "First visit from another device: set a station PIN on this computer (MENU > STATION) - "
-  echo "or open http://127.0.0.1:8073 here. Stop it with: sudo systemctl stop tradewind"
+  echo "or open http://127.0.0.1:8073 here. Stop it with: sudo systemctl stop $SVC"
 else
   echo
-  echo "Installed. Log out and back in once (for radio/USB permissions), then run:  tradewind"
-  echo "Tradewind also appears in your applications menu."
+  echo "Installed. Log out and back in once (for radio/USB permissions), then run:  $CMD"
+  echo "$NAME also appears in your applications menu."
 fi

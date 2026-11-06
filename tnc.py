@@ -2578,48 +2578,10 @@ class ChatManager:
 
 
 # --------------------------------------------------------------------------
-# Commercial / EmComm mode: encrypted chat on licensed 148-174 MHz channels
+# Licensed commercial VHF band (148-174 MHz). Tradewind itself never encrypts:
+# encrypted EmComm messaging is only in the separate Tradewind Commander edition.
 # --------------------------------------------------------------------------
-# NOT for amateur bands - amateur rules forbid encryption. The station
-# identifier travels in clear in the AX.25 header and in periodic ID frames;
-# only the message content is encrypted.
-#
-# Cipher: AES-256-GCM (authenticated). Key: 256 bits derived from the
-# network passphrase with scrypt (salt = network name). Each frame carries a
-# fresh 96-bit nonce; the sender's ID is bound in as associated data, and a
-# timestamp + nonce cache stops replays.
-
 COM_BAND_HZ = (148_000_000, 174_000_000)
-SEC_DEST = "TWSEC"          # AX.25 destination of encrypted frames
-SEC_TAG = "}TWE1:"          # info-field prefix (version 1)
-SEC_MAX_AGE_S = 600         # frames older / newer than this are refused
-
-
-def crypto_available():
-    try:
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
-        return ""
-    except Exception as e:  # not installed (e.g. the Android build)
-        return f"encryption library missing ({e.__class__.__name__}) - commercial mode needs the Windows/PC version"
-
-
-def derive_key(net, passphrase):
-    """256-bit network key from the passphrase (scrypt, salt = network name)."""
-    import hashlib
-    net, passphrase = (net or "").strip(), passphrase or ""
-    if len(passphrase) < 12:
-        raise ValueError("Use a passphrase of at least 12 characters (longer is better).")
-    if not net:
-        raise ValueError("Give the network a name (every unit must use the same name).")
-    return hashlib.scrypt(passphrase.encode(), salt=b"tradewind-net-v1:" + net.upper().encode(),
-                          n=2 ** 15, r=8, p=1, dklen=32, maxmem=64 * 1024 * 1024)
-
-
-def key_fingerprint(key):
-    """Short code that units compare by voice to confirm they hold the same key."""
-    import hashlib
-    h = hashlib.sha256(b"tradewind-fp" + key).hexdigest().upper()
-    return "-".join(h[i:i + 4] for i in range(0, 16, 4))
 
 
 def com_freq_hz(cfg):
@@ -2628,55 +2590,3 @@ def com_freq_hz(cfg):
     except ValueError:
         return None
     return hz if COM_BAND_HZ[0] <= hz <= COM_BAND_HZ[1] else None
-
-
-class SecureLink:
-    def __init__(self, key, now=time.time):
-        if len(key) != 32:
-            raise ValueError("network key must be 256 bits")
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        self.aead = AESGCM(key)
-        self.now = now
-        self.seen = {}          # nonce -> time (replay cache)
-
-    def seal(self, src, info):
-        import base64
-        nonce = os.urandom(12)
-        plain = f"{int(self.now())}|{info}".encode("utf-8")
-        ct = self.aead.encrypt(nonce, plain, src.upper().encode())
-        return SEC_TAG + base64.b64encode(nonce + ct).decode()
-
-    def open(self, src, info):
-        """Encrypted info field -> plaintext, or None if forged, wrong key or replayed."""
-        import base64
-        if not info.startswith(SEC_TAG):
-            return None
-        try:
-            raw = base64.b64decode(info[len(SEC_TAG):], validate=True)
-            nonce, ct = raw[:12], raw[12:]
-            plain = self.aead.decrypt(nonce, ct, src.upper().encode()).decode("utf-8")
-            ts, _, body = plain.partition("|")
-            ts = int(ts)
-        except Exception:
-            return None
-        now = self.now()
-        if abs(now - ts) > SEC_MAX_AGE_S or nonce in self.seen:
-            return None
-        for n in [n for n, t in self.seen.items() if now - t > 2 * SEC_MAX_AGE_S]:
-            del self.seen[n]
-        self.seen[nonce] = now
-        return body
-
-
-def seal_close(key, data: bytes) -> bytes:
-    """Encrypt data at rest (AES-256-GCM) - used for saved commercial chats."""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    nonce = os.urandom(12)
-    return b"TWS1" + nonce + AESGCM(key).encrypt(nonce, data, b"tradewind-store")
-
-
-def seal_open(key, blob: bytes) -> bytes:
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    if not blob.startswith(b"TWS1"):
-        raise ValueError("not an encrypted Tradewind store")
-    return AESGCM(key).decrypt(blob[4:16], blob[16:], b"tradewind-store")

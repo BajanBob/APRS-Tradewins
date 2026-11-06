@@ -80,69 +80,29 @@ def main():
     test_v35()
     test_v36()
     test_v37()
-    if not tnc.crypto_available():
-        test_secure()
-    else:
-        print("note: encryption library missing - commercial-mode tests skipped")
+    test_edition()
     print("All self-tests passed")
 
 
-def test_secure():
-    key = tnc.derive_key("BDF-NET", "correct horse battery staple")
-    assert len(key) == 32, "256-bit key"
-    assert key == tnc.derive_key("bdf-net", "correct horse battery staple"), "same name+passphrase = same key"
-    assert key != tnc.derive_key("OTHER", "correct horse battery staple"), "network name salts the key"
-    try:
-        tnc.derive_key("BDF-NET", "short")
-        raise AssertionError("short passphrase must be refused")
-    except ValueError:
-        pass
-    clock = [5000.0]
-    now = lambda: clock[0]  # noqa: E731
-    a, b = tnc.SecureLink(key, now), tnc.SecureLink(key, now)
-    sealed = a.seal("RC01", ":RC02     :Shelter at St Philip needs water{4")
-    assert "Shelter" not in sealed and sealed.startswith(tnc.SEC_TAG), "content is encrypted"
-    assert len(sealed) < 250, "fits one AX.25 frame"
-    assert b.open("RC01", sealed) == ":RC02     :Shelter at St Philip needs water{4"
-    assert b.open("RC01", sealed) is None, "replayed frame refused"
-    assert b.open("XX99", a.seal("RC01", "x")) is None, "sender ID is authenticated"
-    evil = tnc.SecureLink(tnc.derive_key("BDF-NET", "a different passphrase!"), now)
-    assert evil.open("RC01", a.seal("RC01", "secret")) is None, "wrong key cannot read"
-    s2 = a.seal("RC01", "tamper test")
-    flipped = s2[:-6] + ("A" if s2[-6] != "A" else "B") + s2[-5:]
-    assert b.open("RC01", flipped) is None, "altered frame refused"
-    old = a.seal("RC01", "old")
-    clock[0] += tnc.SEC_MAX_AGE_S + 5
-    assert b.open("RC01", old) is None, "stale frame refused"
-    for f in (144_390_000, 147_990_000, 174_100_000):
-        assert tnc.com_freq_hz({"com_freq": f / 1e6}) is None, "amateur / out-of-band frequency refused"
-    assert tnc.com_freq_hz({"com_freq": "155.325"}) == 155_325_000
-    # two units chat end to end through the encrypted link (handshake + messages)
-    air = []
-    links = {"RC01": tnc.SecureLink(key, now), "RC02": tnc.SecureLink(key, now)}
-    u1 = tnc.ChatManager("RC01", lambda to, info, r: air.append(("RC01", links["RC01"].seal("RC01", info))), now)
-    u2 = tnc.ChatManager("RC02", lambda to, info, r: air.append(("RC02", links["RC02"].seal("RC02", info))), now)
-
-    def deliver():
-        while air:
-            src, frame = air.pop(0)
-            for unit, mgr in (("RC01", u1), ("RC02", u2)):
-                if unit != src:
-                    plain = links[unit].open(src, frame)
-                    assert plain is not None
-                    mgr.on_packet(f"{src}>{tnc.SEC_DEST}:{plain}", "RF")
-    u1.hail("RC02")
-    deliver()
-    u2.accept("RC01")
-    deliver()
-    u1.accept("RC02")
-    deliver()
-    assert u1._peer("RC02")["status"] == tnc.OPEN and u2._peer("RC01")["status"] == tnc.OPEN
-    u2.send("RC01", "Road to Oistins blocked, use Highway 7")
-    deliver()
-    clock[0] += 9; u1.tick(); deliver()          # held ack released
-    assert [m["text"] for m in u1._peer("RC02")["messages"] if m["dir"] == "in"] == ["Road to Oistins blocked, use Highway 7"]
-    assert all(m["state"] == "delivered" for m in u2._peer("RC01")["messages"] if m["dir"] == "out")
+def test_edition():
+    """Tradewind (amateur) contains no encryption; the Commander edition adds it from commander/."""
+    import app
+    here = os.path.dirname(os.path.abspath(__file__))
+    ham_files = [f for f in os.listdir(here) if f.endswith((".py", ".html")) and f != "test_modem.py"]
+    for f in ham_files:
+        with open(os.path.join(here, f), encoding="utf-8") as fh:
+            src = fh.read()
+        for bad in ("AESGCM", "from cryptography", "import cryptography", "Fernet", "ChaCha20"):
+            assert bad not in src, f"{f} contains {bad}: encryption belongs only in commander/"
+    if app.commander is None:
+        assert app.EDITION == "amateur" and app.APP_TITLE == "Tradewind"
+        cfg = dict(app.DEFAULTS, op_mode="commercial")
+        assert any("Tradewind Commander" in e for e in app.validate(cfg))
+        assert not hasattr(app.Station, "_com_send")
+        print("Edition ok: Tradewind (amateur, clear text only - no encryption code)")
+    else:
+        from commander import test_commander
+        test_commander.run()
 
 
 def test_chat():
@@ -1177,8 +1137,38 @@ def test_iss():
     st2.tnc = object()
     assert "1200" in st2._iss_can_beacon()[1]
     test_sat_watch(s, hi)
+    test_iss_cli(s, l1, l2)
     print(f"ISS passes ok ({len(ps)} passes/day, best {hi['max_el']} deg, {len(sent)} beacons)")
     test_satrx(s, hi)
+
+
+def test_iss_cli(s, l1, l2):
+    """v3.17 stand-alone iss.py: self-test, pass report from a TLE file and from Tradewind's saved orbit data."""
+    import contextlib
+    import io
+    import tempfile
+    import iss
+    assert iss.selftest(verbose=False)
+    for g in ("GK03ec", "GK03", "FK52", "EL29fs", "JO01"):
+        a, b = iss.grid_latlon(g), eng.grid_to_latlon(g)
+        assert abs(a[0] - b[0]) < 1e-9 and abs(a[1] - b[1]) < 1e-9, g
+    with tempfile.TemporaryDirectory() as d:
+        tle = os.path.join(d, "iss.txt")
+        with open(tle, "w") as f:
+            f.write(f"ISS (ZARYA)\n{l1}\n{l2}\n")
+        lines = []
+        ps = iss.report(s, (13.104, -59.625), s.epoch, 24, 10, out=lines.append)
+        assert ps and sum(1 for x in lines if x.strip().startswith("AOS")) == len(ps)
+        assert all("145.825 MHz FM, path ARISS" in x for x in lines if "beacons at" in x)
+        with contextlib.redirect_stdout(io.StringIO()) as o:
+            assert iss.main(["GK03ec", "--tle", tle, "--hours", "24"]) == 0
+        assert "AOS" in o.getvalue() and "ISS (ZARYA)" in o.getvalue()
+        os.makedirs(os.path.join(d, ".tradewind"))
+        with open(os.path.join(d, ".tradewind", "sat_25544_celestrak.txt"), "w") as f:
+            f.write(f"ISS (ZARYA)\n{l1}\n{l2}\n")
+        got = iss._cached_orbit(25544, [os.path.join(d, ".tradewind"), os.path.join(d, "missing")])
+        assert got and got[0].epoch == s.epoch
+    print("iss.py stand-alone ok (self-test, pass report, saved orbit data)")
 
 
 def test_sat_watch(s, hi):

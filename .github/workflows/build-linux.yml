@@ -47,11 +47,15 @@ jobs:
              requirements.txt test_modem.py install_linux.sh README.md LICENSE Tradewind/
           chmod +x Tradewind/install_linux.sh
           tar czf Tradewind-linux.tar.gz Tradewind
+          python tools/build_editions.py --ham-only
 
       - uses: actions/upload-artifact@v4
         with:
           name: Tradewind-linux
-          path: Tradewind-linux.tar.gz
+          path: |
+            Tradewind-linux.tar.gz
+            release/Tradewind-*-linux.zip
+            release/Tradewind-*-raspberrypi.zip
 
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_tag != ''
@@ -59,4 +63,7 @@ jobs:
         with:
           tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
           target_commitish: ${{ github.sha }}
-          files: Tradewind-linux.tar.gz
+          files: |
+            Tradewind-linux.tar.gz
+            release/Tradewind-*-linux.zip
+            release/Tradewind-*-raspberrypi.zip

@@ -1,4 +1,3 @@
 numpy
 sounddevice
 pyserial
-cryptography

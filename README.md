@@ -87,6 +87,17 @@ type the task) or from a computer (`python tools/venice_bridge.py "task" --send`
 the change, and GitHub puts it on a `venice/...` branch, runs the self-test and opens a pull request for review -
 nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.md](docs/venice/README.md).
 
+## What's new in 3.17: Satellite Watch from the command line, clear-text-only Tradewind
+
+- **`iss.py` on its own**, no app needed. It works over SSH on a headless Raspberry Pi:
+  - `python iss.py --selftest` checks SGP4 against the published reference, the TLE checksums, grid squares and the beacon rules.
+  - `python iss.py GK03ec --min-el 10` lists the next passes from the orbit data Tradewind saved. Each pass shows rise and set times
+    and directions, the highest elevation and the planned beacon times on 145.825 MHz FM, path ARISS. These are the same numbers the face plate shows.
+  - `--tle FILE`, `--catnr N` and `--hours H` pick another orbit file, satellite or time span.
+- **Tradewind is now clear text only.** Encrypted commercial messaging moved to the separate Tradewind Commander edition, and the
+  `cryptography` package is no longer needed. Settings saved in commercial mode come back in amateur mode.
+- **Packages for live testing:** `python tools/build_editions.py` makes the Linux and Raspberry Pi zips. The installer now works for both editions.
+
 ## What's new in 3.16: satellite receivers - pictures, video, telemetry
 
 In **SATELLITE WATCH MODE**, choose the satellite *and what to do* on its passes. Tradewind predicts the pass,
@@ -270,7 +281,7 @@ Operators using APRSdroid, a TH-D74/D75 or another APRS radio can take part too:
   - Open Tradewind once while online, and pan around the islands you care about, so the map is ready for an outage.
 - **Hail retries.** Choose how often a hail repeats: once, 4 times, 10 times or **until received**, every 30 s to 15 min. "Until received" keeps calling through a fading opening until the other station's radio acknowledges it.
 - **Stations heard on RF.** A live list of every station your radio decodes, with last-heard time, packet count and whether it was direct or through a digipeater. A **HAIL** button sits next to each one.
-- **Chats survive restarts and power cuts.** They are saved to disk; commercial-mode chats are saved encrypted.
+- **Chats survive restarts and power cuts.** They are saved to disk.
 - **ICS-309 communications log.** **DOWNLOAD LOG (ICS-309)** saves every chat message as a spreadsheet (CSV) with local and UTC time, from, to and route, ready for an EmComm after-action report.
 - **HF chat.** Choose the **300 baud HF** modem (1600/1800 Hz on USB) under MENU > RADIO / TNC to use the chat and forms on HF.
 - **More radios.**
@@ -456,29 +467,16 @@ Tradewind has limits built in so it can't be used, by mistake or on purpose, to 
 | Transmit watchdog | PTT is forced off if one transmission runs past 10 s (1200 baud), 20 s (300 baud) or 50 s (Robust) |
 | Digipeater path | at most 2 hops (WIDE1-1,WIDE2-1 or WIDE2-2); WIDE3 and above, RELAY and TRACE are refused |
 | Callsign | nothing is sent until a real callsign is set (N0CALL and similar are refused) |
-| Station PIN | phones and other computers on your network need the PIN to open Tradewind; "Lock settings" also asks for it before settings or the network key change |
-| Commercial passphrase | at least 12 characters |
+| Station PIN | phones and other computers on your network need the PIN to open Tradewind; "Lock settings" also asks for it before settings change |
 
-## Commercial / EmComm mode (encrypted, 148-174 MHz)
+## Commercial / EmComm messaging: Tradewind Commander
 
-For organisations with a **licensed commercial or emergency-services VHF channel**, MENU > COMMERCIAL switches Tradewind to an encrypted chat.
+**Tradewind is clear text only.** It contains no encryption code. The self-test checks this on every build.
 
-**What it does:**
-- Message content is encrypted with **AES-256-GCM**, using a 256-bit key derived (scrypt) from a shared network name and passphrase.
-- Messages are authenticated, so an altered or forged message is rejected.
-- Old or replayed messages are refused.
-- Units compare a short **key fingerprint** to confirm they hold the same key.
-
-**Rules it enforces:**
-- Only works on **148.000-174.000 MHz**. Amateur frequencies are refused, because amateur rules do not allow encryption.
-- APRS bulletins, beacons and APRS-IS are switched off in this mode.
-- Each unit sends a **clear station ID** (your licence call sign) at the start of a session and every 30 minutes by default. Unit IDs travel in clear; only the content is encrypted.
-
-**Limits:**
-- Needs the Windows/PC version and a radio licensed for that channel.
-- Many amateur transceivers cannot transmit outside the amateur bands; use a radio type-approved for the commercial channel.
-- Check your licence conditions with the national regulator.
-- Have the encryption independently reviewed before relying on it for sensitive operations.
+Encrypted messaging for organisations with a **licensed commercial or emergency-services VHF channel
+(148-174 MHz)** is in **Tradewind Commander**, a separate commercial edition. It includes everything
+in Tradewind plus AES-256-GCM chat with clear-text station ID, and keeps its settings in
+`~/.tradewind-commander`. Contact 8P5AB / 8P5DG for licensing.
 
 ## Setting TX audio
 

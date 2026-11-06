@@ -10,3 +10,7 @@ Tradewind-windows.zip
 android/src/
 android/.buildozer/
 android/bin/
+
+# Tradewind Commander (commercial edition) is kept out of this public repository
+commander/
+TradewindCommander*

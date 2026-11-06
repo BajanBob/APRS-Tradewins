@@ -607,3 +607,144 @@ def beacon_comment(cfg, seq, el):
     base = (cfg.get("iss_comment") or "Tradewind via ISS").strip()
     tail = f" {cfg.get('grid', '')[:4].upper()} #{seq} el{int(round(el))}"
     return (base[:43 - len(tail)] + tail)[:43]
+
+
+# ---------------------------------------------------------------- stand-alone use
+#   python iss.py --selftest                     check SGP4 and the beacon rules (no other files needed)
+#   python iss.py GK03ec                         ISS passes over your grid square, from Tradewind's saved orbit data
+#   python iss.py GK03ec --tle iss.txt --hours 48 --min-el 10 --catnr 25544
+def grid_latlon(grid):
+    """Centre of a 4- or 6-character Maidenhead grid square -> (lat, lon), or None."""
+    g = str(grid or "").strip()
+    if len(g) not in (4, 6) or not (g[:2].isalpha() and g[2:4].isdigit()) or (len(g) == 6 and not g[4:].isalpha()):
+        return None
+    g = g[:2].upper() + g[2:4] + g[4:].lower()
+    if not ("A" <= g[0] <= "R" and "A" <= g[1] <= "R") or (len(g) == 6 and not ("a" <= g[4] <= "x" and "a" <= g[5] <= "x")):
+        return None
+    lon = (ord(g[0]) - 65) * 20 - 180 + int(g[2]) * 2
+    lat = (ord(g[1]) - 65) * 10 - 90 + int(g[3])
+    if len(g) == 6:
+        lon += (ord(g[4]) - 97) * 5 / 60 + 2.5 / 60
+        lat += (ord(g[5]) - 97) * 2.5 / 60 + 1.25 / 60
+    else:
+        lon, lat = lon + 1, lat + 0.5
+    return lat, lon
+
+
+def selftest(verbose=True):
+    """SGP4 against the published reference (Vallado et al. 2006, case 00005), TLE checksums, grid squares
+    and the beacon rules. Raises AssertionError on a failure."""
+    sat = Satellite("1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4753",
+                    "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82419157413667")
+    ref = {0: ((7022.46529266, -1400.08296755, 0.03995155), (1.893841015, 6.405893759, 4.534807250)),
+           360: ((-7154.03120202, -3783.17682504, -3536.19412294), (4.741887409, -4.151817765, -2.093935425)),
+           4320: ((-9060.47373569, 4658.70952502, 813.68673153), (-2.232832783, -4.110453490, -3.157345433))}
+    for t, (r0, v0) in ref.items():
+        r, v = sat.propagate(t)
+        assert max(abs(a - b) for a, b in zip(r, r0)) < 1e-6 and max(abs(a - b) for a, b in zip(v, v0)) < 1e-9, \
+            f"SGP4 differs from the reference at t={t} min"
+    assert tle_checksum_ok("1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4753")
+    assert not tle_checksum_ok("1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4754")
+    lat, lon = grid_latlon("GK03ec")
+    assert 13.0 < lat < 13.2 and -59.7 < lon < -59.5, (lat, lon)
+    assert grid_latlon("GK03") and grid_latlon("ZZ99") is None and grid_latlon("GK03e") is None
+    assert plan(tca=600, start=0, end=900) == [0, 60, 120, 180, 240, 300, 360, 420, 480, 540, 600, 660]
+    assert plan(tca=0, start=0, end=600) == [0, 60]
+    for tca, end in ((600, 900), (200, 700), (30, 400)):
+        times = plan(tca, 0, end)
+        assert all(sum(1 for u in times if 0 <= u - t0 < WINDOW_S) <= WINDOW_MAX for t0 in times)
+        assert sum(1 for u in times if u >= tca) <= SETTING_MAX
+    if verbose:
+        print("iss.py self-test ok: SGP4 matches the reference, TLE checksums, grid squares, beacon rules")
+    return True
+
+
+def _cached_orbit(catnr, folders):
+    """Newest TLE for catnr from Tradewind's saved orbit files (CelesTrak / AMSAT / N2YO)."""
+    import os
+    best = None
+    for d in folders:
+        for name in (f"sat_{catnr}_celestrak.txt", "amsat_nasabare.txt", f"sat_{catnr}_n2yo.json"):
+            p = os.path.join(d, name)
+            try:
+                with open(p, "rb") as f:
+                    data = f.read()
+            except OSError:
+                continue
+            t = parse_n2yo(data) if name.endswith(".json") else parse_tle_text(data.decode("ascii", "replace"), catnr)
+            if t:
+                try:
+                    s = Satellite(t[1], t[2], t[0])
+                except ValueError:
+                    continue
+                if best is None or s.epoch > best[0].epoch:
+                    best = (s, p)
+    return best
+
+
+def report(sat, obs, start, hours=36.0, min_el=0.0, out=print):
+    """Print the pass list and each pass's beacon plan (the same numbers the face plate shows)."""
+    def hm(t):
+        return time.strftime("%a %H:%M:%S", time.localtime(t))
+    age = (start - sat.epoch) / 86400 if hasattr(sat, "epoch") else 0
+    out(f"{sat_name(sat)} over {obs[0]:.3f}, {obs[1]:.3f} - next {hours:.0f} h, min elevation {min_el:.0f} deg"
+        + (f" (orbit data {age:.1f} days old)" if age else ""))
+    if age > 7:
+        out("  WARNING: orbit data more than a week old - pass times may be off by minutes. Refresh it in Tradewind.")
+    ps = passes(sat, obs, start=start, hours=hours, min_el=min_el)
+    if not ps:
+        out("  no passes in this time")
+    for p in ps:
+        w = window_above(sat, obs, p, min_el) if min_el > 0 else (p["aos"], p["los"])
+        times = plan(p["tca"], *w) if w else []
+        az_aos, _, _ = look(sat, obs, p["aos"])
+        az_los, _, _ = look(sat, obs, p["los"])
+        out(f"  AOS {hm(p['aos'])} {compass8(az_aos):>2}  max {p['max_el']:4.1f} deg at {hm(p['tca'])[4:]}"
+            f"  LOS {hm(p['los'])[4:]} {compass8(az_los):>2}  {p['duration'] / 60:4.1f} min  {len(times)} beacons")
+        if times:
+            out("      beacons at " + " ".join(time.strftime("%H:%M", time.localtime(t)) for t in times)
+                + f"  on {ISS_FREQ_MHZ} MHz FM, path {ISS_PATH}")
+    return ps
+
+
+def main(argv=None):
+    import argparse
+    import os
+    ap = argparse.ArgumentParser(description="Tradewind Satellite Watch: passes and beacon plan for your grid square.")
+    ap.add_argument("grid", nargs="?", help="your Maidenhead grid square, e.g. GK03ec")
+    ap.add_argument("--selftest", action="store_true", help="check SGP4 and the beacon rules, then exit")
+    ap.add_argument("--tle", help="file with the satellite's TLE (default: Tradewind's saved orbit data)")
+    ap.add_argument("--catnr", type=int, default=ISS_CATNR, help="NORAD number (default 25544, the ISS)")
+    ap.add_argument("--hours", type=float, default=36.0)
+    ap.add_argument("--min-el", type=float, default=0.0, help="minimum elevation for beacons (deg)")
+    a = ap.parse_args(argv)
+    if a.selftest:
+        selftest()
+        return 0
+    obs = grid_latlon(a.grid)
+    if not obs:
+        ap.error("give your grid square, e.g.  python iss.py GK03ec   (or --selftest)")
+    if a.tle:
+        with open(a.tle, encoding="ascii", errors="replace") as f:
+            text = f.read()
+        t = parse_tle_text(text, a.catnr) or parse_tle_text(text)
+        if not t:
+            ap.error(f"no valid TLE for NORAD {a.catnr} in {a.tle}")
+        sat, where = Satellite(t[1], t[2], t[0]), a.tle
+    else:
+        home = os.path.expanduser("~")
+        folders = [os.path.join(os.environ.get("TRADEWIND_HOME", home), n) for n in (".tradewind", ".tradewind-commander")]
+        got = _cached_orbit(a.catnr, folders)
+        if not got:
+            ap.error("no saved orbit data yet - run Tradewind's Satellite Watch once with internet, or use --tle FILE")
+        sat, where = got
+    print(f"orbit data: {where}")
+    report(sat, obs, time.time(), a.hours, a.min_el)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except BrokenPipeError:          # e.g. piped into head
+        raise SystemExit(0)

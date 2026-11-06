@@ -4,7 +4,7 @@ cd /d "%~dp0"
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt pyinstaller || goto :fail
 python test_modem.py || goto :fail
-python -m PyInstaller --noconfirm --onefile --name Tradewind --icon icon.ico --add-data "faceplate.html;." --collect-all sounddevice app.py || goto :fail
+python -m PyInstaller --noconfirm --onefile --name Tradewind --icon icon.ico --add-data "faceplate.html;." --collect-all sounddevice --exclude-module commander --exclude-module cryptography app.py || goto :fail
 echo.
 echo Done: dist\Tradewind.exe
 pause

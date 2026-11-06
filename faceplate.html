@@ -667,7 +667,7 @@ details.more summary::-webkit-details-marker{display:none}
       <button class="tab" data-p="p-prop" role="tab">PROPAGATION</button>
       <button class="tab" data-p="p-net" role="tab">APRS-IS</button>
       <button class="tab" data-p="p-wx" role="tab">WEATHER</button>
-      <button class="tab" data-p="p-com" role="tab">COMMERCIAL</button>
+<!--TW:COM-TAB-->
       <button class="tab" data-p="p-mail" role="tab">EMAIL</button>
     </div>
 
@@ -904,30 +904,7 @@ details.more summary::-webkit-details-marker{display:none}
         for official forecasts and warnings use the Barbados Meteorological Services. Grantley Adams (TBPB) lies in the Piarco FIR (TTZP).</div>
       <div class="set wide note" id="wx-last"></div>
     </div>
-    <div class="pane" id="p-com">
-      <div class="set wide"><label>Operating mode</label>
-        <select class="inset" data-k="op_mode" id="f-opmode">
-          <option value="amateur">Amateur radio (APRS, plain text)</option>
-          <option value="commercial">Commercial / EmComm (licensed 148-174 MHz, encrypted chat)</option>
-        </select></div>
-      <div class="set wide note"><b>Commercial mode is only for a licensed commercial or emergency-services VHF channel (148&ndash;174 MHz)</b>,
-        never for amateur frequencies, where encryption is not allowed. Use it only on frequencies your organisation is licensed for, and follow your licence's station-identification rules.
-        In this mode APRS bulletins, beacons and APRS-IS are switched off; the chat is encrypted with AES-256-GCM. Message content is hidden, but the unit ID and the clear station ID can be seen.</div>
-      <div class="set"><label>Licence holder (organisation)</label><input class="inset" data-k="com_licensee" maxlength="40" placeholder="e.g. Red Cross Barbados"></div>
-      <div class="set"><label>Station call sign / licence no.</label><input class="inset" data-k="com_callsign" maxlength="24" placeholder="from your licence"></div>
-      <div class="set"><label>This unit's ID</label><input class="inset" data-k="com_unit" maxlength="9" placeholder="RC01" autocomplete="off"></div>
-      <div class="set"><label>Channel frequency (MHz)</label><input class="inset" data-k="com_freq" inputmode="decimal" placeholder="155.325"></div>
-      <div class="set"><label>Send clear station ID every (min)</label><input class="inset" data-k="com_id_min" data-num type="number" min="5" max="60"></div>
-      <div class="set note">To have Tradewind set the radio to this channel, tick <b>Tune the radio</b> under RADIO / TNC (CAT radios that allow it).</div>
-      <div class="set wide"><label>Network key: every unit uses the same network name and passphrase</label>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <input class="inset" id="com-net" placeholder="Network name, e.g. BDS-RELIEF" autocomplete="off" style="flex:1 1 180px">
-          <input class="inset" id="com-pass" type="password" placeholder="Passphrase (12+ characters)" autocomplete="new-password" style="flex:2 1 240px">
-          <button class="btn accent" type="button" id="b-comkey">SET KEY</button></div></div>
-      <div class="set wide note" id="com-status">No network key set yet.</div>
-      <div class="set wide note">Share the passphrase in person or by phone, never over the radio. After setting it, read the <b>key fingerprint</b> to the other units; if it matches, you hold the same key.
-        Tradewind stores the derived 256-bit key on this computer, not the passphrase. Have the encryption reviewed independently before relying on it for sensitive operations.</div>
-    </div>
+<!--TW:COM-PANE-->
 
     <div class="pane" id="p-mail">
       <div class="set"><label>Default way to send email</label>
@@ -1867,7 +1844,7 @@ async function poll(){
   $('#pin-lock').checked = !!cfg.lock_settings; $('#pin-lock').disabled = !s.pin_set;
   $('#pin-old').classList.toggle('hide', !s.pin_set); $('#b-pin-remove').classList.toggle('hide', !s.pin_set);
   document.title = s.app; $('#appname').textContent = s.app.toUpperCase();
-  $('#foot').innerHTML = `${s.app} ${s.version} · by Brandon St Rose (8P5DG) &amp; Kammie Holder (8P5AB) · <a href="/notices" target="_blank" style="color:inherit">MIT License &amp; credits</a> · spot data from PSKReporter`;
+  $('#foot').innerHTML = `${s.app} ${s.version} · by Brandon St Rose (8P5DG) &amp; Kammie Holder (8P5AB) · <a href="/notices" target="_blank" style="color:inherit">${esc(s.licence || 'MIT License')} &amp; credits</a> · spot data from PSKReporter`;
   $('#l-call').textContent = cfg.call || 'NOCALL';
   $('#l-grid').textContent = cfg.grid || '----';
   $('#power').classList.toggle('on', running);
@@ -2710,26 +2687,8 @@ $('#relay-form').onsubmit = async e=>{
   toast('Sent to the relay station', true); $('#relay-text').value = ''; pollChat();
 };
 
-/* ---------- commercial / encrypted mode ---------- */
-$('#b-comkey').onclick = async ()=>{
-  const r = await api('/api/comkey', {net: $('#com-net').value, passphrase: $('#com-pass').value});
-  $('#com-pass').value = '';
-  if (r.errors && r.errors.length) return toast(r.errors[0]);
-  toast('Network key set. Fingerprint ' + r.fp + ' - compare it with the other units.', true, 12000);
-};
-function drawCom(s){
-  const c = s.com || {}, com = s.op_mode === 'commercial';
-  $('#com-status').innerHTML = (c.crypto ? `<b>${esc(c.crypto)}</b><br>` : '') + (c.has_key
-    ? `Network <b>${esc(c.net)}</b> · key fingerprint <b>${esc(c.fp)}</b>` : 'No network key set yet.');
-  if (!$('#com-net').value && c.net) $('#com-net').value = c.net;
-  const b = $('#sec-banner');
-  b.classList.toggle('hide', !com);
-  if (com) b.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e9b8ff" stroke-width="2" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-    <span><b>ENCRYPTED</b> AES-256-GCM · unit <b>${esc((c.unit||'').toUpperCase())}</b> · net <b>${esc(c.net||'-')}</b> · ${esc(c.freq)} MHz · key <b>${esc(c.fp||'not set')}</b>${c.active?'':' · station off'}</span>`;
-  $('#hail-route-lbl').classList.toggle('hide', com);
-  $('#hail-call').placeholder = com ? 'Unit ID, e.g. RC02' : '8P6XX-9';
-  $('#chat-title').textContent = com ? 'ENCRYPTED CHAT · COMMERCIAL VHF' : 'TWO-WAY CHAT · APRS 2M / 70CM';
-}
+/* commercial / EmComm UI: only in Tradewind Commander (filled in by the server) */
+let drawCom = ()=>{};
 
 /* ---------- help on every setting (hover, or tap the ?) ---------- */
 const HELP = {
@@ -2795,12 +2754,6 @@ const HELP = {
   tc_enabled:'Check the National Hurricane Center every 20 minutes and alert when a storm comes within the radius or a watch/warning names your area.',
   tc_radius_km:'Alert when a storm centre is within this distance.',
   tc_rf:'Also send storm alerts over the radio.',
-  op_mode:'Amateur mode uses APRS in plain text, as amateur rules require. Commercial mode is for licensed 148-174 MHz channels and encrypts the chat.',
-  com_licensee:'The organisation that holds the radio licence. Sent in clear with the station ID.',
-  com_callsign:'Call sign or licence number from your licence. Sent in clear as the station ID.',
-  com_unit:'Short ID for this radio or team, e.g. RC01. Other units hail you with it.',
-  com_freq:'Your licensed channel in MHz, between 148.000 and 174.000.',
-  com_id_min:'How often the clear-text station ID is sent while you are transmitting.',
   link2_enabled:'Add a second radio path, e.g. 70cm 9600 baud through Direwolf, next to your main radio. Tradewind then picks the best link for each station automatically.',
   link2_tnc:'How the second link connects: KISS over TCP (Direwolf, UZ7HO Soundmodem, VARA FM) or a KISS serial TNC.',
   link2_addr:'Address of the second modem, e.g. 127.0.0.1:8002 for a second Direwolf.',
@@ -2848,6 +2801,7 @@ const HELP = {
   rf_modes:'Modes that switch RF transmission on when "Only while these modes are open" is chosen.',
   alert_modes:'Modes that sound an alert when they open.',
 };
+/*TW:COM-JS*/
 function addHelp(){
   const done = new Set();
   $$('[data-k],[data-list]').forEach(el=>{

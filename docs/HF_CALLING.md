@@ -23,6 +23,15 @@ using only the radio's audio and an ordinary SSB rig in USB. Open **HF CALLING -
 All calls are clear text and carry your callsign. Tradewind listens anywhere on HF, but transmits only inside the amateur
 HF bands; your licence and band plan decide the rest. ALL-CALL IDs (9999 / 999999) are never auto-answered.
 
+## Gale - the Tradewind calling mode (named in v3.22)
+
+Gale is Tradewind's open HF calling and link mode: 100 baud FSK on the selcall tones, M.493-style
+characters with time diversity and an ECC, and a payload that always carries the caller's callsign
+(TEXT64), plus call type (selcall 100, telcall 101, emergency 112, page 113, beacon 118, revertive 119,
+GPS 121), page text, position or signal report. The full frame is documented in `hfcall.py`; anyone may
+implement it. On the air: "8P5DG calling 115555 on Gale". Future faster data modes will carry the same
+family name (Gale-2, Gale-4 ...).
+
 ## v3.21: testing with a Barrett 2050
 
 | Barrett 2050 setting | Tradewind |
@@ -39,7 +48,7 @@ Every selcall heard is recorded (WAV + notes in `received/hf`). If the 2050's 6-
 
 Tradewind speaks two selcall formats:
 
-| | Standard CCIR 493-4 (land mobile) | Tradewind |
+| | Standard CCIR 493-4 (land mobile) | Gale (Tradewind) |
 |---|---|---|
 | Works with | Barrett, Codan, Icom and other HF selcall radios | Tradewind stations |
 | Calls | Selcall (120), Beacon (123), Beacon-99, acknowledgement | Selcall, beacon + 4-tone revertive with report, page, GPS, emergency, telcall |

@@ -1120,7 +1120,7 @@ details.more summary::-webkit-details-marker{display:none}
           <option value="dsc">1615 / 1785 Hz - marine M.493 pair</option></select></label>
         <label>Calls go out as<select class="inset" data-k="hf_call_format" style="width:17em">
           <option value="ccir">Standard CCIR 493-4 / Barrett INT (4 + 6 digit)</option>
-          <option value="tradewind">Tradewind (callsign, report, text, GPS)</option></select></label></div>
+          <option value="gale">Gale - Tradewind mode (callsign, report, text, GPS)</option></select></label></div>
       <div class="more-row"><label>Selcall preamble (s)<input class="inset" data-k="hf_ccir_dots_s" data-num type="number" min="0.5" max="20" step="0.5" style="width:5em"></label>
         <label>Called radio scans (channels, 0 = not scanning)<input class="inset" data-k="hf_far_channels" data-num type="number" min="0" max="38" style="width:5em"></label>
         <label class="chk"><input type="checkbox" data-k="hf_cw_id"> Morse callsign ID after standard calls</label>
@@ -1150,7 +1150,7 @@ details.more summary::-webkit-details-marker{display:none}
           <option value="telcall">Telcall (phone number - signal only)</option>
           <option value="emergency">EMERGENCY call (with position)</option>
           <option value="sound">ALE sounding (no address)</option></select></label>
-        <label>Format<select class="inset" id="hfc-fmt"><option value="">as set</option><option value="ccir">Standard CCIR</option><option value="tradewind">Tradewind</option></select></label>
+        <label>Format<select class="inset" id="hfc-fmt"><option value="">as set</option><option value="ccir">Standard CCIR</option><option value="gale">Gale</option></select></label>
         <label>To<input class="inset" id="hfc-to" placeholder="ID or address" maxlength="15" autocomplete="off" style="width:9em"></label>
         <label>Channel<select class="inset" id="hfc-ch" style="width:10em"><option value="">current</option></select></label>
         <label id="hfc-text-l">Text<input class="inset" id="hfc-text" maxlength="60" style="width:12em"></label>
@@ -1171,7 +1171,7 @@ details.more summary::-webkit-details-marker{display:none}
       <div class="note" style="margin-top:8px"><b>HEARD ON HF</b></div>
       <div id="hfc-heard"><div class="chat-empty">Nothing heard yet.</div></div>
       <div id="hfc-selcal"></div>
-      <div class="note">Calls are clear-text amateur signals and carry your callsign. Tradewind listens anywhere on HF but transmits only inside the amateur HF bands - your licence and band plan decide the rest. Selcall here is Tradewind-to-Tradewind in the CCIR-493 style; ALE follows MIL-STD-188-141 2G and is meant to work with other amateur ALE stations (try it on air first). Codan / Barrett OEM formats and encrypted calls are not included.</div>
+      <div class="note">Calls are clear-text amateur signals and carry your callsign. Tradewind listens anywhere on HF but transmits only inside the amateur HF bands - your licence and band plan decide the rest. Selcall uses standard CCIR 493-4 for Barrett / Codan / Icom radios, or Gale - Tradewind's open calling mode - between Tradewind stations; ALE follows MIL-STD-188-141 2G and is meant to work with other amateur ALE stations (try it on air first). Codan / Barrett OEM formats and encrypted calls are not included.</div>
     </details>
     <details class="heard" id="relay-box">
       <summary>SEND THROUGH A RELAY STATION</summary>
@@ -2913,7 +2913,7 @@ function hfInit(){
     });
   }
   const fmtSel = $('#hfc-fmt');
-  k.addEventListener('change', ()=>{ if (!['selcall','beacon'].includes(k.value) && fmtSel.value === 'ccir') fmtSel.value = 'tradewind'; });
+  k.addEventListener('change', ()=>{ if (!['selcall','beacon'].includes(k.value) && fmtSel.value === 'ccir') fmtSel.value = 'gale'; });
   const snd = $('#hfc-snd'), vol = $('#hfc-vol');
   snd.checked = hfSoundOn(); vol.value = lsGet('tw_hf_vol') || 60;
   snd.addEventListener('change', ()=>{ try { localStorage.setItem('tw_hf_snd', snd.checked ? '1' : '0'); } catch(e){} if (snd.checked) hfAudio(); });
@@ -2945,7 +2945,7 @@ const HELP = {
   hf_far_scans:'If the stations you call are scanning, the call needs a longer preamble so their scanner stops on your channel in time.',
   hf_revertive:'When someone sends you a beacon call, answer automatically with the 4-tone revertive and a signal report.',
   hf_ale_respond:'When someone ALE-calls one of your addresses, answer and complete the 3-way handshake automatically.',
-  hf_call_format:'Standard CCIR 493-4 is the 4 / 6 digit selcall built into Barrett, Codan, Icom and similar HF radios: Selcall and Beacon calls work with them. The Tradewind format adds your callsign, a signal report, page text, GPS, emergency and telcall, between Tradewind stations. Incoming calls in either format are always decoded.',
+  hf_call_format:'Standard CCIR 493-4 is the 4 / 6 digit selcall built into Barrett, Codan, Icom and similar HF radios: Selcall and Beacon calls work with them. Gale, Tradewind's own open calling mode, adds your callsign, a signal report, page text, GPS, emergency and telcall, between Tradewind stations. Incoming calls in either format are always decoded.',
   hf_ccir_dots_s:'How long the dot pattern runs before a standard call. A scanning Barrett or Codan needs time to stop on your channel: 6 s is typical, up to 20 s for long scan lists.',
   hf_far_channels:'If the radio you call is scanning, how many channels it scans. Tradewind then sends a preamble of 0.5 s per channel plus 1 s (Barrett\'s rule), so the scanner stops on your channel in time.',
   hf_capture:'Save a 25-second WAV and a notes file every time a selcall is heard, in the received/hf folder. Use RECORD LAST 30 s for anything Tradewind did not recognise.',

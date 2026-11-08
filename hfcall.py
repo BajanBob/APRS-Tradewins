@@ -271,7 +271,7 @@ CCIR_STATUS = 103
 
 def ccir_message(kind, to_id, from_id, eos=EOS_REQ):
     if kind not in ("selcall", "beacon", "ack", "status"):
-        raise ValueError("Standard CCIR selcall carries Selcall and Beacon calls; use the Tradewind format "
+        raise ValueError("Standard CCIR selcall carries Selcall and Beacon calls; use Gale "
                          "for page, GPS, emergency and telcall")
     if not selcall_id_ok(to_id) or not selcall_id_ok(from_id):
         raise ValueError("selcall IDs must be 4 or 6 digits")
@@ -1083,7 +1083,7 @@ class HFCenter:
         self.scs = [SelcallDecoder(t) for t in SC_TONES]   # hear every tone pair, send the chosen one
         self.sc = self.scs[0]
         self.ccirs = [CcirDecoder(t) for t in SC_TONES]  # standard 4 / 6 digit land-mobile selcall
-        self.call_format = str(cfg.get("hf_call_format") or "ccir")
+        self.call_format = {"tradewind": "gale"}.get(str(cfg.get("hf_call_format") or "ccir"), str(cfg.get("hf_call_format") or "ccir"))
         self.ccir_dots = max(0.5, min(20.0, float(cfg.get("hf_ccir_dots_s") or 6.0)))
         self.cw_id = bool(cfg.get("hf_cw_id", True))
         self.ccir_peers = set()                  # stations heard using the standard format
@@ -1286,7 +1286,8 @@ class HFCenter:
     def selcall(self, kind, to, text="", number="", khz=None, fmt=None):
         """Selcall / beacon / emergency / page / gps / telcall to a 4- or 6-digit ID.
         fmt "ccir": standard CCIR 493-4 frame any Barrett / Codan / Icom selcall radio decodes (selcall, beacon);
-        fmt "tradewind": Tradewind's own frame with callsign, signal report, page text, GPS, emergency, telcall."""
+        fmt "gale": Gale, Tradewind's open calling mode, with callsign, signal report, page text, GPS, emergency,
+        telcall ("tradewind" is the old name and still accepted)."""
         me = self._my_id()
         to = str(to).strip()
         if kind not in ("selcall", "beacon", "emergency", "page", "gps", "telcall"):
@@ -1319,7 +1320,7 @@ class HFCenter:
     def _ccir_call(self, kind, to, khz=None):
         if kind not in ("selcall", "beacon"):
             raise ValueError("Barrett / Codan / Icom radios get Selcall and Beacon calls in the standard format. "
-                             "Choose the Tradewind format for page, GPS, emergency and telcall to Tradewind stations.")
+                             "Choose Gale for page, GPS, emergency and telcall to Tradewind stations.")
         me = self._id_for(to)
         khz = khz or self.best_channel(to) or self.khz
         self._go_channel(khz)
@@ -1692,7 +1693,7 @@ def selftest(verbose=True):
         hc._name = name
         return hc
 
-    A = make({"call": "8P5AB", "hf_ids": "1234", "hf_channels": "", "hf_call_format": "tradewind"}, "A")
+    A = make({"call": "8P5AB", "hf_ids": "1234", "hf_channels": "", "hf_call_format": "gale"}, "A")
     B = make({"call": "8P6FB", "hf_ids": "5678", "hf_channels": "", "hf_call_format": "tradewind"}, "B")
 
     def deliver(src, dst):

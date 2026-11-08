@@ -48,7 +48,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.21.2"
+APP_VERSION = "3.22"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -418,6 +418,8 @@ def serial_port_name(p, windows=sys.platform.startswith("win")):
 
 def _migrate(cfg):
     """Convert settings saved by earlier versions (path-based -> mode-based)."""
+    if cfg.get("hf_call_format") == "tradewind":       # v3.22: the Tradewind calling mode is now named Gale
+        cfg["hf_call_format"] = "gale"
     if cfg.get("rf_when") == "tep":
         cfg["rf_when"], cfg["rf_modes"] = "selected", ["TEP"]
     elif cfg.get("rf_when") == "openings":
@@ -677,8 +679,8 @@ def hf_validate(cfg):
         errs.append("ALE sounding interval must be 0-240 minutes.")
     if str(cfg.get("hf_selcall_tones") or "lm") not in hfmod.SC_TONES:
         errs.append("Selcall tones: choose 1700/1870 Hz (amateur / land mobile) or 1615/1785 Hz (marine).")
-    if str(cfg.get("hf_call_format") or "ccir") not in ("ccir", "tradewind"):
-        errs.append("Selcall format: standard CCIR 493-4 or Tradewind.")
+    if str(cfg.get("hf_call_format") or "ccir") not in ("ccir", "gale", "tradewind"):
+        errs.append("Selcall format: standard CCIR 493-4 or Gale.")
     try:
         if not 0.5 <= float(cfg.get("hf_ccir_dots_s") or 6) <= 20:
             raise ValueError
@@ -1627,7 +1629,7 @@ class Station:
                 hf.sound_now(khz)
                 return "ALE sounding sent"
             fmt = str(b.get("fmt") or "") or None
-            if fmt not in (None, "ccir", "tradewind"):
+            if fmt not in (None, "ccir", "gale", "tradewind"):
                 raise ValueError("unknown selcall format")
             hf.selcall(kind, to, text=text, number=str(b.get("number") or ""), khz=khz, fmt=fmt)
             return f"{kind.capitalize()} call to {to} sent"

@@ -87,6 +87,13 @@ type the task) or from a computer (`python tools/venice_bridge.py "task" --send`
 the change, and GitHub puts it on a `venice/...` branch, runs the self-test and opens a pull request for review -
 nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.md](docs/venice/README.md).
 
+## What's new in 3.22: Gale - the Tradewind calling mode has a name
+
+Tradewind's own selcall mode is now called **Gale**: an open, documented HF calling and link mode with your
+callsign in every frame, a signal report (beacon + 4-tone revertive), page text, GPS, emergency and telcall
+between Tradewind stations. Standard CCIR 493-4 remains for Barrett / Codan / Icom radios. Saved settings that
+said "Tradewind" are changed to Gale automatically. Faster Gale data modes (Gale-2, Gale-4 ...) may follow.
+
 ## 3.21.2: Android version number
 
 - The Android app now shows its real version (e.g. 3.21.2) instead of 1.0. Each CI build is signed with a new
@@ -115,7 +122,7 @@ nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.
   similar HF radios: Tradewind now decodes their **Selcall, Beacon (format 123) and Beacon-99 calls** to your ID
   (e.g. 115555) and acknowledges them, and can **send Selcall and Beacon calls to those radios**. The frame follows
   the published worked example (GM4SLV) exactly; tones 1700 / 1870 Hz. A Morse callsign ID follows each standard call.
-- The **Tradewind format** stays for Tradewind-to-Tradewind calls with callsign, signal report, page text, GPS,
+- **Gale** (the Tradewind calling mode, named in v3.22) stays for Tradewind-to-Tradewind calls with callsign, signal report, page text, GPS,
   emergency and telcall. Pick per call, or set the default; incoming calls in either format are always decoded.
 - **Pop-up and flashing screen** for selcalls, beacon calls, ALE calls, LINKED and emergencies, plus optional desktop
   notifications, phone vibration and a blinking browser tab. The flashing stops for "reduce motion" settings.

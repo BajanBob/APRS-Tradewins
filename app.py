@@ -48,7 +48,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.20"
+APP_VERSION = "3.21"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -276,7 +276,7 @@ DEFAULTS = {
     # v3.18 HF Calling: CCIR-493 style selcall (beacon / revertive LQA, page, GPS, emergency), 2G ALE, ARINC SELCAL rx
     "hf_enabled": False, "hf_ids": "", "hf_ale_addrs": "", "hf_channels": "", "hf_scan": False,
     "hf_dwell": 1.0, "hf_far_scans": False, "hf_revertive": True, "hf_ale_respond": True,
-    "hf_selcal": False, "hf_selcall_tones": "lm", "hf_call_format": "ccir", "hf_ccir_dots_s": 6.0, "hf_cw_id": True, "hf_sound_min": 0, "hf_ale_variant": "", "hf_preamble_s": 0,
+    "hf_selcal": False, "hf_selcall_tones": "lm", "hf_call_format": "ccir", "hf_ccir_dots_s": 6.0, "hf_cw_id": True, "hf_far_channels": 0, "hf_capture": True, "hf_sound_min": 0, "hf_ale_variant": "", "hf_preamble_s": 0,
     "cfg_ver": 4,
 }
 SECRET_KEYS = ("com_key", "pin_hash", "pin_salt", "smtp_pass", "imap_pass")   # never sent to the face plate
@@ -684,6 +684,11 @@ def hf_validate(cfg):
             raise ValueError
     except (TypeError, ValueError):
         errs.append("Selcall preamble (dot pattern) must be 0.5-20 seconds; 6 s suits scanning Barrett / Codan radios.")
+    try:
+        if not 0 <= int(cfg.get("hf_far_channels") or 0) <= 38:
+            raise ValueError
+    except (TypeError, ValueError):
+        errs.append("Called radio's scan list: 0-38 channels (Barrett preamble is 0.5 s a channel + 1 s, up to 20 s).")
     if cfg.get("hf_scan") and len(chans) < 2:
         errs.append("HF scanning needs at least two channels.")
     return errs
@@ -1544,7 +1549,8 @@ class Station:
                                 rate=getattr(self.tnc, "rate", 48000),
                                 pos=self._hf_pos,
                                 busy=lambda: bool(self.iss_tuned or self.qsy_hz),
-                                tx_ok=getattr(commander, "hf_tx_ok", None) if commander else None)
+                                tx_ok=getattr(commander, "hf_tx_ok", None) if commander else None,
+                                capture_dir=self._rx_dir("hf"))
         except Exception as e:
             self.add_log("ERR", f"HF Calling not started: {e}")
             return
@@ -1636,6 +1642,8 @@ class Station:
             if not hf.tune_to(khz):
                 raise IOError(getattr(self.tnc, "cat_status", "") or "the radio did not take the frequency")
             return f"On {khz:g} kHz USB" + ("" if hf.tune_fn else " (set the radio dial to this by hand)")
+        if act == "capture":
+            return "Saved " + hf.capture(int(b.get("seconds") or 30), "recorded by the operator")
         if act == "use_link":
             return self.hf_use_link(khz)
         raise ValueError("unknown HF action")

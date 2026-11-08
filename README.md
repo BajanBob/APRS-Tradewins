@@ -87,6 +87,18 @@ type the task) or from a computer (`python tools/venice_bridge.py "task" --send`
 the change, and GitHub puts it on a `venice/...` branch, runs the self-test and opens a pull request for review -
 nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.md](docs/venice/README.md).
 
+## What's new in 3.21: Barrett 2050 testing - 6-digit INT, scan preamble, selcall recordings
+
+- **Barrett INT 1 / INT 2**: Tradewind's standard format is the Barrett "International" protocol, 4-digit (INT 1)
+  and 6-digit (INT 2). Set the Barrett channel's SELCALL format to International to test with Tradewind.
+- **Scan preamble**: tell Tradewind how many channels the called radio scans; it sends Barrett's recommended
+  0.5 s per channel + 1 s preamble.
+- **Recordings**: every selcall heard is saved as a WAV + notes file (received/hf), and RECORD LAST 30 s saves
+  anything Tradewind did not recognise. Frames with correct phasing but an unknown layout (for example OEM)
+  are shown as raw symbols, so a new format can be added from real recordings.
+- OEM 1 / OEM 2 (Codan-compatible) formats are not included: they are not published, and the 6-digit OEM
+  mode uses a privacy key. Amateur Tradewind stays clear text.
+
 ## What's new in 3.20: standard CCIR 493-4 selcall with Barrett, Codan, Icom - and call pop-ups
 
 - **Standard 4 and 6 digit selcall (CCIR 493-4 land mobile)**, the format built into Barrett, Codan, Icom and

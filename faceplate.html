@@ -1119,10 +1119,12 @@ details.more summary::-webkit-details-marker{display:none}
           <option value="lm_inv">1700 / 1870 Hz - reversed polarity</option>
           <option value="dsc">1615 / 1785 Hz - marine M.493 pair</option></select></label>
         <label>Calls go out as<select class="inset" data-k="hf_call_format" style="width:17em">
-          <option value="ccir">Standard CCIR 493-4 (any selcall radio)</option>
+          <option value="ccir">Standard CCIR 493-4 / Barrett INT (4 + 6 digit)</option>
           <option value="tradewind">Tradewind (callsign, report, text, GPS)</option></select></label></div>
       <div class="more-row"><label>Selcall preamble (s)<input class="inset" data-k="hf_ccir_dots_s" data-num type="number" min="0.5" max="20" step="0.5" style="width:5em"></label>
+        <label>Called radio scans (channels, 0 = not scanning)<input class="inset" data-k="hf_far_channels" data-num type="number" min="0" max="38" style="width:5em"></label>
         <label class="chk"><input type="checkbox" data-k="hf_cw_id"> Morse callsign ID after standard calls</label>
+        <label class="chk"><input type="checkbox" data-k="hf_capture"> Record every selcall heard (WAV)</label>
         <label class="chk"><input type="checkbox" id="hfc-popup"> Pop-up</label>
         <label class="chk"><input type="checkbox" id="hfc-flash"> Flash screen</label>
         <label class="chk"><input type="checkbox" id="hfc-notify"> Desktop notification</label></div>
@@ -1159,6 +1161,9 @@ details.more summary::-webkit-details-marker{display:none}
         <button class="btn" type="button" id="hfc-tune">GO TO CHANNEL</button>
         <button class="btn" type="button" id="hfc-use">USE THIS LINK FOR APRS CHAT</button></div>
       <div id="hfc-link" class="note"></div>
+      <div class="note" style="margin-top:8px"><b>RECORDINGS</b> - the last 30 s of HF audio, to check a radio's format
+        <button class="btn" type="button" id="hfc-rec">RECORD LAST 30 s</button></div>
+      <div id="hfc-caps"><div class="chat-empty">No recordings yet.</div></div>
       <div class="note" style="margin-top:8px"><b>CALL LOG</b></div>
       <div id="hfc-hist"><div class="chat-empty">No calls yet.</div></div>
       <div class="note" style="margin-top:8px"><b>LINK QUALITY</b> - best recent channel per station, with the data mode to use</div>
@@ -2801,6 +2806,9 @@ function hfRender(h){
   $('#hfc-hist').innerHTML = (h.history||[]).length ? h.history.slice(0,20).map(r=>`<div class="note">${ago(r.t)} ${r.dir==='tx'?'&rarr;':'&larr;'} <b>${esc(r.kind)}</b> ${esc(r.dir==='tx'?r.to:r.from)}${r.callsign?' ('+esc(r.callsign)+')':''}${r.khz?' '+r.khz+' kHz':''}${r.snr!==null&&r.snr!==undefined?' '+hfFmt(r.snr):''}${r.text?' - '+esc(r.text):''} <i>${esc(r.status||'')}</i></div>`).join('') : '<div class="chat-empty">No calls yet.</div>';
   $('#hfc-lqa').innerHTML = (h.lqa||[]).length ? h.lqa.slice(0,15).map(r=>`<div class="note">${esc(r.station)} ${r.khz||'?'} kHz: here ${hfFmt(r.snr)}, there ${hfFmt(r.snr_far)} (${ago(r.t)} ago) - ${esc(r.why||'')}</div>`).join('') : '<div class="chat-empty">Send a beacon call or ALE sounding to measure a path.</div>';
   $('#hfc-heard').innerHTML = (h.heard||[]).length ? h.heard.slice(0,15).map(r=>`<div class="note">${esc(r.station)}${r.callsign&&r.callsign!==r.station?' ('+esc(r.callsign)+')':''} - ${esc(r.via)} ${r.khz?r.khz+' kHz':''} ${hfFmt(r.snr)} - ${ago(r.t)} ago</div>`).join('') : '<div class="chat-empty">Nothing heard yet.</div>';
+  const caps = (h.captures||[]).map(c=>`<div class="note">${ago(c.t)} ago - <a href="/api/rx/file?p=hf/${encodeURIComponent(c.name)}" download>${esc(c.name)}</a> (<a href="/api/rx/file?p=hf/${encodeURIComponent(c.name.replace(/\.wav$/,'.txt'))}" target="_blank">notes</a>) ${esc(c.note||'')}</div>`).join('')
+    + (h.unknown||[]).slice(0,5).map(u=>`<div class="note">Unread frame ${ago(u.t)} ago (${esc(u.tones||'')}): <code>${esc(u.symbols)}</code></div>`).join('');
+  $('#hfc-caps').innerHTML = caps || '<div class="chat-empty">No recordings yet.</div>';
   $('#hfc-selcal').innerHTML = (h.selcal||[]).length ? '<div class="note"><b>ARINC SELCAL</b> '+h.selcal.slice(0,8).map(r=>esc(r.code)+' ('+ago(r.t)+')').join(', ')+'</div>' : '';
 }
 // alert sounds (Web Audio): a distinct pattern for each kind of HF event
@@ -2891,6 +2899,7 @@ function hfInit(){
     el.value = h.hfn; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); toast('HFN channels filled - press SAVE', true); });
   $('#hfc-box').addEventListener('toggle', ()=>{ if ($('#hfc-box').open) pollHF(); });
   $('#hfpop-ok').addEventListener('click', hfPopClose);
+  $('#hfc-rec').addEventListener('click', ()=> hfDo({action:'capture', seconds:30}));
   $('#hfpop-go').addEventListener('click', ()=>{ hfPopClose(); const b = $('#hfc-box'); b.open = true; b.scrollIntoView({behavior:'smooth'}); });
   document.addEventListener('keydown', e=>{ if (e.key === 'Escape' && $('#hfpop').classList.contains('show')) hfPopClose(); });
   for (const [id, key, dflt] of [['#hfc-popup','tw_hf_popup',true], ['#hfc-flash','tw_hf_flash',true], ['#hfc-notify','tw_hf_notify',false]]){
@@ -2938,6 +2947,8 @@ const HELP = {
   hf_ale_respond:'When someone ALE-calls one of your addresses, answer and complete the 3-way handshake automatically.',
   hf_call_format:'Standard CCIR 493-4 is the 4 / 6 digit selcall built into Barrett, Codan, Icom and similar HF radios: Selcall and Beacon calls work with them. The Tradewind format adds your callsign, a signal report, page text, GPS, emergency and telcall, between Tradewind stations. Incoming calls in either format are always decoded.',
   hf_ccir_dots_s:'How long the dot pattern runs before a standard call. A scanning Barrett or Codan needs time to stop on your channel: 6 s is typical, up to 20 s for long scan lists.',
+  hf_far_channels:'If the radio you call is scanning, how many channels it scans. Tradewind then sends a preamble of 0.5 s per channel plus 1 s (Barrett\'s rule), so the scanner stops on your channel in time.',
+  hf_capture:'Save a 25-second WAV and a notes file every time a selcall is heard, in the received/hf folder. Use RECORD LAST 30 s for anything Tradewind did not recognise.',
   hf_cw_id:'The standard selcall frame carries no callsign, so Tradewind sends your callsign in Morse after it (amateur identification).',
   hf_selcall_tones:'Which tone pair your selcalls use. Tradewind listens for all of them and answers each caller in its own tones. 1700/1870 Hz is the amateur and land-mobile pair listed by HFLINK; 1615/1785 Hz is the marine pair Tradewind v3.18 used.',
   hf_selcal:'Show aircraft ARINC SELCAL codes heard on the channel (receive only - Tradewind never sends SELCAL).',

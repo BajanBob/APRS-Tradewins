@@ -23,6 +23,18 @@ using only the radio's audio and an ordinary SSB rig in USB. Open **HF CALLING -
 All calls are clear text and carry your callsign. Tradewind listens anywhere on HF, but transmits only inside the amateur
 HF bands; your licence and band plan decide the rest. ALL-CALL IDs (9999 / 999999) are never auto-answered.
 
+## v3.21: testing with a Barrett 2050
+
+| Barrett 2050 setting | Tradewind |
+|---|---|
+| INT 1 - 4-digit International | Standard CCIR format, 4-digit ID (e.g. 5555) |
+| INT 2 - 6-digit International | Standard CCIR format, 6-digit ID (e.g. 115555) - layout to be confirmed on air |
+| OEM 1 / OEM 2 - Codan-compatible | not supported (unpublished; 6-digit OEM uses a privacy key) |
+| Preamble 1-10 s | "Called radio scans N channels": 0.5 s a channel + 1 s, or the preamble setting |
+
+Every selcall heard is recorded (WAV + notes in `received/hf`). If the 2050's 6-digit call shows as an
+"unread frame", the raw symbols and the recording are what is needed to correct the 6-digit layout.
+
 ## v3.20: talking to Barrett, Codan and Icom selcall radios
 
 Tradewind speaks two selcall formats:

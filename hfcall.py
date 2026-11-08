@@ -544,9 +544,12 @@ class CcirDecoder(SelcallDecoder):
                     if v in EOS_SET and len(msg) >= 6:
                         break
                     i += 1
-                f = self._parse(msg) if msg else None
-                if not f:
+                if not msg:
                     continue
+                f = self._parse(msg)
+                if not f:                                # phasing was right, the message is a format we
+                    f = {"std": "ccir", "kind": "unknown", "symbols": msg,   # do not know (OEM?): keep it
+                         "to": "", "from": "", "eos": None, "callsign": ""}
                 start_abs = base_abs + (n * 8 + p) * self.STEP
                 if any(abs(start_abs - s0) < self.SPB * 40 for s0 in self.done):
                     continue
@@ -1048,7 +1051,7 @@ class HFCenter:
     HOLD_S = 8.0
 
     def __init__(self, cfg, transmit, tune=None, log=None, tx_active=None, rate=48000,
-                 pos=None, now=time.time, threaded=True, busy=None, tx_ok=None):
+                 pos=None, now=time.time, threaded=True, busy=None, tx_ok=None, capture_dir=None):
         _need_numpy()
         self.cfg = cfg
         self.transmit = transmit                 # transmit(audio_float32, max_s)
@@ -1084,6 +1087,12 @@ class HFCenter:
         self.ccir_dots = max(0.5, min(20.0, float(cfg.get("hf_ccir_dots_s") or 6.0)))
         self.cw_id = bool(cfg.get("hf_cw_id", True))
         self.ccir_peers = set()                  # stations heard using the standard format
+        self.far_channels = int(cfg.get("hf_far_channels") or 0)   # called station scans this many channels
+        self.capture_dir = capture_dir           # where selcall recordings go (None = no recordings)
+        self.auto_capture = bool(cfg.get("hf_capture", True))
+        self.captures = []
+        self.unknown = []                        # raw symbols of selcall frames we could not read
+        self._cap_due = None
         self._sc_seen = {}
         self.ale = AleDecoder(variant)
         self.selcal = SelcalDecoder()
@@ -1190,12 +1199,23 @@ class HFCenter:
                         continue
                     self._sc_seen[key] = fr["_abs"]
                     fr["tones"] = d.tones
-                    self._on_ccir(fr)
+                    if fr["kind"] == "unknown":
+                        self._on_unknown(fr)
+                    else:
+                        self._on_ccir(fr)
+                    if self.auto_capture and self.capture_dir and self._cap_due is None:
+                        self._cap_due = (now + 4.0, f"auto: {fr['kind']} {fr.get('from', '')}>{fr.get('to', '')}")
             for run in self.ale.decode(x, base):
                 self._on_ale(run)
             if self.selcal_on:
                 for s in self.selcal.decode(x, base):
                     self._on_selcal(s)
+        if self._cap_due and now >= self._cap_due[0]:
+            note, self._cap_due = self._cap_due[1], None
+            try:
+                self.capture(25, note)
+            except OSError as e:
+                self.status = f"recording not saved: {e}"
         self._timeouts(now)
         self._scan(now)
         if self.sound_min and now >= self.next_sound and not self.pending and now >= self.tx_until:
@@ -1303,7 +1323,8 @@ class HFCenter:
         me = self._id_for(to)
         khz = khz or self.best_channel(to) or self.khz
         self._go_channel(khz)
-        dots = max(self.ccir_dots, self.scan_cycle_s() or 0)
+        dots = max(self.ccir_dots, self.scan_cycle_s() or 0,
+                   0.5 * self.far_channels + 1.0 if self.far_channels else 0)   # Barrett: 0.5 s a channel + 1 s
         a = ccir_audio(kind, to, me, self.rate, callsign=self.call, dot_s=min(dots, 20.0),
                        tones=self.sc_tones if self.sc_tones != "dsc" else "lm", cw_id=self.cw_id)
         if to not in ALL_CALL and not to.endswith("99"):
@@ -1312,6 +1333,44 @@ class HFCenter:
         self._hist("tx", kind + " (CCIR)", me, to, "", khz, None, "sent - listen for the revertive")
         self._send(a, f"CCIR {kind.upper()} to {to}" + (f" on {khz:g} kHz" if khz else ""))
         return True
+
+    def _on_unknown(self, f):
+        sy = " ".join(f"{v:03d}" for v in f["symbols"])
+        self.unknown = ([{"t": self.now(), "khz": self.khz, "snr": f.get("snr"), "tones": f.get("tones"),
+                          "symbols": sy}] + self.unknown)[:20]
+        self._alert("call", f"Selcall in a format Tradewind cannot read yet ({f.get('tones')}): {sy}")
+        self.log("HF", f"Unread selcall frame: {sy}")
+
+    def capture(self, seconds=30, note=""):
+        """Save the last seconds of HF audio (8 kHz WAV) plus what was decoded, for checking new formats."""
+        import os
+        import wave
+        if not self.capture_dir:
+            raise OSError("no folder for recordings")
+        with self.lock:
+            x = self.buf[-int(RATE * max(2, min(40, seconds))):].copy()
+        if len(x) < RATE:
+            raise OSError("no HF audio yet")
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(self.now()))
+        base = os.path.join(self.capture_dir, f"selcall_{stamp}")
+        y = np.clip(x / (np.max(np.abs(x)) + 1e-9) * 0.8, -1, 1)
+        with wave.open(base + ".wav", "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(RATE)
+            w.writeframes((y * 32767).astype("<i2").tobytes())
+        lines = [f"Tradewind HF selcall recording {stamp} UTC", f"note: {note}",
+                 f"dial: {self.khz or 'set by hand'} kHz USB; my IDs: {', '.join(self.ids)}", "",
+                 "recent calls:"]
+        lines += [f"  {h['dir']} {h['kind']} {h['from']} > {h['to']} snr {h['snr']} {h['status']}"
+                  for h in self.history[:10]]
+        lines += ["unread frames (symbols):"] + [f"  {u['symbols']} ({u['tones']})" for u in self.unknown[:10]]
+        with open(base + ".txt", "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        name = os.path.basename(base) + ".wav"
+        self.captures = ([{"t": self.now(), "name": name, "note": note}] + self.captures)[:20]
+        self.status = f"recorded {name}"
+        return name
 
     def _on_ccir(self, f):
         """A standard CCIR 493-4 call from any selcall radio."""
@@ -1549,6 +1608,7 @@ class HFCenter:
                 "heard": sorted(self.heard.values(), key=lambda r: -r["t"])[:40],
                 "selcal": self.selcals[:20], "events": self.events, "alerts": self.alerts[:10],
                 "tones": self.sc_tones, "call_format": self.call_format, "ccir_peers": sorted(self.ccir_peers),
+                "captures": self.captures[:10], "unknown": self.unknown[:10], "can_capture": bool(self.capture_dir),
                 "ale_variant": self.variant_learned or ("".join("1" if b else "0" for b in self.ale.variant)
                                                         if self.ale.variant else "")}
 
@@ -1673,11 +1733,27 @@ def selftest(verbose=True):
         assert got and got[0]["kind"] == "ack" and got[0]["to"] == frm and got[0]["from"] == to, got
         clock[0] += 30
         C.tx_until = 0
+    import tempfile
+    C.capture_dir = tempfile.mkdtemp()
+    odd = [121, 11, 55, 55, 100, 33, 66, 99, 103, 117, 117, 117]      # a frame layout we do not know
+    ty, tb = SC_TONES["lm"]
+    oa = fsk_audio([ty if b else tb for b in ccir_bits(odd, 1.0)], 1.0 / SC_BAUD, RATE, 0.5)
+    C.feed(_awgn(np.concatenate([silence(0.4, RATE), oa, silence(0.6, RATE)]), 6, rng))
+    C.tick()
+    assert C.unknown and C.unknown[0]["symbols"].startswith("121 011 055 055"), C.unknown
+    clock[0] += 5
+    C.tick()                                       # the automatic recording is saved a few seconds later
+    assert C.captures and C.captures[0]["name"].endswith(".wav"), C.captures
+    C._sent.clear()
+    clock[0] += 30
+    C.tx_until = 0
+    C.far_channels = 8
     C.selcall("beacon", "3602")                    # 4-digit target: sent from C's 4-digit ID, CCIR format
+    assert len(C._sent[-1]) / RATE > 5.0, "8 scanned channels -> at least 5 s preamble (Barrett rule)"
     got = CcirDecoder("lm").decode(_awgn(np.concatenate([silence(0.3, RATE), C._sent.pop()]), 5, rng), 0)
     assert got and (got[0]["kind"], got[0]["to"], got[0]["from"]) == ("beacon", "3602", "1155"), got
     say("CCIR 493-4: Barrett/Codan-style beacon to 115555 and selcall to 1155 alerted + acknowledged at +3 dB; "
-        "Tradewind beacon to 3602 in the standard format")
+        "Tradewind beacon to 3602 in the standard format; unread frames recorded")
     assert recommend_modem(15)[0] == "300" and recommend_modem(0)[0] == "robust" and \
         recommend_modem(-10)[0] == "robust_dx" and recommend_modem(-20)[0] is None
     assert parse_channels("7102 40m, 10145.5:30m")[1] == {"khz": 10145.5, "label": "30m"}

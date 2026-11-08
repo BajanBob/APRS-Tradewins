@@ -1084,6 +1084,51 @@ details.more summary::-webkit-details-marker{display:none}
       <div id="iss-src" class="note"></div>
       <div id="iss-list"><div class="chat-empty">Turn Satellite Watch on. The next passes over your grid square appear here, with direction, highest elevation and how many beacons each gets.</div></div>
     </details>
+    <details class="heard" id="hfc-box">
+      <summary>HF CALLING - SELCALL &amp; ALE <span id="hfc-n"></span></summary>
+      <div class="note" id="hfc-now" style="margin-top:8px">HF Calling is off.</div>
+      <label class="chk" style="margin:8px 0"><input type="checkbox" data-k="hf_enabled"> HF Calling: listen for selective calls (CCIR-493 style selcall) and 2G ALE on HF, and call other stations</label>
+      <div class="more-row"><label>My selcall IDs (4 or 6 digits, up to 10)<input class="inset" data-k="hf_ids" placeholder="1234, 123456" style="width:13em"></label>
+        <label>My ALE addresses (blank = my callsign)<input class="inset" data-k="hf_ale_addrs" placeholder="8P6AB" style="width:11em"></label></div>
+      <div class="more-row"><label style="flex:1 1 100%">Channels (USB dial kHz, label) <button class="btn" type="button" id="hfc-hfn">FILL HFN AMATEUR ALE CHANNELS</button>
+          <input class="inset" data-k="hf_channels" placeholder="7102 40m, 10145.5 30m, 14109 20m" style="width:100%"></label></div>
+      <label class="chk" style="margin:4px 0"><input type="checkbox" data-k="hf_scan"> Scan the channels (CAT radio needed) - APRS on the main radio waits while scanning</label>
+      <div class="more-row"><label>Dwell per channel (s)<input class="inset" data-k="hf_dwell" data-num type="number" min="0.5" max="10" step="0.5" style="width:5em"></label>
+        <label>ALE sounding every (min, 0 = off)<input class="inset" data-k="hf_sound_min" data-num type="number" min="0" max="240" style="width:5em"></label></div>
+      <label class="chk" style="margin:0 0 4px"><input type="checkbox" data-k="hf_far_scans"> Called stations scan too (longer call preamble so a scanning receiver stops on it)</label>
+      <label class="chk" style="margin:0 0 4px"><input type="checkbox" data-k="hf_revertive"> Answer selcall beacons automatically (4-tone revertive with my signal report)</label>
+      <label class="chk" style="margin:0 0 4px"><input type="checkbox" data-k="hf_ale_respond"> Answer ALE calls to my address automatically (handshake, then LINKED)</label>
+      <label class="chk" style="margin:0 0 8px"><input type="checkbox" data-k="hf_selcal"> Decode aircraft ARINC SELCAL tones (receive only)</label>
+      <div class="note" style="margin-top:8px"><b>MAKE A CALL</b></div>
+      <form class="hail" id="hfc-form">
+        <label>Type<select class="inset" id="hfc-kind">
+          <option value="ale">ALE call (address)</option>
+          <option value="beacon">Beacon call - test the path (revertive)</option>
+          <option value="selcall">Selcall</option>
+          <option value="page">Page call (short text)</option>
+          <option value="gps">GPS call (my position)</option>
+          <option value="telcall">Telcall (phone number - signal only)</option>
+          <option value="emergency">EMERGENCY call (with position)</option>
+          <option value="sound">ALE sounding (no address)</option></select></label>
+        <label>To<input class="inset" id="hfc-to" placeholder="ID or address" maxlength="15" autocomplete="off" style="width:9em"></label>
+        <label>Channel<select class="inset" id="hfc-ch" style="width:10em"><option value="">current</option></select></label>
+        <label id="hfc-text-l">Text<input class="inset" id="hfc-text" maxlength="60" style="width:12em"></label>
+        <label id="hfc-num-l" style="display:none">Number<input class="inset" id="hfc-num" maxlength="20" style="width:9em"></label>
+        <button class="btn" type="submit">CALL</button>
+      </form>
+      <div class="more-row"><button class="btn" type="button" id="hfc-scan">SCAN ON</button>
+        <button class="btn" type="button" id="hfc-tune">GO TO CHANNEL</button>
+        <button class="btn" type="button" id="hfc-use">USE THIS LINK FOR APRS CHAT</button></div>
+      <div id="hfc-link" class="note"></div>
+      <div class="note" style="margin-top:8px"><b>CALL LOG</b></div>
+      <div id="hfc-hist"><div class="chat-empty">No calls yet.</div></div>
+      <div class="note" style="margin-top:8px"><b>LINK QUALITY</b> - best recent channel per station, with the data mode to use</div>
+      <div id="hfc-lqa"><div class="chat-empty">Send a beacon call or ALE sounding to measure a path.</div></div>
+      <div class="note" style="margin-top:8px"><b>HEARD ON HF</b></div>
+      <div id="hfc-heard"><div class="chat-empty">Nothing heard yet.</div></div>
+      <div id="hfc-selcal"></div>
+      <div class="note">Calls are clear-text amateur signals and carry your callsign. Tradewind listens anywhere on HF but transmits only inside the amateur HF bands - your licence and band plan decide the rest. Selcall here is Tradewind-to-Tradewind in the CCIR-493 style; ALE follows MIL-STD-188-141 2G and is meant to work with other amateur ALE stations (try it on air first). Codan / Barrett OEM formats and encrypted calls are not included.</div>
+    </details>
     <details class="heard" id="relay-box">
       <summary>SEND THROUGH A RELAY STATION</summary>
       <form class="hail" id="relay-form" style="margin-top:8px">
@@ -2691,7 +2736,68 @@ $('#relay-form').onsubmit = async e=>{
 let drawCom = ()=>{};
 
 /* ---------- help on every setting (hover, or tap the ?) ---------- */
+
+// ---- v3.18 HF Calling
+let hfLast = null;
+const hfFmt = v => v===null||v===undefined ? '-' : (v>0?'+':'')+Math.round(v)+' dB';
+function hfRender(h){
+  hfLast = h;
+  const now = Date.now()/1000, ago = t => { const s = Math.max(0, now-t); return s<90? Math.round(s)+' s' : s<5400? Math.round(s/60)+' min' : Math.round(s/3600)+' h'; };
+  if (!h.on){
+    $('#hfc-now').textContent = h.enabled ? (h.running ? 'HF Calling did not start - see the log.' : 'Switch the station ON to start HF Calling.') : 'HF Calling is off.';
+    $('#hfc-n').textContent = ''; return;
+  }
+  $('#hfc-n').textContent = h.linked ? '- LINKED '+h.linked.station : (h.scan ? '- scanning' : '');
+  $('#hfc-now').innerHTML = `${h.khz ? '<b>'+h.khz+' kHz USB</b>' : 'Channel: set by hand'}${h.scan?' - scanning '+h.channels.length+' channels':''}${h.holding?' (holding)':''}`
+    + (h.pending ? ` - waiting for ${esc(h.pending.to)} (${esc(h.pending.kind)})` : '') + (h.status ? ' - '+esc(h.status) : '')
+    + (h.holds_radio ? '<br>APRS beacons on the main radio wait while HF Calling has it.' : '');
+  $('#hfc-scan').textContent = h.scan ? 'SCAN OFF' : 'SCAN ON';
+  const sel = $('#hfc-ch'), cur = sel.value, opts = '<option value="">current</option>' + (h.channels||[]).map(c=>`<option value="${c.khz}">${c.khz} ${esc(c.label||'')}</option>`).join('');
+  if (sel._o !== opts){ sel.innerHTML = opts; sel.value = cur; sel._o = opts; }
+  $('#hfc-link').innerHTML = h.linked ? `<b>LINKED with ${esc(h.linked.station)}</b> on ${h.linked.khz||'?'} kHz - SNR here ${hfFmt(h.linked.snr)}, there ${hfFmt(h.linked.snr_far)} - ${esc(h.linked.why||'')}` : '';
+  $('#hfc-hist').innerHTML = (h.history||[]).length ? h.history.slice(0,20).map(r=>`<div class="note">${ago(r.t)} ${r.dir==='tx'?'&rarr;':'&larr;'} <b>${esc(r.kind)}</b> ${esc(r.dir==='tx'?r.to:r.from)}${r.callsign?' ('+esc(r.callsign)+')':''}${r.khz?' '+r.khz+' kHz':''}${r.snr!==null&&r.snr!==undefined?' '+hfFmt(r.snr):''}${r.text?' - '+esc(r.text):''} <i>${esc(r.status||'')}</i></div>`).join('') : '<div class="chat-empty">No calls yet.</div>';
+  $('#hfc-lqa').innerHTML = (h.lqa||[]).length ? h.lqa.slice(0,15).map(r=>`<div class="note">${esc(r.station)} ${r.khz||'?'} kHz: here ${hfFmt(r.snr)}, there ${hfFmt(r.snr_far)} (${ago(r.t)} ago) - ${esc(r.why||'')}</div>`).join('') : '<div class="chat-empty">Send a beacon call or ALE sounding to measure a path.</div>';
+  $('#hfc-heard').innerHTML = (h.heard||[]).length ? h.heard.slice(0,15).map(r=>`<div class="note">${esc(r.station)}${r.callsign&&r.callsign!==r.station?' ('+esc(r.callsign)+')':''} - ${esc(r.via)} ${r.khz?r.khz+' kHz':''} ${hfFmt(r.snr)} - ${ago(r.t)} ago</div>`).join('') : '<div class="chat-empty">Nothing heard yet.</div>';
+  $('#hfc-selcal').innerHTML = (h.selcal||[]).length ? '<div class="note"><b>ARINC SELCAL</b> '+h.selcal.slice(0,8).map(r=>esc(r.code)+' ('+ago(r.t)+')').join(', ')+'</div>' : '';
+}
+async function pollHF(){
+  const b = $('#hfc-box'); if (!b || (!b.open && hfLast)) return;
+  try { hfRender(await api('/api/hf')); } catch(e){}
+}
+async function hfDo(body){
+  const j = await api('/api/hf', body);
+  if (j.ok){ toast(j.msg||'Done', true); if (j.hf) hfRender(j.hf); } else toast((j.errors||['Failed'])[0]);
+}
+function hfInit(){
+  const k = $('#hfc-kind'); if (!k) return;
+  const vis = () => { const v = k.value; $('#hfc-num-l').style.display = v==='telcall'?'':'none';
+    $('#hfc-text-l').style.display = ['page','ale','selcall','emergency'].includes(v)?'':'none'; $('#hfc-to').disabled = v==='sound'; };
+  k.addEventListener('change', vis); vis();
+  $('#hfc-form').addEventListener('submit', e=>{ e.preventDefault();
+    const kind = k.value;
+    if (kind==='emergency' && !confirm('Send an EMERGENCY call? Only for a real distress or urgency situation.')) return;
+    hfDo({action:'call', kind, to:$('#hfc-to').value.trim(), text:$('#hfc-text').value, number:$('#hfc-num').value, khz:$('#hfc-ch').value}); });
+  $('#hfc-scan').addEventListener('click', ()=> hfDo({action:'scan', on: !(hfLast && hfLast.scan)}));
+  $('#hfc-tune').addEventListener('click', ()=>{ const v = $('#hfc-ch').value; if (!v) return toast('Pick a channel first'); hfDo({action:'tune', khz:v}); });
+  $('#hfc-use').addEventListener('click', ()=> hfDo({action:'use_link', khz:(hfLast&&hfLast.linked&&hfLast.linked.khz)||$('#hfc-ch').value||''}));
+  $('#hfc-hfn').addEventListener('click', async ()=>{ const h = hfLast || await api('/api/hf'); const el = document.querySelector('[data-k="hf_channels"]');
+    el.value = h.hfn; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); toast('HFN channels filled - press SAVE', true); });
+  $('#hfc-box').addEventListener('toggle', ()=>{ if ($('#hfc-box').open) pollHF(); });
+  setInterval(pollHF, 2000);
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hfInit); else hfInit();
 const HELP = {
+  hf_enabled:'HF Calling: Tradewind decodes HF selective calls (CCIR-493 style selcall, 100 baud FSK) and 2G ALE (8-FSK, MIL-STD-188-141) from the radio audio, answers calls to your IDs, and measures link quality so you know which channel and data mode to use. Needs the built-in sound modem and an SSB radio in USB.',
+  hf_ids:'Your own selcall IDs - 4 or 6 digits, up to 10, separated by commas. The first is the one you call from.',
+  hf_ale_addrs:'Your ALE addresses (letters and digits, up to 15). Blank uses your callsign, which is the amateur HFN practice.',
+  hf_channels:'The HF channels to listen on / scan, as USB dial frequency in kHz with an optional label, e.g. "7102 40m, 14109 20m". FILL HFN puts in the international amateur ALE channels.',
+  hf_scan:'Step through the channels, listening a moment on each, and stop when a call or ALE signal appears. Needs CAT control of the radio.',
+  hf_dwell:'How long to listen on each channel while scanning. 1 s suits ALE; longer helps slow radios.',
+  hf_sound_min:'Send an ALE sounding (your address, no call) this often so other stations learn the path. 0 = off; 30 minutes or more keeps the bands quiet.',
+  hf_far_scans:'If the stations you call are scanning, the call needs a longer preamble so their scanner stops on your channel in time.',
+  hf_revertive:'When someone sends you a beacon call, answer automatically with the 4-tone revertive and a signal report.',
+  hf_ale_respond:'When someone ALE-calls one of your addresses, answer and complete the 3-way handshake automatically.',
+  hf_selcal:'Show aircraft ARINC SELCAL codes heard on the channel (receive only - Tradewind never sends SELCAL).',
   call:'Your amateur callsign. Add an SSID if you like: -10 is usual for an internet/iGate station, -9 mobile, -7 handheld.',
   grid:'Your Maidenhead grid square (4 or 6 characters, e.g. GK03fd). Used for your position and for the "near me" list.',
   preset:'Pick your radio or interface. It fills in sensible settings and shows the cable and menu settings to use.',

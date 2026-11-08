@@ -26,7 +26,7 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CORE = ["app.py", "afsk.py", "digi.py", "dxmode.py", "fx25.py", "iss.py", "satrx.py", "tnc.py",
+CORE = ["app.py", "afsk.py", "digi.py", "dxmode.py", "fx25.py", "hfcall.py", "iss.py", "satrx.py", "tnc.py",
         "vhf_prop_aprs.py", "wx.py", "faceplate.html", "icon.png", "icon.ico", "requirements.txt",
         "test_modem.py", "install_linux.sh", "README.md", "LICENSE"]
 ANDROID = ["android_main.py", "buildozer.spec"]

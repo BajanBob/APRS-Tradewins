@@ -483,6 +483,7 @@ AIRTIME_WINDOW_S = 600       # this station may transmit at most...
 AIRTIME_PCT = 10             # ...10% of any 10 minutes (60 s) on VHF/UHF packet
 AIRTIME_PCT_ROBUST = 25      # Robust HF: one message takes 12-45 s, so 25% (150 s) there
 PTT_MAX_S = {"1200": 10, "300": 20, "robust": 50, "robust_dx": 100, "robust_fm": 50}   # longest single transmission (watchdog)
+HF_MAX_S = 60                # v3.18: longest HF Selcall / ALE call (a scanning call covers the channel list)
 
 
 class AirtimeGuard:
@@ -589,6 +590,11 @@ class SoundModemTNC(BaseTNC):
                 self.cat_status = f"CAT tuning failed: {e}"
                 return False
 
+    def send_audio(self, audio, max_s=30.0):
+        """v3.18: queue a ready-made waveform (HF Selcall / ALE call) for transmission. It gets the same
+        listen-before-transmit, airtime limit, PTT and transmit watchdog as a packet."""
+        self.txq.put(("audio", audio, min(float(max_s), HF_MAX_S)))
+
     def _restore_radio(self):
         if self.cat_saved and self.cat_restore and self.ptt.can_tune:
             with self.cat_lock:
@@ -651,8 +657,13 @@ class SoundModemTNC(BaseTNC):
             if self.channel_busy():
                 self.txq.put(frame)
                 continue
+            raw = isinstance(frame, tuple) and len(frame) == 3 and frame[0] == "audio"
             try:
-                if afsk.is_robust(self.modem):
+                if raw:                      # HF Selcall / ALE waveform, already made at self.rate
+                    np = afsk.np
+                    audio = np.concatenate([np.zeros(int(self.rate * self.txdelay / 1000), dtype=np.float32),
+                                            np.asarray(frame[1], dtype=np.float32) * (self.level / 0.5)])
+                elif afsk.is_robust(self.modem):
                     np = afsk.np
                     audio = np.concatenate([np.zeros(int(self.rate * self.txdelay / 1000), dtype=np.float32),
                                             afsk.robust_modulate(frame, self.rate, self.level, lead_ms=50, modem=self.modem)])
@@ -663,7 +674,7 @@ class SoundModemTNC(BaseTNC):
                 self.error = f"transmit: {e}"
                 continue
             dur = len(audio) / float(self.rate)
-            limit = PTT_MAX_S.get(self.modem, 10)
+            limit = frame[2] if raw else PTT_MAX_S.get(self.modem, 10)
             if dur > limit:
                 self.error = f"transmit refused: {dur:.0f} s is longer than the {limit} s transmit limit"
                 continue

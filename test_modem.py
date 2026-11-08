@@ -82,7 +82,70 @@ def main():
     test_v37()
     test_edition()
     test_v3171()
+    test_hf()
     print("All self-tests passed")
+
+
+def test_hf():
+    """v3.18 HF Calling: selcall / ALE / SELCAL decoders, settings checks, station wiring."""
+    import app
+    import hfcall
+    hfcall.selftest(verbose=False)
+    base = dict(app.DEFAULTS, call="8P6AB", grid="GK03fd", tnc="sound", hf_enabled=True)
+    assert not app.validate(dict(base, hf_ids="1234, 123456", hf_channels=hfcall.HFN_CHANNELS, hf_scan=True))
+    assert app.validate(dict(base, hf_ids="12345"))
+    assert app.validate(dict(base, hf_channels="7102, 99999"))
+    assert app.validate(dict(base, hf_scan=True, hf_channels="7102"))
+    assert app.validate(dict(base, hf_sound_min=5))
+    assert app.validate(dict(base, tnc="none"))
+    assert hfcall.amateur_hf(7102) and hfcall.amateur_hf(14109) and not hfcall.amateur_hf(8291) \
+        and not hfcall.amateur_hf(7298.5), "transmit only inside amateur HF bands"
+
+    class FakePtt:
+        can_tune = True
+
+    class FakeTnc:
+        kind, rate, tx_active, ptt = "fake", 48000, False, FakePtt()
+
+        def __init__(self):
+            self.audio_taps, self.sent, self.tuned = [], [], []
+
+        def send_audio(self, a, max_s=30):
+            self.sent.append(a)
+
+        def tune(self, hz, mode=None):
+            self.tuned.append((hz, mode))
+            return True
+
+    st = app.Station.__new__(app.Station)
+    st.cfg = dict(base, hf_ids="1234", hf_channels="7102 40m, 14109 20m")
+    st.tnc, st.tnc2, st.isc, st.qsy_hz, st.iss_tuned, st.commercial, st.hf = FakeTnc(), None, None, None, False, False, None
+    logs = []
+    st.add_log = lambda k, t: logs.append((k, t))
+    st._hf_start(st.cfg)
+    assert st.hf and st.hf.feed in st.tnc.audio_taps, logs
+    st.hf.threaded = False
+    st.hf_action({"action": "tune", "khz": "7102"})
+    assert st.tnc.tuned[-1] == (7102000, "usb")
+    st.hf_action({"action": "call", "kind": "beacon", "to": "5678"})
+    st.hf_action({"action": "call", "kind": "ale", "to": "8P6CD"})
+    assert len(st.tnc.sent) == 2
+    st.hf.tune_to(8291)                                  # a non-amateur channel: listen only
+    try:
+        st.hf_action({"action": "call", "kind": "selcall", "to": "5678"})
+        raise AssertionError("transmitted outside the amateur bands")
+    except ValueError:
+        pass
+    assert st._hf_holds_radio(), "1200-baud APRS waits while HF Calling has the radio"
+    try:
+        st._pick_link("8P6CD", "rf")
+        raise AssertionError("APRS must not go out on the HF calling radio")
+    except IOError:
+        pass
+    assert st.hf_state()["on"] and st.hf_state()["hfn"]
+    st._hf_stop()
+    assert not st.tnc.audio_taps and st.hf is None
+    print("HF Calling ok: selcall, ALE, SELCAL, band guard, station wiring")
 
 
 def test_edition():

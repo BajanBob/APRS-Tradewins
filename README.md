@@ -87,6 +87,22 @@ type the task) or from a computer (`python tools/venice_bridge.py "task" --send`
 the change, and GitHub puts it on a `venice/...` branch, runs the self-test and opens a pull request for review -
 nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.md](docs/venice/README.md).
 
+## What's new in 3.18: HF Calling - selcall and ALE
+
+Hail and be hailed on HF the way commercial HF radios do, with an ordinary SSB radio in USB.
+Open **HF CALLING - SELCALL & ALE** on the face plate. Full guide: [docs/HF_CALLING.md](docs/HF_CALLING.md).
+
+- **Selcall** in the CCIR-493 style (100 baud FSK): selcall, **beacon call with 4-tone revertive** and signal report,
+  **page** (short text), **GPS call**, **emergency call** with position, **telcall** (number only). Up to 10 own IDs.
+- **2G ALE** (MIL-STD-188-141): scanning calls, 3-way handshake to LINKED, soundings, SNR exchange, up to 10 addresses,
+  one-click HFN amateur ALE channels.
+- **Scanning** across your channels with CAT radios; it stops when a call or ALE signal appears.
+- **Link quality**: SNR both ways per station and channel, and the data mode to use (300 baud, Robust, Robust DX).
+  **USE THIS LINK** puts APRS chat on the linked channel with the Robust modem.
+- **ARINC SELCAL** decode (receive only).
+- Clear text only, with your callsign. Transmits only inside the amateur HF bands. No OEM (Codan / Barrett) formats
+  and no encrypted calls. `python hfcall.py --selftest` checks it all in simulated noise.
+
 ## What's new in 3.17: Satellite Watch from the command line, clear-text-only Tradewind
 
 - **`iss.py` on its own**, no app needed. It works over SSH on a headless Raspberry Pi:
@@ -548,6 +564,7 @@ Save a PSKReporter response from `https://retrieve.pskreporter.info/query?frange
 | `tnc.py` | Sound modem, KISS TCP/serial, PTT drivers, APRS-IS client |
 | `vhf_prop_aprs.py` | PSKReporter fetch and opening detection; also runs alone from the command line |
 | `satrx.py` | Satellite receivers: built-in SSTV decoder, pass recording, SatDump / gr-satellites / HamTV (H.264) drivers |
+| `hfcall.py` | HF Calling: CCIR-493 style selcall, 2G ALE (Golay FEC), ARINC SELCAL decode, scanning, link quality |
 | `iss.py` | Satellite Watch: SGP4 orbits, N2YO / AMSAT / NASA / CelesTrak data, passes from your grid square, beacon schedule |
 
 Settings are stored in `~/.tradewind/config.json`.

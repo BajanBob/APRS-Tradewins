@@ -31,6 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import afsk
 import digi as digimod
 import dxmode
+import hfcall as hfmod
 import iss as issmod
 import satrx
 import tnc as tncmod
@@ -47,7 +48,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.17.1"
+APP_VERSION = "3.18"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -272,6 +273,10 @@ DEFAULTS = {
     "hail_status": "available",       # available | dnd | reject  (how others may hail you)
     "locate_by": "grid",              # grid | ip  (how your dot is placed)
     "directory_url": "https://tradewind-directory.YOURNAME.workers.dev",
+    # v3.18 HF Calling: CCIR-493 style selcall (beacon / revertive LQA, page, GPS, emergency), 2G ALE, ARINC SELCAL rx
+    "hf_enabled": False, "hf_ids": "", "hf_ale_addrs": "", "hf_channels": "", "hf_scan": False,
+    "hf_dwell": 1.0, "hf_far_scans": False, "hf_revertive": True, "hf_ale_respond": True,
+    "hf_selcal": False, "hf_sound_min": 0, "hf_ale_variant": "", "hf_preamble_s": 0,
     "cfg_ver": 4,
 }
 SECRET_KEYS = ("com_key", "pin_hash", "pin_salt", "smtp_pass", "imap_pass")   # never sent to the face plate
@@ -636,8 +641,42 @@ def validate(cfg):
             errs.append("Satellite frequency must be a 2 m or 70 cm frequency in MHz, e.g. 145.825.")
         if cfg.get("iss_path") and check_path(cfg.get("iss_path")):
             errs.append("ISS path: " + check_path(cfg.get("iss_path")).removeprefix("RF path: "))
+    if cfg.get("hf_enabled"):
+        errs += hf_validate(cfg)
     if cfg.get("tnc") == "kiss_serial" and not cfg.get("kiss_serial"):
         errs.append("Choose the radio / TNC serial port.")
+    return errs
+
+
+def hf_validate(cfg):
+    """v3.18 HF Calling settings."""
+    errs = []
+    if cfg.get("tnc") != "sound":
+        errs.append("HF Calling needs the built-in sound modem (MENU > RADIO / TNC > TNC type: sound card).")
+    ids = [s.strip() for s in str(cfg.get("hf_ids") or "").replace(" ", ",").split(",") if s.strip()]
+    if len(ids) > 10 or any(not (s.isdigit() and len(s) in (4, 6)) for s in ids):
+        errs.append("HF selcall IDs: up to 10, each 4 or 6 digits (e.g. 1234 or 123456).")
+    addrs = [s.strip() for s in str(cfg.get("hf_ale_addrs") or "").replace(" ", ",").split(",") if s.strip()]
+    if len(addrs) > 10 or any(not re.fullmatch(r"[A-Za-z0-9@]{1,15}", a) for a in addrs):
+        errs.append("ALE addresses: up to 10, letters and digits only, 15 characters at most (e.g. 8P6AB).")
+    try:
+        chans = hfmod.parse_channels(cfg.get("hf_channels") or "")
+    except ValueError as e:
+        chans, _ = [], errs.append(f"HF channels: {e}")
+    try:
+        if not 0.5 <= float(cfg.get("hf_dwell") or 1.0) <= 10:
+            raise ValueError
+    except (TypeError, ValueError):
+        errs.append("HF scan dwell must be 0.5-10 seconds per channel.")
+    try:
+        if not 0 <= int(cfg.get("hf_sound_min") or 0) <= 240:
+            raise ValueError
+        if int(cfg.get("hf_sound_min") or 0) and int(cfg.get("hf_sound_min")) < 30:
+            errs.append("ALE sounding: every 30 minutes or more (0 = off) - keep the bands quiet.")
+    except (TypeError, ValueError):
+        errs.append("ALE sounding interval must be 0-240 minutes.")
+    if cfg.get("hf_scan") and len(chans) < 2:
+        errs.append("HF scanning needs at least two channels.")
     return errs
 
 
@@ -719,6 +758,7 @@ class Station:
         self.kiss_srv = None          # KISS TCP server for other APRS apps
         self.digi = None              # fill-in digipeater (digi.FillInDigi) while it is switched on
         self.qsy_hz = None            # set while a chat has moved off the APRS frequency
+        self.hf = None                # v3.18 HFCenter (HF selcall / ALE) while HF Calling is on
         self.mail_count = {}          # gateway: (callsign, date) -> emails sent today
         self.mail_next_poll = 0
         self.mail_error = ""
@@ -821,6 +861,7 @@ class Station:
                                         or getattr(self.chat, "send_fn", None) != self._chat_send):
                 self.chat = tncmod.ChatManager(c["call"], self._chat_send)
                 self._attach_chat()
+            self._hf_start(c)
             self.running = True
             self.openings = {}
             self._rf_was_live = self.rf_live()
@@ -845,6 +886,7 @@ class Station:
                 return
             self._stop.set()
             self._wake.set()
+            self._hf_stop()
             for x in (self.tnc, self.isc, self.tnc2, self.kiss_srv):
                 try:
                     x and x.stop()
@@ -942,6 +984,7 @@ class Station:
                         self._save_chat()
                 except Exception as e:
                     self.add_log("ERR", f"chat: {e}")
+            self._hf_learned()
             self._wake.wait(1.0)
             self._wake.clear()
 
@@ -1207,8 +1250,8 @@ class Station:
 
     def rf_live(self, mode=None):
         """Is RF transmission switched on right now (for this message's mode)?"""
-        if not self.rf_possible() or self.qsy_hz:
-            return False            # moved to a chat channel: beacons and alerts wait (APRS-IS still works)
+        if not self.rf_possible() or self.qsy_hz or self._hf_holds_radio():
+            return False            # moved to a chat channel / HF calling has the radio: beacons and alerts wait (APRS-IS still works)
         if self.cfg.get("rf_when", "always") == "always":
             return True
         chosen = set(self.cfg.get("rf_modes") or [])
@@ -1474,6 +1517,133 @@ class Station:
                     "hz": self._sat_freq_hz(), "mode": "fm"}
         return {"id": r["id"], "type": r["type"], "label": r["label"], "hz": int(round(r["mhz"] * 1e6)),
                 "mode": r.get("mode", "fm")}
+
+    # ---- v3.18 HF Calling (selcall / ALE)
+    def _hf_start(self, c):
+        self.hf = None
+        if not c.get("hf_enabled") or self.commercial:
+            return
+        taps = getattr(self.tnc, "audio_taps", None)
+        if taps is None or not hasattr(self.tnc, "send_audio"):
+            self.add_log("ERR", "HF Calling needs the built-in sound modem - not started")
+            return
+        try:
+            hf = hfmod.HFCenter(c, transmit=self.tnc.send_audio,
+                                tune=self._hf_tune if self._can_cat() else None,
+                                log=lambda kind, text: self.add_log("HF", text),
+                                tx_active=lambda: bool(getattr(self.tnc, "tx_active", False)),
+                                rate=getattr(self.tnc, "rate", 48000),
+                                pos=self._hf_pos,
+                                busy=lambda: bool(self.iss_tuned or self.qsy_hz),
+                                tx_ok=getattr(commander, "hf_tx_ok", None) if commander else None)
+        except Exception as e:
+            self.add_log("ERR", f"HF Calling not started: {e}")
+            return
+        taps.append(hf.feed)
+        hf.start()
+        self.hf = hf
+        self.add_log("HF", "HF Calling ON - " + hf.summary())
+
+    def _hf_stop(self):
+        hf, self.hf = self.hf, None
+        if not hf:
+            return
+        hf.stop()
+        try:
+            self.tnc.audio_taps.remove(hf.feed)
+        except (AttributeError, ValueError):
+            pass
+
+    def _hf_tune(self, khz):
+        tnc = self.tnc
+        return bool(tnc and tnc.tune(int(round(float(khz) * 1000)), "usb"))
+
+    def _hf_pos(self):
+        try:
+            lat, lon = eng.grid_to_latlon(self.cfg.get("grid", ""))
+            return lat, lon
+        except Exception:
+            return None
+
+    def _hf_holds_radio(self):
+        """HF calling owns the radio while it scans, or when the main modem is not an HF data modem:
+        APRS beacons / RF alerts wait (APRS-IS keeps working)."""
+        hf = self.hf
+        return bool(hf) and (hf.scan_on or self.cfg.get("modem") not in ("robust", "robust_dx", "300"))
+
+    def _hf_learned(self):
+        """Keep the ALE interleave the decoder calibrated on a real signal, so the next start uses it."""
+        hf = self.hf
+        v = hf and hf.variant_learned
+        if v and v != self.cfg.get("hf_ale_variant"):
+            self.cfg["hf_ale_variant"] = v
+            try:
+                save_config(self.cfg)
+            except Exception:
+                pass
+            self.add_log("HF", f"ALE receive format calibrated ({v}) and saved")
+
+    def hf_state(self):
+        hf = self.hf
+        base = {"hfn": hfmod.HFN_CHANNELS, "enabled": bool(self.cfg.get("hf_enabled")),
+                "running": getattr(self, "running", False), "holds_radio": self._hf_holds_radio()}
+        if not hf:
+            base["on"] = False
+            return base
+        st = hf.state()
+        st.update(base)
+        st["on"] = True
+        return st
+
+    def hf_action(self, b):
+        hf = self.hf
+        if not hf:
+            raise ValueError("Turn on HF Calling (tick it, SAVE) and switch the station ON first.")
+        act = str(b.get("action") or "")
+        khz = b.get("khz")
+        khz = float(khz) if khz not in (None, "") else None
+        if act == "call":
+            kind = str(b.get("kind") or "selcall")
+            to, text = str(b.get("to") or "").strip(), str(b.get("text") or "")
+            if kind == "ale":
+                hf.ale_call(to, text, khz=khz)
+                return f"ALE call to {to.upper()} sent"
+            if kind == "sound":
+                hf.sound_now(khz)
+                return "ALE sounding sent"
+            hf.selcall(kind, to, text=text, number=str(b.get("number") or ""), khz=khz)
+            return f"{kind.capitalize()} call to {to} sent"
+        if act == "scan":
+            on = hf.set_scan(bool(b.get("on")))
+            if bool(b.get("on")) and not on:
+                raise ValueError("Scanning needs a CAT radio link and at least two channels.")
+            return "Scanning " + ("ON" if on else "OFF")
+        if act == "tune":
+            if khz is None:
+                raise ValueError("Pick a channel.")
+            if not hf.tune_to(khz):
+                raise IOError(getattr(self.tnc, "cat_status", "") or "the radio did not take the frequency")
+            return f"On {khz:g} kHz USB" + ("" if hf.tune_fn else " (set the radio dial to this by hand)")
+        if act == "use_link":
+            return self.hf_use_link(khz)
+        raise ValueError("unknown HF action")
+
+    def hf_use_link(self, khz=None):
+        """Linked: move APRS messaging onto this HF channel with the robust modem, scanning off."""
+        hf = self.hf
+        khz = khz or (hf and (hf.linked or {}).get("khz")) or (hf and hf.khz)
+        if not khz:
+            raise ValueError("No HF channel yet - make an ALE call or pick a channel first.")
+        modem = self.cfg.get("modem")
+        note = ""
+        if modem not in ("robust", "robust_dx"):
+            note = " (Robust modem chosen - 300 baud packet will not survive a weak HF path)" if str(modem) == "300" else ""
+            modem = "robust"
+        errs = self.update_config({"modem": modem, "dx_freq": f"{float(khz) / 1000:.4f}",
+                                   "hf_scan": False, "cat_tune": True})
+        if errs:
+            raise ValueError("; ".join(errs))
+        return f"APRS chat now on {float(khz):g} kHz USB, {modem} modem{note}"
 
     def _can_cat(self):
         tnc = self.tnc
@@ -2389,6 +2559,17 @@ class Station:
 
     def _pick_link(self, call, route):
         """Which radio link a message goes out on: 'A' (main radio), 'B' (second link) or None."""
+        link = self._pick_link_raw(call, route)
+        if link == "A" and self._hf_holds_radio():   # v3.18: HF calling has the main radio
+            if self.tnc2:
+                return "B"
+            if route not in ("rf_is", "is") or not (self.isc and self.isc.verified):
+                raise IOError("the main radio is busy with HF Calling - press USE THIS LINK in HF CALLING, "
+                              "or stop scanning, to send APRS messages on it")
+            return None
+        return link
+
+    def _pick_link_raw(self, call, route):
         if route == "smart":
             route = "rf"
         if route == "auto":
@@ -2899,6 +3080,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path == "/api/chat":
             self._json(STATION.chat.state() if STATION.chat else {"seq": 0, "peers": [], "events": [], "off": True})
+        elif path == "/api/hf":
+            self._json(STATION.hf_state())
         elif path == "/api/freqs":
             self._json([{"value": v, "label": l} for v, l in tncmod.APRS_FREQS])
         elif path == "/api/rx":
@@ -3053,6 +3236,13 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._json({"ok": False, "errors": [str(e)]})
             self._json({"ok": True, "fp": fp})
+        elif path == "/api/hf":
+            b = self._body()
+            try:
+                msg = STATION.hf_action(b)
+            except (ValueError, IOError) as e:
+                return self._json({"ok": False, "errors": [str(e)]})
+            return self._json({"ok": True, "msg": msg, "hf": STATION.hf_state()})
         elif path == "/api/chat":
             if not (STATION.running and STATION.chat):
                 return self._json({"ok": False, "errors": ["Turn the station ON first."]})

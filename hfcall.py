@@ -148,6 +148,10 @@ def silence(sec, rate):
 SC_BAUD = 100.0
 SC_Y = 1615.0                 # Y = binary 1 (lower tone)
 SC_B = 1785.0                 # B = binary 0 (higher tone)
+# Tone pairs (Y = 1, B = 0). "dsc": ITU-R M.493 marine pair. "lm": HF land-mobile / amateur selcall pair
+# 1700 / 1870 Hz (centre 1785 Hz, as listed by HFLINK for amateur CCIR-493-4 selcall). "lm_inv": same pair,
+# opposite polarity - makers differ, so Tradewind listens for all three and can send any of them.
+SC_TONES = {"dsc": (1615.0, 1785.0), "lm": (1700.0, 1870.0), "lm_inv": (1870.0, 1700.0)}
 PH_DX = 125
 PH_RX = [111, 110, 109, 108, 107, 106, 105, 104]
 FS_SELECTIVE = 120
@@ -256,18 +260,19 @@ def selcall_bits(info, ecc, dot_bits=20):
     return bits
 
 
-def selcall_audio(kind, to_id, from_id, rate, level=0.5, preamble_s=0.2, **kw):
+def selcall_audio(kind, to_id, from_id, rate, level=0.5, preamble_s=0.2, tones="dsc", **kw):
     info, ecc = selcall_build(kind, to_id, from_id, **kw)
     bits = selcall_bits(info, ecc, dot_bits=int(preamble_s * SC_BAUD))
-    a = fsk_audio([SC_Y if b else SC_B for b in bits], 1.0 / SC_BAUD, rate, level)
+    ty, tb = SC_TONES.get(tones, SC_TONES["dsc"])
+    a = fsk_audio([ty if b else tb for b in bits], 1.0 / SC_BAUD, rate, level)
     return a
 
 
-def revertive_audio(to_id, from_id, callsign, snr, acked, rate, level=0.5):
+def revertive_audio(to_id, from_id, callsign, snr, acked, rate, level=0.5, tones="dsc"):
     """4-tone revertive chime followed by the link-quality reply frame."""
     chime = tone_seq(REVERTIVE_TONES, 0.15, rate, level)
     frame = selcall_audio("revertive", to_id, from_id, rate, level, preamble_s=0.2,
-                          callsign=callsign, snr=snr, acked=acked)
+                          callsign=callsign, snr=snr, acked=acked, tones=tones)
     return np.concatenate([chime, silence(0.1, rate), frame])
 
 
@@ -322,8 +327,12 @@ class SelcallDecoder:
     SPB = int(RATE / SC_BAUD)          # 80 samples per bit
     STEP = SPB // 8                    # 8 timing phases per bit
 
-    def __init__(self):
+    def __init__(self, tones="dsc"):
         _need_numpy()
+        self.tones = tones
+        lo, hi = sorted(SC_TONES[tones])
+        self.ty, self.tb = lo, hi       # mixers on the low and high tone; polarity handled in decode
+        self.invert = SC_TONES[tones][0] > SC_TONES[tones][1]
         self.done = []                 # absolute sample positions already decoded
 
     NOISE_REF = (800.0, 2600.0)        # clear bins well away from the FSK pair, for the noise level
@@ -331,14 +340,14 @@ class SelcallDecoder:
     def _disc(self, x, ref=False):
         t = np.arange(len(x)) / RATE
         mags = []
-        for f in (SC_Y, SC_B) + (self.NOISE_REF if ref else ()):
+        for f in (self.ty, self.tb) + (self.NOISE_REF if ref else ()):
             z = x * np.exp(-2j * np.pi * f * t)
             c = np.concatenate([[0], np.cumsum(z)])
             m = np.abs(c[self.SPB:] - c[:-self.SPB]) / self.SPB
             mags.append(m[::self.STEP])
         if ref:                        # the two tones are not orthogonal (170 Hz x 10 ms = 1.7 cycles),
             return mags[0], mags[1], (mags[2] ** 2 + mags[3] ** 2) / 2   # so noise comes from the reference bins
-        return mags[0], mags[1]        # 1615 (Y=1), 1785 (B=0)
+        return mags[0], mags[1]        # low tone, high tone
 
     def activity(self, x):
         """Rough: is there 1615/1785 FSK in this audio?"""
@@ -348,8 +357,8 @@ class SelcallDecoder:
         sig = np.maximum(y, b)
         e = np.abs(np.fft.rfft(x * np.hanning(len(x))))
         fr = np.fft.rfftfreq(len(x), 1.0 / RATE)
-        band = e[(fr > 1550) & (fr < 1850)].mean()
-        rest = e[((fr > 400) & (fr < 1450)) | ((fr > 1950) & (fr < 3000))].mean() + 1e-12
+        band = e[(fr > self.ty - 65) & (fr < self.tb + 65)].mean()
+        rest = e[((fr > 400) & (fr < self.ty - 165)) | ((fr > self.tb + 165) & (fr < 3000))].mean() + 1e-12
         return band > 4 * rest and float(np.mean(np.abs(y - b) > 0.5 * sig)) > 0.6
 
     def decode(self, x, base_abs):
@@ -358,7 +367,7 @@ class SelcallDecoder:
         if len(x) < self.SPB * 60:
             return out
         y, b, noisep = self._disc(x, ref=True)
-        d = y - b
+        d = (b - y) if self.invert else (y - b)
         sigp = np.maximum(y, b) ** 2
         best = None
         for p in range(8):
@@ -735,9 +744,13 @@ class AleDecoder:
 # 3. ARINC 714 SELCAL (aviation) - receive only
 # ===========================================================================
 
-SELCAL_TONES = {"A": 312.6, "B": 346.7, "C": 384.6, "D": 426.6, "E": 472.9, "F": 524.8,
+# ASRI designators: the original 16 (A-S) and the SELCAL 32 extension (T-Z, 1-9), asri.aero
+SELCAL_TONES = {"A": 312.6, "B": 346.7, "C": 384.6, "D": 426.6, "E": 473.2, "F": 524.8,
                 "G": 582.1, "H": 645.7, "J": 716.1, "K": 794.3, "L": 881.0, "M": 977.2,
-                "P": 1083.9, "Q": 1202.3, "R": 1333.5, "S": 1479.1}
+                "P": 1083.9, "Q": 1202.3, "R": 1333.5, "S": 1479.1,
+                "T": 329.2, "U": 365.2, "V": 405.0, "W": 449.3, "X": 498.3, "Y": 552.7, "Z": 613.1,
+                "1": 680.0, "2": 754.2, "3": 836.6, "4": 927.9, "5": 1029.2, "6": 1141.6,
+                "7": 1266.2, "8": 1404.4, "9": 1557.8}
 SELCAL_LETTERS = list(SELCAL_TONES)
 
 
@@ -750,7 +763,7 @@ def selcal_encode(code, rate, level=0.4):
     """Test / training audio for a SELCAL code such as 'AB-CD' (never transmitted)."""
     _need_numpy()
     if not selcal_code_ok(code):
-        raise ValueError("SELCAL code: 4 different letters from A-H, J-M, P-S, e.g. AB-CD")
+        raise ValueError("SELCAL code: 4 different designators (A-H, J-M, P-Z, 1-9), e.g. AB-CD")
     c = str(code).upper().replace("-", "")
     t = np.arange(int(rate * 1.0)) / rate
     parts = []
@@ -761,7 +774,7 @@ def selcal_encode(code, rate, level=0.4):
 
 
 class SelcalDecoder:
-    WIN, HOP = 800, 400                   # 0.1 s windows, 0.05 s hop at 8 kHz
+    WIN, HOP = 1600, 400                  # 0.2 s windows (SELCAL 32 tones are ~5 % apart), 0.05 s hop
 
     def __init__(self):
         _need_numpy()
@@ -772,7 +785,7 @@ class SelcalDecoder:
 
     def decode(self, x, base_abs):
         out = []
-        if len(x) < self.WIN * 30:
+        if len(x) < RATE * 2:
             return out
         fr = np.lib.stride_tricks.sliding_window_view(x.astype(np.float32), self.WIN)[::self.HOP]
         E = np.abs(fr @ self.W) ** 2
@@ -782,7 +795,7 @@ class SelcalDecoder:
         tot = E.sum(1) + 1e-12
         floor = np.percentile(tot, 20) + 1e-12     # quiet frames, even when tones fill much of the buffer
         good = ((e1 + e2) / tot > 0.55) & (e2 > 0.2 * e1) & (tot > 4 * floor)
-        pair = np.where(good, np.minimum(i1, i2) * 16 + np.maximum(i1, i2), -1)
+        pair = np.where(good, np.minimum(i1, i2) * 64 + np.maximum(i1, i2), -1)
         runs, k = [], 0
         while k < len(pair):
             if pair[k] < 0:
@@ -793,12 +806,12 @@ class SelcalDecoder:
                 j += 1
             runs.append((k, j, int(pair[k])))
             k = j
-        pulses = [r for r in runs if 14 <= r[1] - r[0] <= 34]   # 0.7 .. 1.7 s
+        pulses = [r for r in runs if 11 <= r[1] - r[0] <= 34]   # 0.55 .. 1.7 s (0.2 s window shortens runs)
         for a, b in zip(pulses, pulses[1:]):
             gap = (b[0] - a[1]) * self.HOP / RATE
-            if a[2] != b[2] and 0.0 <= gap <= 0.6:
-                code = "".join(SELCAL_LETTERS[a[2] // 16] + SELCAL_LETTERS[a[2] % 16]) + "-" + \
-                       "".join(SELCAL_LETTERS[b[2] // 16] + SELCAL_LETTERS[b[2] % 16])
+            if a[2] != b[2] and -0.1 <= gap <= 0.6:
+                code = SELCAL_LETTERS[a[2] // 64] + SELCAL_LETTERS[a[2] % 64] + "-" + \
+                    SELCAL_LETTERS[b[2] // 64] + SELCAL_LETTERS[b[2] % 64]
                 t_abs = base_abs + a[0] * self.HOP
                 if b[1] >= len(pair) - 2:
                     continue                           # second tone may still be on
@@ -847,6 +860,32 @@ def parse_channels(text):
 # International amateur ALE channels (HFN, USB dial kHz) - verify your band plan and licence.
 HFN_CHANNELS = "3596 80m, 5357 60m, 7102 40m, 10145.5 30m, 14109 20m, 18106 17m, 21096 15m, 24926 12m, 28146 10m"
 
+# Frequency picker (USB dial kHz). Sources, checked Nov 2026: HFLINK channel lists and Micom fill-file table
+# (hflink.com), ARRL (Caribbean ALE relief), Wikipedia "International distress frequency" (HFN emergency
+# voice channels), HFLINK 60 m page, RadioReference MWARA (aviation CAR). Band plans change - check your own.
+HF_PRESETS = [
+    {"group": "ALE - HFN data / sounding (amateur)", "tx": True, "use": "ale", "channels": [
+        (3596.0, "80m HFN"), (5357.0, "60m HFN"), (7102.0, "40m HFN"), (10145.5, "30m HFN"),
+        (14109.0, "20m HFN"), (18106.0, "17m HFN"), (21096.0, "15m HFN"), (24926.0, "12m HFN"),
+        (28146.0, "10m HFN")]},
+    {"group": "Selcall / beacon - HFL voice + emergency relief (amateur)", "tx": True, "use": "selcall", "channels": [
+        (3791.0, "80m relief"), (5371.5, "60m US ALE"), (5403.5, "60m selcall"), (7185.5, "40m common"),
+        (7296.0, "40m R2/R3"), (14346.0, "20m HFL"), (18117.5, "17m relief"), (21432.5, "15m relief"),
+        (24932.0, "12m relief"), (28327.5, "10m selcall")]},
+    {"group": "Aviation SELCAL - Caribbean MWARA (receive only)", "tx": False, "use": "selcal", "channels": [
+        (2887.0, "CAR"), (3455.0, "CAR"), (5520.0, "CAR"), (5550.0, "CAR"), (6577.0, "CAR"), (6586.0, "CAR"),
+        (8846.0, "CAR"), (8918.0, "CAR"), (11330.0, "CAR"), (11396.0, "CAR"), (13297.0, "CAR"),
+        (17907.0, "CAR"), (21985.0, "CAR")]},
+]
+
+
+def presets():
+    """Frequency picker groups, each channel marked with whether Tradewind may transmit there."""
+    return [{"group": g["group"], "use": g["use"],
+             "channels": [{"khz": k, "label": lab, "tx": g["tx"] and amateur_hf(k)} for k, lab in g["channels"]]}
+            for g in HF_PRESETS]
+
+
 # Amateur HF allocations (union of the ITU regions, kHz). Tradewind listens anywhere on HF but only
 # transmits inside these - your own licence and band plan still decide what you may use.
 AMATEUR_HF_KHZ = ((1800, 2000), (3500, 4000), (5330, 5410), (7000, 7300), (10100, 10150), (14000, 14350),
@@ -893,7 +932,12 @@ class HFCenter:
         v = str(cfg.get("hf_ale_variant") or "")
         variant = tuple(c == "1" for c in v) if len(v) == 3 and set(v) <= {"0", "1"} else None
         self.rs = Resampler(self.rate, RATE)
-        self.sc = SelcallDecoder()
+        self.sc_tones = str(cfg.get("hf_selcall_tones") or "lm")
+        if self.sc_tones not in SC_TONES:
+            self.sc_tones = "lm"
+        self.scs = [SelcallDecoder(t) for t in SC_TONES]   # hear every tone pair, send the chosen one
+        self.sc = self.scs[0]
+        self._sc_seen = {}
         self.ale = AleDecoder(variant)
         self.selcal = SelcalDecoder()
         self.lock = threading.Lock()
@@ -912,6 +956,8 @@ class HFCenter:
         self.lqa = {}                            # (station, khz) -> record
         self.heard = {}                          # ALE / selcall stations heard
         self.selcals = []
+        self.alerts = []                         # for the face plate's alert sounds: {"n", "kind", "text", "t"}
+        self._alert_n = 0
         self.status = ""
         self.next_sound = self.now() + 60 if self.sound_min else 0
         self.events = 0
@@ -979,11 +1025,17 @@ class HFCenter:
         with self.lock:
             x, base = self.buf.copy(), self.base
         tail = x[-int(RATE * 0.6):] if len(x) > RATE * 0.6 else x
-        if len(tail) > RATE * 0.3 and (self.ale.activity(tail) or self.sc.activity(tail)):
+        if len(tail) > RATE * 0.3 and (self.ale.activity(tail) or any(d.activity(tail) for d in self.scs)):
             self.hold_until = now + self.HOLD_S
         if len(x) > RATE:
-            for fr in self.sc.decode(x, base):
-                self._on_selcall(fr)
+            for d in self.scs:
+                for fr in d.decode(x, base):
+                    key = (fr.get("from"), fr.get("to"), fr.get("kind"))
+                    if abs(self._sc_seen.get(key, -1e12) - fr.get("_abs", 0)) < RATE * 3:
+                        continue                  # the same call heard by a neighbouring tone pair
+                    self._sc_seen[key] = fr.get("_abs", 0)
+                    fr["tones"] = d.tones
+                    self._on_selcall(fr)
             for run in self.ale.decode(x, base):
                 self._on_ale(run)
             if self.selcal_on:
@@ -1069,7 +1121,7 @@ class HFCenter:
         pos = self.pos() if kind in ("gps", "emergency") else None
         pre = max(0.2, min(20.0, self.scan_cycle_s() or float(self.cfg.get("hf_preamble_s") or 0.2)))
         a = selcall_audio(kind, to, me, self.rate, preamble_s=pre, callsign=self.call, text=text,
-                          number=number, pos=pos)
+                          number=number, pos=pos, tones=self.sc_tones)
         if to not in ALL_CALL:
             self.pending = {"kind": kind, "to": to, "via": "selcall", "t": self.now(),
                             "khz": khz, "deadline": self.now() + len(a) / self.rate + 25}
@@ -1106,6 +1158,11 @@ class HFCenter:
     def _for_me(self, to_id):
         return to_id in self.ids
 
+    def _alert(self, kind, text):
+        """kind: call | emergency | beacon | revertive | ale_call | linked | sounding | selcal"""
+        self._alert_n += 1
+        self.alerts = ([{"n": self._alert_n, "kind": kind, "text": text, "t": self.now()}] + self.alerts)[:30]
+
     def _on_selcall(self, f):
         now = self.now()
         frm, kind = f["from"], f["kind"]
@@ -1117,6 +1174,7 @@ class HFCenter:
                 self._lqa(frm, p.get("khz") or self.khz, f.get("snr"), f.get("snr_far"), None, "selcall")
                 if p["kind"] != "beacon":
                     self._hist_update(frm, "answered")
+                self._alert("revertive", f"{frm} answered: {f.get('snr_far', '?')} dB there, {f.get('snr', '?')} dB here")
                 self.log("HF", f"{(p['kind'] if p['kind'] != 'beacon' else 'Beacon').upper()} answered by {frm} "
                                f"{f.get('callsign', '')}: heard there at {f.get('snr_far', '?')} dB, "
                                f"here at {f.get('snr', '?')} dB")
@@ -1130,6 +1188,7 @@ class HFCenter:
         self.hold_until = now + 20
         if kind == "beacon":
             self._lqa(frm, self.khz, f.get("snr"), None, None, "selcall")
+            self._alert("beacon", f"Beacon call from {frm} {f.get('callsign', '')}".strip())
         else:
             desc = {"selcall": "Selcall", "emergency": "EMERGENCY call", "page": "Pagecall",
                     "gps": "GPS call", "telcall": "Telcall"}[kind]
@@ -1139,10 +1198,13 @@ class HFCenter:
             if f.get("pos"):
                 extra = (extra + " " if extra else "") + f"at {f['pos'][0]:.3f}, {f['pos'][1]:.3f}"
             self._hist("rx", kind, frm, f["to"], extra, self.khz, f.get("snr"), "received", f.get("callsign", ""))
+            self._alert("emergency" if kind == "emergency" else "call",
+                        f"{desc} from {frm} {f.get('callsign', '')}".strip() + (f": {extra}" if extra else ""))
             self.log("ALERT" if kind == "emergency" else "HF",
                      f"{desc} from {frm} {f.get('callsign', '')}" + (f": {extra}" if extra else ""))
         if self.revertive and f["eos"] == EOS_REQ and f["to"] in self.ids:
-            a = revertive_audio(frm, f["to"], self.call, f.get("snr"), CT[kind], self.rate)
+            a = revertive_audio(frm, f["to"], self.call, f.get("snr"), CT[kind], self.rate,
+                                tones=f.get("tones") or self.sc_tones)   # answer in the caller's tones
             self._auto_send(a, f"revertive to {frm}")
 
     def _on_ale(self, run):
@@ -1159,6 +1221,8 @@ class HFCenter:
             self.heard[frm] = {"station": frm, "callsign": frm, "t": now, "khz": self.khz, "snr": run["snr"],
                                "ber": run["ber"], "via": "ALE " + ("sounding" if not to else "call")}
             self._lqa(frm, self.khz, run["snr"], self._far_snr(msg["text"]), run["ber"], "ale")
+            if not to:
+                self._alert("sounding", f"ALE sounding from {frm}")
         me = to in self.addrs
         p = self.pending
         if me and kind == "TIS" and p and p["via"] == "ale" and p["to"] == frm:
@@ -1170,6 +1234,7 @@ class HFCenter:
         elif me and kind == "TIS":
             self._hist("rx", "ale call", frm, to, msg["text"], self.khz, run["snr"], "incoming", frm)
             self.log("HF", f"ALE call from {frm}" + (f": {msg['text']}" if msg["text"] else ""))
+            self._alert("ale_call", f"ALE call from {frm}" + (f": {msg['text']}" if msg["text"] else ""))
             self.hold_until = now + 30
             if self.ale_respond and self._auto_send(
                     ale_audio(ale_response_words(frm, to, f"SNR{run['snr']:+.0f}"), self.rate,
@@ -1188,6 +1253,7 @@ class HFCenter:
         s["khz"] = self.khz
         self.selcals = ([s] + self.selcals)[:30]
         self.log("HF", f"SELCAL {s['code']}" + (f" on {self.khz:g} kHz" if self.khz else ""))
+        self._alert("selcal", f"Aircraft SELCAL {s['code']}")
 
     @staticmethod
     def _far_snr(text):
@@ -1205,6 +1271,7 @@ class HFCenter:
         m, why = recommend_modem(min(x for x in (snr, snr_far) if x is not None) if (snr is not None or snr_far is not None) else None)
         self.linked["modem"], self.linked["why"] = m, why
         self._hist_update(station, "LINKED")
+        self._alert("linked", f"LINKED with {station}")
         self.log("HF", f"ALE LINKED with {station}" + (f" on {self.khz:g} kHz" if self.khz else "") +
                  f" - {why}")
 
@@ -1263,7 +1330,8 @@ class HFCenter:
                 "holding": now < self.hold_until, "status": self.status, "pending": self.pending,
                 "linked": self.linked, "history": self.history[:50], "lqa": lq,
                 "heard": sorted(self.heard.values(), key=lambda r: -r["t"])[:40],
-                "selcal": self.selcals[:20], "events": self.events,
+                "selcal": self.selcals[:20], "events": self.events, "alerts": self.alerts[:10],
+                "tones": self.sc_tones,
                 "ale_variant": self.variant_learned or ("".join("1" if b else "0" for b in self.ale.variant)
                                                         if self.ale.variant else "")}
 
@@ -1310,6 +1378,11 @@ def selftest(verbose=True):
         a = np.concatenate([silence(0.23, RATE),
                             selcall_audio(kind, "1234", "567890", RATE, callsign="8P5AB", **kw), silence(0.5, RATE)])
         fr = SelcallDecoder().decode(_awgn(a, 6, rng), 0)
+        for tn in ("lm", "lm_inv"):
+            b2 = np.concatenate([silence(0.3, RATE), selcall_audio(kind, "1234", "567890", RATE, callsign="8P5AB",
+                                                                  tones=tn, **kw), silence(0.5, RATE)])
+            f2 = SelcallDecoder(tn).decode(_awgn(b2, 6, rng), 0)
+            assert f2 and f2[0]["kind"] == kind, (tn, kind, f2)
         assert len(fr) == 1, (kind, fr)
         f = fr[0]
         assert (f["kind"], f["to"], f["from"], f["callsign"]) == (kind, "1234", "567890", "8P5AB"), f
@@ -1325,7 +1398,10 @@ def selftest(verbose=True):
     a = np.concatenate([silence(0.5, RATE), selcal_encode("AB-CD", RATE), silence(0.8, RATE)])
     s = SelcalDecoder().decode(_awgn(a, 10, rng), 0)
     assert [x["code"] for x in s] == ["AB-CD"], s
-    say("ARINC SELCAL: AB-CD decoded (receive only)")
+    a = np.concatenate([silence(0.5, RATE), selcal_encode("AT-Y3", RATE), silence(0.8, RATE)])
+    s = SelcalDecoder().decode(_awgn(a, 10, rng), 0)
+    assert [x["code"] for x in s] == ["AT-Y3"], s
+    say("ARINC SELCAL: AB-CD and SELCAL-32 AT-Y3 decoded (receive only)")
 
     # Two stations on a simulated channel: beacon + revertive, ALE call + handshake
     clock = [1000.0]

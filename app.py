@@ -48,7 +48,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.18"
+APP_VERSION = "3.19"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -276,7 +276,7 @@ DEFAULTS = {
     # v3.18 HF Calling: CCIR-493 style selcall (beacon / revertive LQA, page, GPS, emergency), 2G ALE, ARINC SELCAL rx
     "hf_enabled": False, "hf_ids": "", "hf_ale_addrs": "", "hf_channels": "", "hf_scan": False,
     "hf_dwell": 1.0, "hf_far_scans": False, "hf_revertive": True, "hf_ale_respond": True,
-    "hf_selcal": False, "hf_sound_min": 0, "hf_ale_variant": "", "hf_preamble_s": 0,
+    "hf_selcal": False, "hf_selcall_tones": "lm", "hf_sound_min": 0, "hf_ale_variant": "", "hf_preamble_s": 0,
     "cfg_ver": 4,
 }
 SECRET_KEYS = ("com_key", "pin_hash", "pin_salt", "smtp_pass", "imap_pass")   # never sent to the face plate
@@ -675,6 +675,8 @@ def hf_validate(cfg):
             errs.append("ALE sounding: every 30 minutes or more (0 = off) - keep the bands quiet.")
     except (TypeError, ValueError):
         errs.append("ALE sounding interval must be 0-240 minutes.")
+    if str(cfg.get("hf_selcall_tones") or "lm") not in hfmod.SC_TONES:
+        errs.append("Selcall tones: choose 1700/1870 Hz (amateur / land mobile) or 1615/1785 Hz (marine).")
     if cfg.get("hf_scan") and len(chans) < 2:
         errs.append("HF scanning needs at least two channels.")
     return errs
@@ -1585,7 +1587,7 @@ class Station:
 
     def hf_state(self):
         hf = self.hf
-        base = {"hfn": hfmod.HFN_CHANNELS, "enabled": bool(self.cfg.get("hf_enabled")),
+        base = {"hfn": hfmod.HFN_CHANNELS, "presets": hfmod.presets(), "enabled": bool(self.cfg.get("hf_enabled")),
                 "running": getattr(self, "running", False), "holds_radio": self._hf_holds_radio()}
         if not hf:
             base["on"] = False

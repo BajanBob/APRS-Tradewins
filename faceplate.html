@@ -1092,6 +1092,17 @@ details.more summary::-webkit-details-marker{display:none}
         <label>My ALE addresses (blank = my callsign)<input class="inset" data-k="hf_ale_addrs" placeholder="8P6AB" style="width:11em"></label></div>
       <div class="more-row"><label style="flex:1 1 100%">Channels (USB dial kHz, label) <button class="btn" type="button" id="hfc-hfn">FILL HFN AMATEUR ALE CHANNELS</button>
           <input class="inset" data-k="hf_channels" placeholder="7102 40m, 10145.5 30m, 14109 20m" style="width:100%"></label></div>
+      <div class="more-row"><label>Frequency list (from HFLINK, ARRL, ICAO area lists)<select class="inset" id="hfc-preset" style="width:19em"><option value="">- pick a frequency -</option></select></label>
+        <label>or type kHz<input class="inset" id="hfc-manual" type="number" min="1800" max="30000" step="0.5" placeholder="7102" style="width:7em"></label>
+        <button class="btn" type="button" id="hfc-go">GO</button>
+        <button class="btn" type="button" id="hfc-add">ADD TO MY CHANNELS</button></div>
+      <div class="more-row"><label>Selcall tones<select class="inset" data-k="hf_selcall_tones" style="width:17em">
+          <option value="lm">1700 / 1870 Hz - amateur / land mobile (HFLINK)</option>
+          <option value="lm_inv">1700 / 1870 Hz - reversed polarity</option>
+          <option value="dsc">1615 / 1785 Hz - marine M.493 pair (v3.18)</option></select></label>
+        <label class="chk"><input type="checkbox" id="hfc-snd"> Alert sounds</label>
+        <label>Volume<input type="range" id="hfc-vol" min="0" max="100" value="60" style="width:6em"></label>
+        <button class="btn" type="button" id="hfc-test">TEST SOUNDS</button></div>
       <label class="chk" style="margin:4px 0"><input type="checkbox" data-k="hf_scan"> Scan the channels (CAT radio needed) - APRS on the main radio waits while scanning</label>
       <div class="more-row"><label>Dwell per channel (s)<input class="inset" data-k="hf_dwell" data-num type="number" min="0.5" max="10" step="0.5" style="width:5em"></label>
         <label>ALE sounding every (min, 0 = off)<input class="inset" data-k="hf_sound_min" data-num type="number" min="0" max="240" style="width:5em"></label></div>
@@ -2741,7 +2752,7 @@ let drawCom = ()=>{};
 let hfLast = null;
 const hfFmt = v => v===null||v===undefined ? '-' : (v>0?'+':'')+Math.round(v)+' dB';
 function hfRender(h){
-  hfLast = h;
+  hfLast = h; hfFillPresets(h); if (h.on) hfAlerts(h);
   const now = Date.now()/1000, ago = t => { const s = Math.max(0, now-t); return s<90? Math.round(s)+' s' : s<5400? Math.round(s/60)+' min' : Math.round(s/3600)+' h'; };
   if (!h.on){
     $('#hfc-now').textContent = h.enabled ? (h.running ? 'HF Calling did not start - see the log.' : 'Switch the station ON to start HF Calling.') : 'HF Calling is off.';
@@ -2760,8 +2771,51 @@ function hfRender(h){
   $('#hfc-heard').innerHTML = (h.heard||[]).length ? h.heard.slice(0,15).map(r=>`<div class="note">${esc(r.station)}${r.callsign&&r.callsign!==r.station?' ('+esc(r.callsign)+')':''} - ${esc(r.via)} ${r.khz?r.khz+' kHz':''} ${hfFmt(r.snr)} - ${ago(r.t)} ago</div>`).join('') : '<div class="chat-empty">Nothing heard yet.</div>';
   $('#hfc-selcal').innerHTML = (h.selcal||[]).length ? '<div class="note"><b>ARINC SELCAL</b> '+h.selcal.slice(0,8).map(r=>esc(r.code)+' ('+ago(r.t)+')').join(', ')+'</div>' : '';
 }
+// alert sounds (Web Audio): a distinct pattern for each kind of HF event
+let hfAC = null, hfAlertN = null;
+function hfAudio(){ try { hfAC = hfAC || new (window.AudioContext||window.webkitAudioContext)(); if (hfAC.state==='suspended') hfAC.resume(); } catch(e){} return hfAC; }
+document.addEventListener('click', ()=>{ if (hfSoundOn()) hfAudio(); }, {once:true});
+function hfSoundOn(){ return lsGet('tw_hf_snd') !== '0'; }
+function hfVol(){ const v = +(lsGet('tw_hf_vol') || 60); return Math.max(0, Math.min(1, v/100)); }
+const HF_SOUNDS = {
+  call:      [[880,.18],[0,.06],[1175,.18],[0,.25],[880,.18],[0,.06],[1175,.18]],
+  emergency: [[960,.3],[640,.3],[960,.3],[640,.3],[960,.3],[640,.3],[960,.3],[640,.3]],
+  beacon:    [[1500,.12],[0,.05],[1500,.12]],
+  revertive: [[1100,.15],[1400,.15],[1700,.15],[2000,.15]],
+  ale_call:  [[750,.12],[1250,.12],[1750,.12],[2250,.12],[0,.15],[750,.12],[1250,.12],[1750,.12],[2250,.12]],
+  linked:    [[660,.14],[880,.14],[1320,.3]],
+  sounding:  [[1250,.08]],
+  selcal:    [[312.6,.5,346.7],[0,.15],[384.6,.5,426.6]]
+};
+function hfPlay(kind){
+  if (!hfSoundOn()) return; const ac = hfAudio(); if (!ac) return;
+  let t = ac.currentTime + 0.03; const vol = 0.25 * hfVol();
+  for (const [f, d, f2] of (HF_SOUNDS[kind] || HF_SOUNDS.call)){
+    if (f){ for (const fr of (f2 ? [f, f2] : [f])){
+      const o = ac.createOscillator(), g = ac.createGain(), v = vol / (f2 ? 2 : 1); o.type = 'sine'; o.frequency.value = fr;
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v, t + 0.01);
+      g.gain.setValueAtTime(v, t + d - 0.02); g.gain.linearRampToValueAtTime(0, t + d);
+      o.connect(g).connect(ac.destination); o.start(t); o.stop(t + d + 0.02); } }
+    t += d;
+  }
+}
+function hfAlerts(h){
+  const al = h.alerts || [], top = al.length ? al[0].n : 0;
+  if (hfAlertN === null || top < hfAlertN){ hfAlertN = top; return; }   // first look / restart: no old events
+  const fresh = al.filter(a => a.n > hfAlertN); hfAlertN = top;
+  if (!fresh.length) return;
+  const rank = ['sounding','selcal','beacon','revertive','linked','ale_call','call','emergency'];
+  const worst = fresh.reduce((a, b) => rank.indexOf(b.kind) > rank.indexOf(a.kind) ? b : a);
+  hfPlay(worst.kind);
+  if (worst.kind !== 'sounding') toast((worst.kind==='emergency' ? '!! ' : 'HF: ') + worst.text, worst.kind!=='emergency', 7000);
+}
+function hfFillPresets(h){
+  const sel = $('#hfc-preset'); if (!sel || sel._done || !h.presets) return; sel._done = true;
+  sel.innerHTML = '<option value="">- pick a frequency -</option>' + h.presets.map(g => `<optgroup label="${esc(g.group)}">` +
+    g.channels.map(c => `<option value="${c.khz}" data-label="${esc(c.label)}">${c.khz} kHz ${esc(c.label)}${c.tx ? '' : ' (listen only)'}</option>`).join('') + '</optgroup>').join('');
+}
 async function pollHF(){
-  const b = $('#hfc-box'); if (!b || (!b.open && hfLast)) return;
+  const b = $('#hfc-box'); if (!b || (!b.open && hfLast && !hfLast.on)) return;
   try { hfRender(await api('/api/hf')); } catch(e){}
 }
 async function hfDo(body){
@@ -2783,6 +2837,23 @@ function hfInit(){
   $('#hfc-hfn').addEventListener('click', async ()=>{ const h = hfLast || await api('/api/hf'); const el = document.querySelector('[data-k="hf_channels"]');
     el.value = h.hfn; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); toast('HFN channels filled - press SAVE', true); });
   $('#hfc-box').addEventListener('toggle', ()=>{ if ($('#hfc-box').open) pollHF(); });
+  const snd = $('#hfc-snd'), vol = $('#hfc-vol');
+  snd.checked = hfSoundOn(); vol.value = lsGet('tw_hf_vol') || 60;
+  snd.addEventListener('change', ()=>{ try { localStorage.setItem('tw_hf_snd', snd.checked ? '1' : '0'); } catch(e){} if (snd.checked) hfAudio(); });
+  vol.addEventListener('change', ()=>{ try { localStorage.setItem('tw_hf_vol', vol.value); } catch(e){} });
+  $('#hfc-test').addEventListener('click', ()=>{ hfAudio(); const ks = Object.keys(HF_SOUNDS); let i = 0;
+    const next = ()=>{ if (i >= ks.length) return; toast('Sound: ' + ks[i].replace('_',' '), true, 1800); hfPlay(ks[i++]); setTimeout(next, 2600); }; next(); });
+  $('#hfc-preset').addEventListener('change', ()=>{ const v = $('#hfc-preset').value; if (v) $('#hfc-manual').value = v; });
+  const khzIn = () => { const v = parseFloat($('#hfc-manual').value); return v >= 1800 && v <= 30000 ? v : null; };
+  $('#hfc-go').addEventListener('click', ()=>{ const v = khzIn(); if (!v) return toast('Type or pick a frequency, 1800-30000 kHz'); hfDo({action:'tune', khz:v}); });
+  $('#hfc-add').addEventListener('click', ()=>{ const v = khzIn(); if (!v) return toast('Type or pick a frequency first');
+    const o = $('#hfc-preset').selectedOptions[0], lab = (o && +o.value === v && o.dataset.label) ? o.dataset.label.replace(/\s+/g,'') : '';
+    const el = document.querySelector('[data-k="hf_channels"]'), cur = el.value.trim();
+    if (cur.split(',').some(p => parseFloat(p) === v)) return toast('Already in your channels', true);
+    el.value = (cur ? cur + ', ' : '') + v + (lab ? ' ' + lab : '');
+    el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true}));
+    toast(v + ' kHz added - press SAVE', true); });
+
   setInterval(pollHF, 2000);
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hfInit); else hfInit();
@@ -2797,6 +2868,7 @@ const HELP = {
   hf_far_scans:'If the stations you call are scanning, the call needs a longer preamble so their scanner stops on your channel in time.',
   hf_revertive:'When someone sends you a beacon call, answer automatically with the 4-tone revertive and a signal report.',
   hf_ale_respond:'When someone ALE-calls one of your addresses, answer and complete the 3-way handshake automatically.',
+  hf_selcall_tones:'Which tone pair your selcalls use. Tradewind listens for all of them and answers each caller in its own tones. 1700/1870 Hz is the amateur and land-mobile pair listed by HFLINK; 1615/1785 Hz is the marine pair Tradewind v3.18 used.',
   hf_selcal:'Show aircraft ARINC SELCAL codes heard on the channel (receive only - Tradewind never sends SELCAL).',
   call:'Your amateur callsign. Add an SSID if you like: -10 is usual for an internet/iGate station, -9 mobile, -7 handheld.',
   grid:'Your Maidenhead grid square (4 or 6 characters, e.g. GK03fd). Used for your position and for the "near me" list.',

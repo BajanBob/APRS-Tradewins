@@ -87,6 +87,19 @@ type the task) or from a computer (`python tools/venice_bridge.py "task" --send`
 the change, and GitHub puts it on a `venice/...` branch, runs the self-test and opens a pull request for review -
 nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.md](docs/venice/README.md).
 
+## What's new in 3.19: HF alert sounds, frequency picker, amateur selcall tones
+
+- **Alert sounds** on the face plate for each HF event: selcall ring, two-tone emergency siren, beacon blip,
+  the 4-tone revertive, ALE call, LINKED chord, soft sounding tick and aircraft-style SELCAL tones.
+  Switch them on or off and set the volume in HF CALLING; TEST SOUNDS plays them all.
+- **Frequency picker**: pick from HFN ALE channels, HFL voice / emergency-relief channels for selcall and beacon
+  calls, or Caribbean aviation (SELCAL, listen only), or type any kHz. GO tunes the radio; ADD puts it in your
+  channel list. Lists from HFLINK, ARRL and ICAO area tables (checked Nov 2026) - always check your band plan.
+- **Selcall tones**: 1700 / 1870 Hz (the amateur / land-mobile pair HFLINK lists) is now the default. Tradewind
+  listens for that pair in both polarities and for the marine 1615 / 1785 Hz pair, and answers each caller in its tones.
+- **SELCAL 32**: the aircraft SELCAL decoder knows all 32 ASRI tones (T-Z and 1-9 added).
+- **IC-9100**: sound modem on its USB audio CODEC + CI-V 7Ch; Tradewind sets USB-D, filter 1, for HF calling.
+
 ## What's new in 3.18: HF Calling - selcall and ALE
 
 Hail and be hailed on HF the way commercial HF radios do, with an ordinary SSB radio in USB.

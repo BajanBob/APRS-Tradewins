@@ -98,6 +98,10 @@ def test_hf():
     assert app.validate(dict(base, hf_scan=True, hf_channels="7102"))
     assert app.validate(dict(base, hf_sound_min=5))
     assert app.validate(dict(base, tnc="none"))
+    assert app.validate(dict(base, hf_selcall_tones="xyz"))
+    ps = hfcall.presets()
+    assert any(c["khz"] == 14109.0 and c["tx"] for g in ps for c in g["channels"])
+    assert all(not c["tx"] for g in ps if g["use"] == "selcal" for c in g["channels"]), "aviation: listen only"
     assert hfcall.amateur_hf(7102) and hfcall.amateur_hf(14109) and not hfcall.amateur_hf(8291) \
         and not hfcall.amateur_hf(7298.5), "transmit only inside amateur HF bands"
 
@@ -142,10 +146,13 @@ def test_hf():
         raise AssertionError("APRS must not go out on the HF calling radio")
     except IOError:
         pass
-    assert st.hf_state()["on"] and st.hf_state()["hfn"]
+    hs = st.hf_state()
+    assert hs["on"] and hs["hfn"] and hs["presets"] and "alerts" in hs and hs["tones"] == "lm"
+    st.hf._alert("call", "test")
+    assert st.hf_state()["alerts"][0]["kind"] == "call"
     st._hf_stop()
     assert not st.tnc.audio_taps and st.hf is None
-    print("HF Calling ok: selcall, ALE, SELCAL, band guard, station wiring")
+    print("HF Calling ok: selcall (3 tone pairs), ALE, SELCAL 32, presets, alerts, band guard, station wiring")
 
 
 def test_edition():

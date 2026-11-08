@@ -1,4 +1,4 @@
-# HF Calling - selcall and ALE in Tradewind (v3.18)
+# HF Calling - selcall and ALE in Tradewind (v3.18, v3.19)
 
 Tradewind can now hail and be hailed on HF the way commercial HF radios do (Icom, Barrett, Codan, Harris),
 using only the radio's audio and an ordinary SSB rig in USB. Open **HF CALLING - SELCALL & ALE** on the face plate.
@@ -22,6 +22,22 @@ using only the radio's audio and an ordinary SSB rig in USB. Open **HF CALLING -
 
 All calls are clear text and carry your callsign. Tradewind listens anywhere on HF, but transmits only inside the amateur
 HF bands; your licence and band plan decide the rest. ALL-CALL IDs (9999 / 999999) are never auto-answered.
+
+## v3.19 additions
+
+- **Alert sounds** for every HF event (selcall, emergency, beacon, revertive, ALE call, linked, sounding, SELCAL).
+- **Frequency picker** with HFN, HFL / emergency-relief and Caribbean aviation lists, plus manual kHz entry.
+- **Selcall tones**: 1700 / 1870 Hz amateur pair by default; all three tone set-ups are decoded.
+- **SELCAL 32** decode (the 16 newer ASRI tones).
+
+### Using an Icom IC-9100
+
+1. Connect the radio's USB port. In Tradewind: TNC type = sound card, audio in/out = "USB Audio CODEC",
+   PTT = CI-V, address 7C, and the same CI-V baud rate as set in the radio's menu.
+2. In the radio's set mode, make the modulation input for DATA mode the USB port, and set the USB audio
+   level so ALC barely moves (check the IC-9100 manual for the exact menu names).
+3. Tradewind tunes the radio in USB-D, filter 1, for each HF call or channel. Its receiver covers the aviation
+   channels for SELCAL listening; Tradewind never transmits outside the amateur bands.
 
 ## How the modem uses it
 

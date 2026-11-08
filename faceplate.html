@@ -687,6 +687,7 @@ details.more summary::-webkit-details-marker{display:none}
       <button class="tab" data-p="p-wx" role="tab">WEATHER</button>
 <!--TW:COM-TAB-->
       <button class="tab" data-p="p-mail" role="tab">EMAIL</button>
+      <button class="tab" data-p="p-emcomm" role="tab">EMCOMM</button>
     </div>
 
     <div class="pane on" id="p-radio">
@@ -923,6 +924,23 @@ details.more summary::-webkit-details-marker{display:none}
       <div class="set wide note" id="wx-last"></div>
     </div>
 <!--TW:COM-PANE-->
+    <div class="pane" id="p-emcomm">
+      <div class="set wide note" id="emc-status">No disaster session is running.</div>
+      <div class="set wide" style="margin-top:12px"><label>Disaster session</label>
+        <div class="note">Email to and from non-hams (third-party traffic) is only allowed in a disaster. Starting a session is logged; it ends by itself.</div>
+        <div class="more-row" style="margin-top:6px"><input class="inset" id="dis-reason" placeholder="Reason, e.g. Hurricane warning - NEOC activated" style="flex:1">
+        <select class="inset" id="dis-hours" style="width:auto"><option value="12">12 h</option><option value="24" selected>24 h</option><option value="72">72 h</option></select></div>
+        <div class="more-row" style="margin-top:6px"><button class="btn" type="button" id="b-dis-on">START DISASTER SESSION</button><button class="btn" type="button" id="b-dis-off">END IT</button></div></div>
+      <div class="set wide" style="margin-top:12px"><label>Logs and message forms</label>
+        <div class="more-row"><a class="btn" href="/api/commlog.csv" download>DOWNLOAD LOG (ICS-309)</a><span class="note" id="emc-logn"></span></div>
+        <div class="note">Message forms for a net: SITREP, weather observation, forecast relay, damage assessment, shelter status, medical / casualty, resource request, welfare check, net check-in and ICS-213 general message. Open a chat with a station and press FORMS.</div>
+        <div class="note">Store-and-forward and relaying for stations that cannot reach each other: MENU &gt; STATION.</div></div>
+      <div class="set wide" style="margin-top:12px"><label>HF emergency calling</label>
+        <div class="note">HF CALLING has the HFN / HFL emergency-relief channels in its frequency list, EMERGENCY calls with your position (Gale), and standard selcall for Barrett, Codan and Icom radios.</div>
+        <div class="more-row"><button class="btn" type="button" id="b-emc-hf">OPEN HF CALLING</button><button class="btn" type="button" id="b-emc-chat">OPEN TWO-WAY CHAT</button></div></div>
+      <div class="set wide note" style="margin-top:12px">Everything here is clear text on amateur frequencies. Licensed commercial or emergency-services channels with encrypted chat are in the separate Tradewind Commander edition.</div>
+    </div>
+
 
     <div class="pane" id="p-mail">
       <div class="set"><label>Default way to send email</label>
@@ -950,7 +968,7 @@ details.more summary::-webkit-details-marker{display:none}
       <div class="set wide"><label>Callsigns allowed to use this gateway (blank = any amateur callsign)</label><input class="inset" data-k="mail_allowed_calls" placeholder="8P6XX, 8P6RR, J37PGP"></div>
       <div class="set"><label>Emails per callsign per day</label><input class="inset" data-k="mail_per_day" data-num type="number" min="1" max="100"></div>
       <div class="set"><label>Session time limit (minutes)</label><input class="inset" data-k="mail_session_min" data-num type="number" min="2" max="30"></div>
-      <div class="set wide note">Rules: plain text only, up to 500 characters. Ham addresses only (CALL@winlink.org, or a callsign as the mailbox name), unless a disaster session is on (EMAIL panel under the chat) - that is logged and ends by itself. Replies reach a station by radio when the reply's subject starts with its callsign, e.g. "8P6XX-9: on my way".</div>
+      <div class="set wide note">Rules: plain text only, up to 500 characters. Ham addresses only (CALL@winlink.org, or a callsign as the mailbox name), unless a disaster session is on (MENU > EMCOMM) - that is logged and ends by itself. Replies reach a station by radio when the reply's subject starts with its callsign, e.g. "8P6XX-9: on my way".</div>
     </div>
     <div class="drawer-foot">
       <div class="note" id="save-note">Saving restarts the station if it's on.</div>
@@ -1037,11 +1055,7 @@ details.more summary::-webkit-details-marker{display:none}
       <div class="note" id="mail-rule"></div>
       <button class="btn accent" type="button" id="b-mail-send">SEND EMAIL</button>
       <div class="mail-list" id="mail-list"></div>
-      <div class="set wide" style="margin-top:12px"><label>Disaster session (EmComm)</label>
-        <div class="note">Email to and from non-hams (third-party traffic) is only allowed in a disaster. Starting a session is logged; it ends by itself.</div>
-        <div class="more-row" style="margin-top:6px"><input class="inset" id="dis-reason" placeholder="Reason, e.g. Hurricane warning - NEOC activated" style="flex:1">
-        <select class="inset" id="dis-hours" style="width:auto"><option value="12">12 h</option><option value="24" selected>24 h</option><option value="72">72 h</option></select></div>
-        <div class="more-row" style="margin-top:6px"><button class="btn" type="button" id="b-dis-on">START DISASTER SESSION</button><button class="btn" type="button" id="b-dis-off">END IT</button></div></div>
+      <div class="note" style="margin-top:12px">Email to non-hams needs a disaster session: MENU &gt; EMCOMM.</div>
     </details>
     <details class="heard" id="wolf-box">
       <summary>WOLF MODE - DX ON APRS <span id="wolf-n"></span></summary>
@@ -2705,6 +2719,7 @@ function drawHeard(s){
   routeOptions(s);
   const H = s.heard || [];
   $('#heard-n').textContent = H.length ? `(${H.length})` : '';
+  if ($('#emc-logn')) $('#emc-logn').textContent = s.commlog_count ? `${s.commlog_count} message${s.commlog_count==1?'':'s'} logged` : 'No chat messages logged yet';
   $('#commlog-n').textContent = s.commlog_count ? `${s.commlog_count} message${s.commlog_count==1?'':'s'} logged` : 'No chat messages logged yet';
   const T = s.tw || {};
   $('#tw-stats').innerHTML = `<div>Tradewind users today<b>${T.today||0}</b></div><div>This week<b>${T.week||0} ${T.new_week?`<i>+${T.new_week} new</i>`:''}</b></div>`;
@@ -3234,12 +3249,16 @@ $('#b-dis-on').onclick = async ()=>{
   if (!confirm('Start a disaster session? Email to non-hams will be allowed until it ends.')) return;
   await api('/api/disaster', {on:true, hours:$('#dis-hours').value, reason}); poll();
 };
+$('#b-emc-hf').onclick = ()=>{ $('#b-close').click(); const b = $('#hfc-box'); if (b){ b.open = true; b.scrollIntoView({behavior:'smooth'}); } };
+$('#b-emc-chat').onclick = ()=>{ $('#b-close').click(); const c = $('#chat-wrap'); if (c) c.scrollIntoView({behavior:'smooth'}); };
 $('#b-dis-off').onclick = async ()=>{ await api('/api/disaster', {on:false, reason:'ended by operator'}); poll(); };
 function drawMail(s, c){
   const d = s.disaster || {};
   const b = $('#disaster-banner');
   b.classList.toggle('hide', !d.on);
   if (d.on) b.textContent = `DISASTER SESSION ON until ${new Date(d.until*1000).toLocaleString()} - third-party email allowed and logged. ${d.reason||''}`;
+  const es = $('#emc-status');
+  if (es) es.textContent = d.on ? `Disaster session ON until ${new Date(d.until*1000).toLocaleString()}${d.reason ? ' - ' + d.reason : ''}. Third-party email is allowed and logged.` : 'No disaster session is running.';
   const M = (c && c.mail) || [];
   $('#mail-n').textContent = M.length ? `(${M.length})` : '';
   $('#mail-list').innerHTML = M.map(m=>`<span>#${esc(m.id)} to ${esc(m.to)} via ${esc(m.via)} - <b>${esc(m.state)}</b></span>`).join('');

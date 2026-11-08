@@ -92,6 +92,12 @@ nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.
 Where Tradewind and Tradewind Commander are heading - prediction, neural receivers, Gale data modes, gateways and
 licence profiles by grid square, with the research behind each item: [docs/ROADMAP.md](docs/ROADMAP.md).
 
+## 3.22.2: EMCOMM menu tab
+
+- **MENU > EMCOMM** gathers the emergency tools: start / end a disaster session (moved here from the email panel),
+  the ICS-309 log download, the net message forms, and shortcuts to HF CALLING and the two-way chat. All clear text;
+  encrypted licensed-channel messaging stays in Tradewind Commander.
+
 ## 3.22.1: face plate fix
 
 - v3.22's face plate had a JavaScript error (an apostrophe in the new Gale help text), so its buttons and panels

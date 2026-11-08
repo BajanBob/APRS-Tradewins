@@ -48,7 +48,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.19"
+APP_VERSION = "3.20"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -276,7 +276,7 @@ DEFAULTS = {
     # v3.18 HF Calling: CCIR-493 style selcall (beacon / revertive LQA, page, GPS, emergency), 2G ALE, ARINC SELCAL rx
     "hf_enabled": False, "hf_ids": "", "hf_ale_addrs": "", "hf_channels": "", "hf_scan": False,
     "hf_dwell": 1.0, "hf_far_scans": False, "hf_revertive": True, "hf_ale_respond": True,
-    "hf_selcal": False, "hf_selcall_tones": "lm", "hf_sound_min": 0, "hf_ale_variant": "", "hf_preamble_s": 0,
+    "hf_selcal": False, "hf_selcall_tones": "lm", "hf_call_format": "ccir", "hf_ccir_dots_s": 6.0, "hf_cw_id": True, "hf_sound_min": 0, "hf_ale_variant": "", "hf_preamble_s": 0,
     "cfg_ver": 4,
 }
 SECRET_KEYS = ("com_key", "pin_hash", "pin_salt", "smtp_pass", "imap_pass")   # never sent to the face plate
@@ -677,6 +677,13 @@ def hf_validate(cfg):
         errs.append("ALE sounding interval must be 0-240 minutes.")
     if str(cfg.get("hf_selcall_tones") or "lm") not in hfmod.SC_TONES:
         errs.append("Selcall tones: choose 1700/1870 Hz (amateur / land mobile) or 1615/1785 Hz (marine).")
+    if str(cfg.get("hf_call_format") or "ccir") not in ("ccir", "tradewind"):
+        errs.append("Selcall format: standard CCIR 493-4 or Tradewind.")
+    try:
+        if not 0.5 <= float(cfg.get("hf_ccir_dots_s") or 6) <= 20:
+            raise ValueError
+    except (TypeError, ValueError):
+        errs.append("Selcall preamble (dot pattern) must be 0.5-20 seconds; 6 s suits scanning Barrett / Codan radios.")
     if cfg.get("hf_scan") and len(chans) < 2:
         errs.append("HF scanning needs at least two channels.")
     return errs
@@ -1613,7 +1620,10 @@ class Station:
             if kind == "sound":
                 hf.sound_now(khz)
                 return "ALE sounding sent"
-            hf.selcall(kind, to, text=text, number=str(b.get("number") or ""), khz=khz)
+            fmt = str(b.get("fmt") or "") or None
+            if fmt not in (None, "ccir", "tradewind"):
+                raise ValueError("unknown selcall format")
+            hf.selcall(kind, to, text=text, number=str(b.get("number") or ""), khz=khz, fmt=fmt)
             return f"{kind.capitalize()} call to {to} sent"
         if act == "scan":
             on = hf.set_scan(bool(b.get("on")))

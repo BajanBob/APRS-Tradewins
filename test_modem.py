@@ -99,6 +99,7 @@ def test_hf():
     assert app.validate(dict(base, hf_sound_min=5))
     assert app.validate(dict(base, tnc="none"))
     assert app.validate(dict(base, hf_selcall_tones="xyz"))
+    assert app.validate(dict(base, hf_call_format="oem")) and app.validate(dict(base, hf_ccir_dots_s=40))
     ps = hfcall.presets()
     assert any(c["khz"] == 14109.0 and c["tx"] for g in ps for c in g["channels"])
     assert all(not c["tx"] for g in ps if g["use"] == "selcal" for c in g["channels"]), "aviation: listen only"
@@ -133,7 +134,13 @@ def test_hf():
     assert st.tnc.tuned[-1] == (7102000, "usb")
     st.hf_action({"action": "call", "kind": "beacon", "to": "5678"})
     st.hf_action({"action": "call", "kind": "ale", "to": "8P6CD"})
-    assert len(st.tnc.sent) == 2
+    st.hf_action({"action": "call", "kind": "beacon", "to": "336699", "fmt": "ccir"})
+    try:
+        st.hf_action({"action": "call", "kind": "page", "to": "336699", "text": "hi", "fmt": "ccir"})
+        raise AssertionError("page calls need the Tradewind format")
+    except ValueError:
+        pass
+    assert len(st.tnc.sent) == 3
     st.hf.tune_to(8291)                                  # a non-amateur channel: listen only
     try:
         st.hf_action({"action": "call", "kind": "selcall", "to": "5678"})
@@ -152,7 +159,7 @@ def test_hf():
     assert st.hf_state()["alerts"][0]["kind"] == "call"
     st._hf_stop()
     assert not st.tnc.audio_taps and st.hf is None
-    print("HF Calling ok: selcall (3 tone pairs), ALE, SELCAL 32, presets, alerts, band guard, station wiring")
+    print("HF Calling ok: CCIR 493-4 + Tradewind selcall, ALE, SELCAL 32, presets, alerts, band guard, station wiring")
 
 
 def test_edition():

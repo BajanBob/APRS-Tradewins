@@ -87,6 +87,18 @@ type the task) or from a computer (`python tools/venice_bridge.py "task" --send`
 the change, and GitHub puts it on a `venice/...` branch, runs the self-test and opens a pull request for review -
 nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.md](docs/venice/README.md).
 
+## What's new in 3.20: standard CCIR 493-4 selcall with Barrett, Codan, Icom - and call pop-ups
+
+- **Standard 4 and 6 digit selcall (CCIR 493-4 land mobile)**, the format built into Barrett, Codan, Icom and
+  similar HF radios: Tradewind now decodes their **Selcall, Beacon (format 123) and Beacon-99 calls** to your ID
+  (e.g. 115555) and acknowledges them, and can **send Selcall and Beacon calls to those radios**. The frame follows
+  the published worked example (GM4SLV) exactly; tones 1700 / 1870 Hz. A Morse callsign ID follows each standard call.
+- The **Tradewind format** stays for Tradewind-to-Tradewind calls with callsign, signal report, page text, GPS,
+  emergency and telcall. Pick per call, or set the default; incoming calls in either format are always decoded.
+- **Pop-up and flashing screen** for selcalls, beacon calls, ALE calls, LINKED and emergencies, plus optional desktop
+  notifications, phone vibration and a blinking browser tab. The flashing stops for "reduce motion" settings.
+- Fixed a face-plate start-up error that stopped some later settings handlers in the amateur edition.
+
 ## What's new in 3.19: HF alert sounds, frequency picker, amateur selcall tones
 
 - **Alert sounds** on the face plate for each HF event: selcall ring, two-tone emergency siren, beacon blip,

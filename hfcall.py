@@ -148,10 +148,10 @@ def silence(sec, rate):
 SC_BAUD = 100.0
 SC_Y = 1615.0                 # Y = binary 1 (lower tone)
 SC_B = 1785.0                 # B = binary 0 (higher tone)
-# Tone pairs (Y = 1, B = 0). "dsc": ITU-R M.493 marine pair. "lm": HF land-mobile / amateur selcall pair
-# 1700 / 1870 Hz (centre 1785 Hz, as listed by HFLINK for amateur CCIR-493-4 selcall). "lm_inv": same pair,
-# opposite polarity - makers differ, so Tradewind listens for all three and can send any of them.
-SC_TONES = {"dsc": (1615.0, 1785.0), "lm": (1700.0, 1870.0), "lm_inv": (1870.0, 1700.0)}
+# Tone pairs (Y = 1, B = 0). "dsc": ITU-R M.493 marine pair. "lm": HF land-mobile / amateur CCIR 493-4 selcall
+# (Barrett / Codan style): 1700 Hz = 0, 1870 Hz = 1, centre 1785 Hz (HFLINK; GM4SLV "CCIR 493-4 HF Selcall").
+# "lm_inv": the same pair with the opposite polarity. Tradewind listens for all of them and can send any.
+SC_TONES = {"dsc": (1615.0, 1785.0), "lm": (1870.0, 1700.0), "lm_inv": (1700.0, 1870.0)}
 PH_DX = 125
 PH_RX = [111, 110, 109, 108, 107, 106, 105, 104]
 FS_SELECTIVE = 120
@@ -258,6 +258,68 @@ def selcall_bits(info, ecc, dot_bits=20):
     for a, b in zip(dx, rx):
         bits += _char_bits(a) + _char_bits(b)
     return bits
+
+
+# ---- Standard CCIR 493-4 HF land-mobile selcall (the 4 / 6 digit calls of Barrett, Codan, Icom ...)
+# Message (GM4SLV worked example): FORMAT ADDRESS CATEGORY SELF-ID EOS EOS EOS, e.g. 120 036 002 100 037 001 117x3
+# Phasing: DX 125 x6 against RX 109..104; RX then repeats the message two pairs later, padded with 120 120.
+# No callsign or ECC in the standard frame, so Tradewind follows it with a short Morse ID of the callsign.
+CCIR_SELCALL, CCIR_BEACON = 120, 123
+CCIR_PH_RX = [109, 108, 107, 106, 105, 104]
+CCIR_STATUS = 103
+
+
+def ccir_message(kind, to_id, from_id, eos=EOS_REQ):
+    if kind not in ("selcall", "beacon", "ack", "status"):
+        raise ValueError("Standard CCIR selcall carries Selcall and Beacon calls; use the Tradewind format "
+                         "for page, GPS, emergency and telcall")
+    if not selcall_id_ok(to_id) or not selcall_id_ok(from_id):
+        raise ValueError("selcall IDs must be 4 or 6 digits")
+    fmt = CCIR_BEACON if kind == "beacon" else CCIR_SELCALL
+    extra = [CCIR_STATUS, CCIR_STATUS] if kind == "status" else []
+    end = EOS_ACK if kind == "ack" else eos
+    return [fmt] + _id_syms(to_id) + [CAT_ROUTINE] + _id_syms(from_id) + extra + [end] * 3
+
+
+def ccir_bits(msg, dot_s=6.0):
+    dx = [PH_DX] * 6 + msg
+    rx = CCIR_PH_RX + [CCIR_SELCALL, CCIR_SELCALL] + msg[:-2]
+    bits = [1 - (i & 1) for i in range(max(2, int(dot_s * SC_BAUD)))]
+    for a, b in zip(dx, rx):
+        bits += _char_bits(a) + _char_bits(b)
+    return bits
+
+
+MORSE = {"A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".", "F": "..-.", "G": "--.", "H": "....",
+         "I": "..", "J": ".---", "K": "-.-", "L": ".-..", "M": "--", "N": "-.", "O": "---", "P": ".--.",
+         "Q": "--.-", "R": ".-.", "S": "...", "T": "-", "U": "..-", "V": "...-", "W": ".--", "X": "-..-",
+         "Y": "-.--", "Z": "--..", "0": "-----", "1": ".----", "2": "..---", "3": "...--", "4": "....-",
+         "5": ".....", "6": "-....", "7": "--...", "8": "---..", "9": "----.", "/": "-..-."}
+
+
+def morse_audio(text, rate, wpm=22, hz=800.0, level=0.4):
+    """Plain CW identification (callsign) in the audio passband."""
+    _need_numpy()
+    dit = 1.2 / wpm
+    out = []
+    for word in str(text).upper().split():
+        for ch in word:
+            for el in MORSE.get(ch, ""):
+                n = int(rate * dit * (3 if el == "-" else 1))
+                t = np.arange(n) / rate
+                out += [_ramp(level * np.sin(2 * np.pi * hz * t), rate, 5), np.zeros(int(rate * dit))]
+            out.append(np.zeros(int(rate * dit * 2)))
+        out.append(np.zeros(int(rate * dit * 4)))
+    return np.concatenate(out).astype(np.float32) if out else np.zeros(0, np.float32)
+
+
+def ccir_audio(kind, to_id, from_id, rate, callsign="", dot_s=6.0, tones="lm", level=0.5, cw_id=True):
+    msg = ccir_message(kind, to_id, from_id)
+    ty, tb = SC_TONES.get(tones, SC_TONES["lm"])
+    a = fsk_audio([ty if b else tb for b in ccir_bits(msg, dot_s)], 1.0 / SC_BAUD, rate, level)
+    if cw_id and callsign:
+        a = np.concatenate([a, silence(0.3, rate), morse_audio(callsign, rate)])
+    return a
 
 
 def selcall_audio(kind, to_id, from_id, rate, level=0.5, preamble_s=0.2, tones="dsc", **kw):
@@ -440,6 +502,86 @@ class SelcallDecoder:
             if j > 200:
                 return None
             j += 1
+
+
+class CcirDecoder(SelcallDecoder):
+    """Standard CCIR 493-4 land-mobile selcall frames (Barrett / Codan / Icom 4 and 6 digit)."""
+
+    def decode(self, x, base_abs):
+        out = []
+        if len(x) < self.SPB * 40:
+            return out
+        y, b, noisep = self._disc(x, ref=True)
+        d = (b - y) if self.invert else (y - b)
+        sigp = np.maximum(y, b) ** 2
+        zeros_t = 7 - np.array([bin(v).count("1") for v in range(128)])
+        for p in range(8):
+            bits = (d[p::8] > 0).astype(np.int64)
+            if len(bits) < 150:
+                continue
+            w = np.lib.stride_tricks.sliding_window_view(bits, 10)
+            info = w[:, :7] @ (1 << np.arange(7))
+            chk = w[:, 7] * 4 + w[:, 8] * 2 + w[:, 9]
+            ch = np.where(chk == zeros_t[info], info, -1)
+            L = len(ch)
+            g = lambda i: int(ch[i]) if 0 <= i < L else -1
+            for n in np.nonzero(ch == 104)[0]:
+                n = int(n)
+                if g(n - 10) != PH_DX:
+                    continue                             # (a Tradewind frame has its FS here, not phasing)
+                score = sum(g(n - 20 * i) == 104 + i for i in range(1, 6)) + \
+                    sum(g(n - 10 - 20 * i) == PH_DX for i in range(0, 6)) + (g(n + 20) == CCIR_SELCALL)
+                if score < 4:
+                    continue
+                msg, i = [], 0
+                while i < 16:
+                    dx, rx = g(n + 10 + 20 * i), g(n + 60 + 20 * i)
+                    if n + 60 + 20 * i >= L and dx < 0:
+                        msg = None                       # not all here yet
+                        break
+                    v = dx if dx >= 0 else rx
+                    msg.append(v)
+                    if v in EOS_SET and len(msg) >= 6:
+                        break
+                    i += 1
+                f = self._parse(msg) if msg else None
+                if not f:
+                    continue
+                start_abs = base_abs + (n * 8 + p) * self.STEP
+                if any(abs(start_abs - s0) < self.SPB * 40 for s0 in self.done):
+                    continue
+                lo = max(0, (n - 120) * 8)
+                m = (min(len(sigp), (n + 20 * len(msg) + 60) * 8) - lo) // 8 * 8
+                if m > 0:
+                    S = sigp[lo:lo + m].reshape(-1, 8).mean(0)
+                    Nn = noisep[lo:lo + m].reshape(-1, 8).mean(0) + 1e-12
+                    f["snr"] = round(10 * math.log10(max(float(np.max(S / Nn)) - 1, 1e-3)) - 10 * math.log10(25), 1)
+                f["_abs"] = start_abs
+                self.done = (self.done + [start_abs])[-50:]
+                out.append(f)
+        return out
+
+    @staticmethod
+    def _parse(m):
+        if len(m) < 6 or m[0] not in (CCIR_SELCALL, CCIR_BEACON) or CAT_ROUTINE not in m[1:5] \
+                and CAT_URGENT not in m[1:5]:
+            return None
+        k = next(i for i in range(1, 5) if m[i] in (CAT_ROUTINE, CAT_URGENT, CAT_SAFETY))
+        to = m[1:k]
+        rest = m[k + 1:]
+        j = next((i for i, v in enumerate(rest) if v >= 100), None)
+        if j is None or len(to) not in (2, 3) or j not in (2, 3) or any(v < 0 or v > 99 for v in to + rest[:j]):
+            return None
+        frm, tail = rest[:j], rest[j:]
+        status = tail[:2] == [CCIR_STATUS, CCIR_STATUS]
+        eos = tail[2] if status and len(tail) > 2 else tail[0]
+        if eos not in EOS_SET:
+            return None
+        to_s, fr_s = _syms_id(to), _syms_id(frm)
+        kind = "beacon" if m[0] == CCIR_BEACON else ("ack" if eos == EOS_ACK else
+                                                       "status" if status else
+                                                       "beacon99" if to_s.endswith("99") else "selcall")
+        return {"std": "ccir", "kind": kind, "to": to_s, "from": fr_s, "eos": eos, "fmt": m[0], "callsign": ""}
 
 
 # ===========================================================================
@@ -937,6 +1079,11 @@ class HFCenter:
             self.sc_tones = "lm"
         self.scs = [SelcallDecoder(t) for t in SC_TONES]   # hear every tone pair, send the chosen one
         self.sc = self.scs[0]
+        self.ccirs = [CcirDecoder(t) for t in SC_TONES]  # standard 4 / 6 digit land-mobile selcall
+        self.call_format = str(cfg.get("hf_call_format") or "ccir")
+        self.ccir_dots = max(0.5, min(20.0, float(cfg.get("hf_ccir_dots_s") or 6.0)))
+        self.cw_id = bool(cfg.get("hf_cw_id", True))
+        self.ccir_peers = set()                  # stations heard using the standard format
         self._sc_seen = {}
         self.ale = AleDecoder(variant)
         self.selcal = SelcalDecoder()
@@ -1036,6 +1183,14 @@ class HFCenter:
                     self._sc_seen[key] = fr.get("_abs", 0)
                     fr["tones"] = d.tones
                     self._on_selcall(fr)
+            for d in self.ccirs:
+                for fr in d.decode(x, base):
+                    key = ("ccir", fr["from"], fr["to"], fr["kind"])
+                    if abs(self._sc_seen.get(key, -1e12) - fr["_abs"]) < RATE * 5:
+                        continue
+                    self._sc_seen[key] = fr["_abs"]
+                    fr["tones"] = d.tones
+                    self._on_ccir(fr)
             for run in self.ale.decode(x, base):
                 self._on_ale(run)
             if self.selcal_on:
@@ -1108,14 +1263,19 @@ class HFCenter:
         return self.ids[0]
 
     # ---- outgoing calls
-    def selcall(self, kind, to, text="", number="", khz=None):
-        """Selcall / beacon / emergency / page / gps / telcall to a 4- or 6-digit ID."""
+    def selcall(self, kind, to, text="", number="", khz=None, fmt=None):
+        """Selcall / beacon / emergency / page / gps / telcall to a 4- or 6-digit ID.
+        fmt "ccir": standard CCIR 493-4 frame any Barrett / Codan / Icom selcall radio decodes (selcall, beacon);
+        fmt "tradewind": Tradewind's own frame with callsign, signal report, page text, GPS, emergency, telcall."""
         me = self._my_id()
         to = str(to).strip()
         if kind not in ("selcall", "beacon", "emergency", "page", "gps", "telcall"):
             raise ValueError("unknown HF call type")
         if not selcall_id_ok(to):
             raise ValueError("Call a 4 or 6 digit selcall ID")
+        fmt = fmt or ("ccir" if to in self.ccir_peers else self.call_format)
+        if fmt == "ccir":
+            return self._ccir_call(kind, to, khz)
         khz = khz or self.best_channel(to) or self.khz
         self._go_channel(khz)
         pos = self.pos() if kind in ("gps", "emergency") else None
@@ -1130,6 +1290,63 @@ class HFCenter:
                        "sent" if to in ALL_CALL else "waiting for answer")
         self._send(a, f"{kind.upper()} to {to}" + (f" on {khz:g} kHz" if khz else ""))
         return True
+
+    def _id_for(self, to):
+        """Own ID of the same length as the called one (4-digit radios cannot decode 6-digit IDs)."""
+        same = [i for i in self.ids if len(i) == len(to)]
+        return same[0] if same else self._my_id()
+
+    def _ccir_call(self, kind, to, khz=None):
+        if kind not in ("selcall", "beacon"):
+            raise ValueError("Barrett / Codan / Icom radios get Selcall and Beacon calls in the standard format. "
+                             "Choose the Tradewind format for page, GPS, emergency and telcall to Tradewind stations.")
+        me = self._id_for(to)
+        khz = khz or self.best_channel(to) or self.khz
+        self._go_channel(khz)
+        dots = max(self.ccir_dots, self.scan_cycle_s() or 0)
+        a = ccir_audio(kind, to, me, self.rate, callsign=self.call, dot_s=min(dots, 20.0),
+                       tones=self.sc_tones if self.sc_tones != "dsc" else "lm", cw_id=self.cw_id)
+        if to not in ALL_CALL and not to.endswith("99"):
+            self.pending = {"kind": kind, "to": to, "via": "ccir", "t": self.now(), "khz": khz,
+                            "deadline": self.now() + len(a) / self.rate + 15}
+        self._hist("tx", kind + " (CCIR)", me, to, "", khz, None, "sent - listen for the revertive")
+        self._send(a, f"CCIR {kind.upper()} to {to}" + (f" on {khz:g} kHz" if khz else ""))
+        return True
+
+    def _on_ccir(self, f):
+        """A standard CCIR 493-4 call from any selcall radio."""
+        now = self.now()
+        frm, to, kind = f["from"], f["to"], f["kind"]
+        self.ccir_peers.add(frm)
+        self.heard[frm] = {"station": frm, "callsign": "", "t": now, "khz": self.khz, "snr": f.get("snr"),
+                           "via": "CCIR selcall"}
+        p = self.pending
+        if kind == "ack" and self._for_me(to) and p and p["to"] == frm:
+            self._lqa(frm, p.get("khz") or self.khz, f.get("snr"), None, None, "ccir")
+            self._hist_update(frm, "acknowledged")
+            self._alert("revertive", f"{frm} acknowledged your {p['kind']}")
+            self.pending = None
+            return
+        mine = self._for_me(to)
+        group = kind == "beacon99" and any(len(i) == len(to) and i[:-2] == to[:-2] for i in self.ids)
+        if not (mine or group):
+            self._hist("rx", kind + " (CCIR)", frm, to, "", self.khz, f.get("snr"), "heard (not for us)")
+            return
+        self.hold_until = now + 20
+        name = {"beacon": "Beacon call", "beacon99": "Beacon-99 call", "selcall": "Selcall",
+                "status": "Status request"}.get(kind, kind)
+        self._lqa(frm, self.khz, f.get("snr"), None, None, "ccir")
+        self._hist("rx", kind + " (CCIR)", frm, to, "", self.khz, f.get("snr"), "received")
+        self._alert("call" if kind == "selcall" else "beacon",
+                    f"{name} from {frm} to {to}" + (f" ({f['snr']:+.0f} dB)" if f.get("snr") is not None else ""))
+        self.log("HF", f"CCIR {name} from {frm} to {to}" + (f" on {self.khz:g} kHz" if self.khz else ""))
+        if self.revertive and f["eos"] == EOS_REQ and mine and kind in ("selcall", "beacon", "status"):
+            ack = ccir_message("ack", frm, to)
+            ty, tb = SC_TONES.get(f.get("tones") or "lm")
+            a = fsk_audio([ty if b else tb for b in ccir_bits(ack, 0.5)], 1.0 / SC_BAUD, self.rate, 0.5)
+            if self.cw_id and self.call:
+                a = np.concatenate([a, silence(0.3, self.rate), morse_audio(self.call, self.rate)])
+            self._auto_send(a, f"CCIR acknowledge to {frm}")
 
     def ale_call(self, to, text="", khz=None):
         to = ale_addr(to)
@@ -1279,7 +1496,7 @@ class HFCenter:
         p = self.pending
         if p and now > p["deadline"]:
             self.pending = None
-            if p["via"] in ("selcall", "ale"):
+            if p["via"] in ("selcall", "ale", "ccir"):
                 if p["kind"] != "beacon":
                     self._hist_update(p["to"], "no answer")
                 self.log("HF", f"No answer from {p['to']} ({p['kind']})" +
@@ -1331,7 +1548,7 @@ class HFCenter:
                 "linked": self.linked, "history": self.history[:50], "lqa": lq,
                 "heard": sorted(self.heard.values(), key=lambda r: -r["t"])[:40],
                 "selcal": self.selcals[:20], "events": self.events, "alerts": self.alerts[:10],
-                "tones": self.sc_tones,
+                "tones": self.sc_tones, "call_format": self.call_format, "ccir_peers": sorted(self.ccir_peers),
                 "ale_variant": self.variant_learned or ("".join("1" if b else "0" for b in self.ale.variant)
                                                         if self.ale.variant else "")}
 
@@ -1415,8 +1632,8 @@ def selftest(verbose=True):
         hc._name = name
         return hc
 
-    A = make({"call": "8P5AB", "hf_ids": "1234", "hf_channels": ""}, "A")
-    B = make({"call": "8P6FB", "hf_ids": "5678", "hf_channels": ""}, "B")
+    A = make({"call": "8P5AB", "hf_ids": "1234", "hf_channels": "", "hf_call_format": "tradewind"}, "A")
+    B = make({"call": "8P6FB", "hf_ids": "5678", "hf_channels": "", "hf_call_format": "tradewind"}, "B")
 
     def deliver(src, dst):
         while src._sent:
@@ -1440,6 +1657,27 @@ def selftest(verbose=True):
     assert A.linked and A.linked["station"] == "8P6FB" and B.linked and B.linked["station"] == "8P5AB"
     say(f"Two-station test: beacon + revertive LQA, ALE 3-way handshake LINKED "
         f"({A.linked['why']})")
+    # Standard CCIR 493-4: the GM4SLV worked example, a "Barrett" beacon to 115555, and calls back
+    m = ccir_message("selcall", "3602", "3701")
+    dx, rx = [PH_DX] * 6 + m, CCIR_PH_RX + [120, 120] + m[:-2]
+    assert [v for pr in zip(dx, rx) for v in pr] == [125, 109, 125, 108, 125, 107, 125, 106, 125, 105, 125, 104,
+        120, 120, 36, 120, 2, 120, 100, 36, 37, 2, 1, 100, 117, 37, 117, 1, 117, 117], "GM4SLV example"
+    C = make({"call": "8P5DG", "hf_ids": "115555, 1155", "hf_channels": ""}, "C")
+    for kind, to, frm in (("beacon", "115555", "336699"), ("selcall", "1155", "3701")):
+        C.feed(_awgn(np.concatenate([silence(0.4, RATE), ccir_audio(kind, to, frm, RATE, dot_s=2.0, cw_id=False),
+                                     silence(0.8, RATE)]), 3, rng))
+        C.tick()
+        assert C.alerts and C.alerts[0]["kind"] == ("beacon" if kind == "beacon" else "call") and frm in C.alerts[0]["text"]
+        ack = C._sent.pop()
+        got = CcirDecoder("lm").decode(_awgn(np.concatenate([silence(0.3, RATE), ack, silence(0.5, RATE)]), 5, rng), 0)
+        assert got and got[0]["kind"] == "ack" and got[0]["to"] == frm and got[0]["from"] == to, got
+        clock[0] += 30
+        C.tx_until = 0
+    C.selcall("beacon", "3602")                    # 4-digit target: sent from C's 4-digit ID, CCIR format
+    got = CcirDecoder("lm").decode(_awgn(np.concatenate([silence(0.3, RATE), C._sent.pop()]), 5, rng), 0)
+    assert got and (got[0]["kind"], got[0]["to"], got[0]["from"]) == ("beacon", "3602", "1155"), got
+    say("CCIR 493-4: Barrett/Codan-style beacon to 115555 and selcall to 1155 alerted + acknowledged at +3 dB; "
+        "Tradewind beacon to 3602 in the standard format")
     assert recommend_modem(15)[0] == "300" and recommend_modem(0)[0] == "robust" and \
         recommend_modem(-10)[0] == "robust_dx" and recommend_modem(-20)[0] is None
     assert parse_channels("7102 40m, 10145.5:30m")[1] == {"khz": 10145.5, "label": "30m"}

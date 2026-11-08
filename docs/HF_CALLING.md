@@ -1,4 +1,4 @@
-# HF Calling - selcall and ALE in Tradewind (v3.18, v3.19)
+# HF Calling - selcall and ALE in Tradewind (v3.18 - v3.20)
 
 Tradewind can now hail and be hailed on HF the way commercial HF radios do (Icom, Barrett, Codan, Harris),
 using only the radio's audio and an ordinary SSB rig in USB. Open **HF CALLING - SELCALL & ALE** on the face plate.
@@ -22,6 +22,31 @@ using only the radio's audio and an ordinary SSB rig in USB. Open **HF CALLING -
 
 All calls are clear text and carry your callsign. Tradewind listens anywhere on HF, but transmits only inside the amateur
 HF bands; your licence and band plan decide the rest. ALL-CALL IDs (9999 / 999999) are never auto-answered.
+
+## v3.20: talking to Barrett, Codan and Icom selcall radios
+
+Tradewind speaks two selcall formats:
+
+| | Standard CCIR 493-4 (land mobile) | Tradewind |
+|---|---|---|
+| Works with | Barrett, Codan, Icom and other HF selcall radios | Tradewind stations |
+| Calls | Selcall (120), Beacon (123), Beacon-99, acknowledgement | Selcall, beacon + 4-tone revertive with report, page, GPS, emergency, telcall |
+| Callsign | not in the frame - Tradewind adds a Morse ID | in the frame |
+
+Standard frame (from GM4SLV, "CCIR 493-4 HF Selcall"): 100 baud FSK, 1700 Hz = 0, 1870 Hz = 1, dot pattern
+(6 s default so a scanning radio can stop), phasing DX 125 / RX 109-104, then FORMAT, ADDRESS (2 symbols for
+4 digits, 3 for 6), CATEGORY 100, SELF-ID, EOS 117 x3, each symbol repeated 4 words later for time diversity.
+Example 3701 calling 3602: `120 036 002 100 037 001 117 117 117`.
+
+- **A Barrett beacon to your 115555** pops up a BEACON CALL alert (sound, pop-up, flashing screen if enabled),
+  is logged with its signal level, and gets a standard acknowledgement (EOS 122) plus your Morse ID.
+- **To beacon a Barrett**: MAKE A CALL > Type: Beacon call, Format: Standard CCIR, To: its 4 or 6 digit ID.
+  Tradewind sends from your own ID of the same length (4-digit radios cannot decode 6-digit IDs).
+- **Honest limits**: the 4-digit frame matches the published example bit for bit and is tested in simulated noise.
+  The 6-digit layout (three 2-digit symbols) follows the same pattern but is not yet confirmed against a real
+  6-digit radio, and makers' revertive tone bursts and private extras (Codan / Barrett 6-digit OEM modes,
+  Secure Call, GPS and page calls in their formats) are not included. Please test on air with a real radio.
+- Radio selcall on the amateur bands: check your licence; Tradewind transmits only inside amateur HF bands.
 
 ## v3.19 additions
 

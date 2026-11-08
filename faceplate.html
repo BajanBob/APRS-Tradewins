@@ -513,6 +513,24 @@ details.more summary::-webkit-details-marker{display:none}
 .os-wa{background:#16a34a}.os-fb{background:#1d4ed8}.os-em{background:#475569}
 .share-prev{white-space:pre-wrap;background:#0e1114;border:1px solid var(--edge);border-radius:10px;padding:10px;font:14px/1.4 var(--mono);color:#dbeafe;margin-top:10px}
 #share-qr{display:block;margin:10px auto 0;background:#fff;padding:8px;border-radius:8px}
+/* v3.20 HF call alert: pop-up and flashing screen */
+.hfpop{position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;padding:16px;
+  background:rgba(0,0,0,.72)}
+.hfpop.show{display:flex}
+.hfpop .box{max-width:min(520px,94vw);width:100%;border-radius:14px;padding:22px 20px;text-align:center;
+  background:var(--lcd-bg);border:3px solid var(--amber);color:var(--lcd-glow);font-family:var(--mono);
+  box-shadow:0 0 40px rgba(255,181,71,.45)}
+.hfpop.emg .box{border-color:var(--red);color:#ffd2cc;background:#1c0806;box-shadow:0 0 50px rgba(255,75,62,.6)}
+.hfpop .k{font-family:var(--label);letter-spacing:.12em;font-size:15px;color:var(--engrave-hi)}
+.hfpop .t{font-size:clamp(22px,6vw,34px);margin:10px 0 6px;line-height:1.2;word-break:break-word}
+.hfpop .m{font-size:14px;color:var(--engrave);margin-bottom:16px}
+.hfpop .btn{font-size:16px;padding:10px 22px;margin:4px}
+.hfpop.flash{animation:hfflash .9s steps(2,start) infinite}
+.hfpop.flash.emg{animation-duration:.5s}
+@keyframes hfflash{0%{background:rgba(0,0,0,.72)}50%{background:rgba(255,181,71,.55)}}
+.hfpop.emg.flash{animation-name:hfflashr}
+@keyframes hfflashr{0%{background:rgba(0,0,0,.72)}50%{background:rgba(255,40,30,.6)}}
+@media (prefers-reduced-motion: reduce){ .hfpop.flash, .hfpop.emg.flash{animation:none} }
 </style>
 </head>
 <body>
@@ -1097,9 +1115,18 @@ details.more summary::-webkit-details-marker{display:none}
         <button class="btn" type="button" id="hfc-go">GO</button>
         <button class="btn" type="button" id="hfc-add">ADD TO MY CHANNELS</button></div>
       <div class="more-row"><label>Selcall tones<select class="inset" data-k="hf_selcall_tones" style="width:17em">
-          <option value="lm">1700 / 1870 Hz - amateur / land mobile (HFLINK)</option>
+          <option value="lm">1700 / 1870 Hz - standard (Barrett, Codan, Icom, HFLINK)</option>
           <option value="lm_inv">1700 / 1870 Hz - reversed polarity</option>
-          <option value="dsc">1615 / 1785 Hz - marine M.493 pair (v3.18)</option></select></label>
+          <option value="dsc">1615 / 1785 Hz - marine M.493 pair</option></select></label>
+        <label>Calls go out as<select class="inset" data-k="hf_call_format" style="width:17em">
+          <option value="ccir">Standard CCIR 493-4 (any selcall radio)</option>
+          <option value="tradewind">Tradewind (callsign, report, text, GPS)</option></select></label></div>
+      <div class="more-row"><label>Selcall preamble (s)<input class="inset" data-k="hf_ccir_dots_s" data-num type="number" min="0.5" max="20" step="0.5" style="width:5em"></label>
+        <label class="chk"><input type="checkbox" data-k="hf_cw_id"> Morse callsign ID after standard calls</label>
+        <label class="chk"><input type="checkbox" id="hfc-popup"> Pop-up</label>
+        <label class="chk"><input type="checkbox" id="hfc-flash"> Flash screen</label>
+        <label class="chk"><input type="checkbox" id="hfc-notify"> Desktop notification</label></div>
+      <div class="more-row">
         <label class="chk"><input type="checkbox" id="hfc-snd"> Alert sounds</label>
         <label>Volume<input type="range" id="hfc-vol" min="0" max="100" value="60" style="width:6em"></label>
         <button class="btn" type="button" id="hfc-test">TEST SOUNDS</button></div>
@@ -1121,6 +1148,7 @@ details.more summary::-webkit-details-marker{display:none}
           <option value="telcall">Telcall (phone number - signal only)</option>
           <option value="emergency">EMERGENCY call (with position)</option>
           <option value="sound">ALE sounding (no address)</option></select></label>
+        <label>Format<select class="inset" id="hfc-fmt"><option value="">as set</option><option value="ccir">Standard CCIR</option><option value="tradewind">Tradewind</option></select></label>
         <label>To<input class="inset" id="hfc-to" placeholder="ID or address" maxlength="15" autocomplete="off" style="width:9em"></label>
         <label>Channel<select class="inset" id="hfc-ch" style="width:10em"><option value="">current</option></select></label>
         <label id="hfc-text-l">Text<input class="inset" id="hfc-text" maxlength="60" style="width:12em"></label>
@@ -1171,6 +1199,10 @@ details.more summary::-webkit-details-marker{display:none}
 </div>
 <datalist id="serial-list"></datalist>
 <div class="toast" id="toast" role="status"></div>
+<div class="hfpop" id="hfpop" role="alertdialog" aria-modal="true" aria-labelledby="hfpop-t">
+  <div class="box"><div class="k" id="hfpop-k">HF CALL</div><div class="t" id="hfpop-t"></div><div class="m" id="hfpop-m"></div>
+    <button class="btn" type="button" id="hfpop-ok">OK</button> <button class="btn" type="button" id="hfpop-go">OPEN HF CALLING</button></div>
+</div>
 <div class="wiz" id="wiz" role="dialog" aria-modal="true" aria-labelledby="wiz-title">
   <div class="wiz-card">
     <div class="wiz-step" id="wiz-step">STEP 1 OF 5</div>
@@ -2806,9 +2838,30 @@ function hfAlerts(h){
   if (!fresh.length) return;
   const rank = ['sounding','selcal','beacon','revertive','linked','ale_call','call','emergency'];
   const worst = fresh.reduce((a, b) => rank.indexOf(b.kind) > rank.indexOf(a.kind) ? b : a);
-  hfPlay(worst.kind);
+  hfPlay(worst.kind); hfPopup(worst);
   if (worst.kind !== 'sounding') toast((worst.kind==='emergency' ? '!! ' : 'HF: ') + worst.text, worst.kind!=='emergency', 7000);
 }
+const HF_POP_KINDS = {call:'SELCALL', emergency:'EMERGENCY CALL', beacon:'BEACON CALL', ale_call:'ALE CALL', linked:'ALE LINKED'};
+const lsOn = (k, dflt) => { const v = lsGet(k); return v === null ? dflt : v === '1'; };
+let hfTitle = null, hfTitleT = null;
+function hfPopup(a){
+  const label = HF_POP_KINDS[a.kind]; if (!label) return;
+  const emg = a.kind === 'emergency', pop = $('#hfpop');
+  if (lsOn('tw_hf_popup', true) || emg){
+    $('#hfpop-k').textContent = label + ' - ' + new Date(a.t*1000).toUTCString().slice(17, 25) + ' UTC';
+    $('#hfpop-t').textContent = a.text; $('#hfpop-m').textContent = emg ? 'Distress / urgency - answer on this channel' : 'Tap OK to dismiss';
+    pop.classList.toggle('emg', emg); pop.classList.toggle('flash', lsOn('tw_hf_flash', true) || emg); pop.classList.add('show');
+    try { $('#hfpop-ok').focus(); } catch(e){}
+  }
+  if (lsOn('tw_hf_notify', false) && 'Notification' in window && Notification.permission === 'granted'){
+    try { new Notification('Tradewind ' + label, {body: a.text, tag: 'tw-hf', requireInteraction: emg}); } catch(e){}
+  }
+  try { navigator.vibrate && navigator.vibrate(emg ? [400,150,400,150,400] : [200,100,200]); } catch(e){}
+  if (hfTitle === null) hfTitle = document.title;
+  clearInterval(hfTitleT); let on = false;
+  hfTitleT = setInterval(()=>{ document.title = (on = !on) ? '\u2709 ' + label : hfTitle; }, 900);
+}
+function hfPopClose(){ $('#hfpop').classList.remove('show', 'flash'); clearInterval(hfTitleT); if (hfTitle !== null) document.title = hfTitle; }
 function hfFillPresets(h){
   const sel = $('#hfc-preset'); if (!sel || sel._done || !h.presets) return; sel._done = true;
   sel.innerHTML = '<option value="">- pick a frequency -</option>' + h.presets.map(g => `<optgroup label="${esc(g.group)}">` +
@@ -2830,13 +2883,28 @@ function hfInit(){
   $('#hfc-form').addEventListener('submit', e=>{ e.preventDefault();
     const kind = k.value;
     if (kind==='emergency' && !confirm('Send an EMERGENCY call? Only for a real distress or urgency situation.')) return;
-    hfDo({action:'call', kind, to:$('#hfc-to').value.trim(), text:$('#hfc-text').value, number:$('#hfc-num').value, khz:$('#hfc-ch').value}); });
+    hfDo({action:'call', kind, to:$('#hfc-to').value.trim(), text:$('#hfc-text').value, number:$('#hfc-num').value, khz:$('#hfc-ch').value, fmt:$('#hfc-fmt').value}); });
   $('#hfc-scan').addEventListener('click', ()=> hfDo({action:'scan', on: !(hfLast && hfLast.scan)}));
   $('#hfc-tune').addEventListener('click', ()=>{ const v = $('#hfc-ch').value; if (!v) return toast('Pick a channel first'); hfDo({action:'tune', khz:v}); });
   $('#hfc-use').addEventListener('click', ()=> hfDo({action:'use_link', khz:(hfLast&&hfLast.linked&&hfLast.linked.khz)||$('#hfc-ch').value||''}));
   $('#hfc-hfn').addEventListener('click', async ()=>{ const h = hfLast || await api('/api/hf'); const el = document.querySelector('[data-k="hf_channels"]');
     el.value = h.hfn; el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true})); toast('HFN channels filled - press SAVE', true); });
   $('#hfc-box').addEventListener('toggle', ()=>{ if ($('#hfc-box').open) pollHF(); });
+  $('#hfpop-ok').addEventListener('click', hfPopClose);
+  $('#hfpop-go').addEventListener('click', ()=>{ hfPopClose(); const b = $('#hfc-box'); b.open = true; b.scrollIntoView({behavior:'smooth'}); });
+  document.addEventListener('keydown', e=>{ if (e.key === 'Escape' && $('#hfpop').classList.contains('show')) hfPopClose(); });
+  for (const [id, key, dflt] of [['#hfc-popup','tw_hf_popup',true], ['#hfc-flash','tw_hf_flash',true], ['#hfc-notify','tw_hf_notify',false]]){
+    const el = $(id); el.checked = lsOn(key, dflt);
+    el.addEventListener('change', async ()=>{
+      if (id === '#hfc-notify' && el.checked && 'Notification' in window && Notification.permission !== 'granted'){
+        let ok = 'denied'; try { ok = await Notification.requestPermission(); } catch(e){}
+        if (ok !== 'granted'){ el.checked = false; toast('Notifications need permission (and https or this computer\'s own address)'); }
+      }
+      try { localStorage.setItem(key, el.checked ? '1' : '0'); } catch(e){}
+    });
+  }
+  const fmtSel = $('#hfc-fmt');
+  k.addEventListener('change', ()=>{ if (!['selcall','beacon'].includes(k.value) && fmtSel.value === 'ccir') fmtSel.value = 'tradewind'; });
   const snd = $('#hfc-snd'), vol = $('#hfc-vol');
   snd.checked = hfSoundOn(); vol.value = lsGet('tw_hf_vol') || 60;
   snd.addEventListener('change', ()=>{ try { localStorage.setItem('tw_hf_snd', snd.checked ? '1' : '0'); } catch(e){} if (snd.checked) hfAudio(); });
@@ -2868,6 +2936,9 @@ const HELP = {
   hf_far_scans:'If the stations you call are scanning, the call needs a longer preamble so their scanner stops on your channel in time.',
   hf_revertive:'When someone sends you a beacon call, answer automatically with the 4-tone revertive and a signal report.',
   hf_ale_respond:'When someone ALE-calls one of your addresses, answer and complete the 3-way handshake automatically.',
+  hf_call_format:'Standard CCIR 493-4 is the 4 / 6 digit selcall built into Barrett, Codan, Icom and similar HF radios: Selcall and Beacon calls work with them. The Tradewind format adds your callsign, a signal report, page text, GPS, emergency and telcall, between Tradewind stations. Incoming calls in either format are always decoded.',
+  hf_ccir_dots_s:'How long the dot pattern runs before a standard call. A scanning Barrett or Codan needs time to stop on your channel: 6 s is typical, up to 20 s for long scan lists.',
+  hf_cw_id:'The standard selcall frame carries no callsign, so Tradewind sends your callsign in Morse after it (amateur identification).',
   hf_selcall_tones:'Which tone pair your selcalls use. Tradewind listens for all of them and answers each caller in its own tones. 1700/1870 Hz is the amateur and land-mobile pair listed by HFLINK; 1615/1785 Hz is the marine pair Tradewind v3.18 used.',
   hf_selcal:'Show aircraft ARINC SELCAL codes heard on the channel (receive only - Tradewind never sends SELCAL).',
   call:'Your amateur callsign. Add an SSID if you like: -10 is usual for an internet/iGate station, -9 mobile, -7 handheld.',
@@ -3046,7 +3117,7 @@ $('#f-cattune').onchange = updateVisibility; $('#f-freq').onchange = updateVisib
 ['#f-grid','#f-qsyfreqs'].forEach(k=>$(k).addEventListener('input', zoneNote));
 document.addEventListener('input', e=>{ if (e.target.matches('[data-k],[data-list]')) markDirty(); });
 document.addEventListener('change', e=>{ if (e.target.matches('[data-k],[data-list]')) markDirty(); });
-$('[data-k="com_unit"]').addEventListener('input', e=>{ const p=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); e.target.setSelectionRange(p,p); });
+$('[data-k="com_unit"]') && $('[data-k="com_unit"]').addEventListener('input', e=>{ const p=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); e.target.setSelectionRange(p,p); });
 $('#f-call').addEventListener('input', e=>{ const p=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); e.target.setSelectionRange(p,p); });
 $('#f-grid').addEventListener('blur', e=>{ const v=e.target.value.trim(); e.target.value = v.slice(0,4).toUpperCase()+v.slice(4).toLowerCase(); });
 

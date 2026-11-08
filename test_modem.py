@@ -83,7 +83,19 @@ def main():
     test_edition()
     test_v3171()
     test_hf()
+    test_android_imports()
     print("All self-tests passed")
+
+
+def test_android_imports():
+    """v3.21.1: the Android build has no numpy / sounddevice / pyserial - the app must still start."""
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    code = ("import sys; [sys.modules.__setitem__(m, None) for m in ('numpy', 'sounddevice', 'serial')]; "
+            f"sys.path.insert(0, {here!r}); import app; print(app.APP_VERSION)")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, "app must import without numpy (Android):\n" + r.stderr[-800:]
+    print("Android ok: app starts without numpy, sounddevice or pyserial")
 
 
 def test_hf():

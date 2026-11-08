@@ -29,7 +29,10 @@ import time
 import wave
 import zlib
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:          # Android build: catalogue and Doppler work, the decoders need numpy
+    np = None
 
 C_KM_S = 299792.458
 

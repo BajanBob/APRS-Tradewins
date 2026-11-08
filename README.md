@@ -87,6 +87,11 @@ type the task) or from a computer (`python tools/venice_bridge.py "task" --send`
 the change, and GitHub puts it on a `venice/...` branch, runs the self-test and opens a pull request for review -
 nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.md](docs/venice/README.md).
 
+## 3.21.1: Android fix
+
+- The Android app stopped at start-up with "No module named 'numpy'" (the satellite receiver module needed numpy,
+  which the Android build does not include). It now starts; satellite decoders and HF Calling still need the PC / Pi build.
+
 ## What's new in 3.21: Barrett 2050 testing - 6-digit INT, scan preamble, selcall recordings
 
 - **Barrett INT 1 / INT 2**: Tradewind's standard format is the Barrett "International" protocol, 4-digit (INT 1)

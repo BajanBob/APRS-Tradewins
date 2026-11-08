@@ -87,6 +87,11 @@ type the task) or from a computer (`python tools/venice_bridge.py "task" --send`
 the change, and GitHub puts it on a `venice/...` branch, runs the self-test and opens a pull request for review -
 nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.md](docs/venice/README.md).
 
+## 3.21.2: Android version number
+
+- The Android app now shows its real version (e.g. 3.21.2) instead of 1.0. Each CI build is signed with a new
+  debug key, so **uninstall the old Tradewind before installing a new APK** - otherwise Android keeps the old one.
+
 ## 3.21.1: Android fix
 
 - The Android app stopped at start-up with "No module named 'numpy'" (the satellite receiver module needed numpy,

@@ -19,6 +19,7 @@ android.permissions = INTERNET, ACCESS_NETWORK_STATE, WAKE_LOCK
 android.api = 34
 android.minapi = 24
 android.archs = arm64-v8a
+android.numeric_version = 1
 android.accept_sdk_license = True
 android.allow_backup = True
 

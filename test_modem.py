@@ -84,7 +84,25 @@ def main():
     test_v3171()
     test_hf()
     test_android_imports()
+    test_faceplate_js()
     print("All self-tests passed")
+
+
+def test_faceplate_js():
+    """v3.22.1: the face plate's JavaScript must parse (a stray apostrophe broke every button in v3.22)."""
+    import shutil
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    node = shutil.which("node")
+    if not node:
+        print("Face plate JS check skipped (Node.js not installed)")
+        return
+    js = ("const h=require('fs').readFileSync(process.argv[1],'utf8');let n=0;"
+          "for(const m of h.matchAll(/<script>([\\s\\S]*?)<\\/script>/g)){new Function(m[1]);n++}"
+          "console.log(n)")
+    r = subprocess.run([node, "-e", js, os.path.join(here, "faceplate.html")], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and int(r.stdout.strip() or 0) >= 1, "face plate JavaScript does not parse:\n" + r.stderr[-600:]
+    print("Face plate ok: JavaScript parses")
 
 
 def test_android_imports():

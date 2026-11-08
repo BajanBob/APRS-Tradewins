@@ -92,6 +92,11 @@ nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.
 Where Tradewind and Tradewind Commander are heading - prediction, neural receivers, Gale data modes, gateways and
 licence profiles by grid square, with the research behind each item: [docs/ROADMAP.md](docs/ROADMAP.md).
 
+## 3.22.1: face plate fix
+
+- v3.22's face plate had a JavaScript error (an apostrophe in the new Gale help text), so its buttons and panels
+  did not work. Fixed, and the test suite now checks that the face plate's JavaScript parses. Use 3.22.1 for testing.
+
 ## What's new in 3.22: Gale - the Tradewind calling mode has a name
 
 Tradewind's own selcall mode is now called **Gale**: an open, documented HF calling and link mode with your

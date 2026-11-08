@@ -87,6 +87,11 @@ type the task) or from a computer (`python tools/venice_bridge.py "task" --send`
 the change, and GitHub puts it on a `venice/...` branch, runs the self-test and opens a pull request for review -
 nothing reaches `main` without a person merging it. Set-up: [docs/venice/README.md](docs/venice/README.md).
 
+## Roadmap
+
+Where Tradewind and Tradewind Commander are heading - prediction, neural receivers, Gale data modes, gateways and
+licence profiles by grid square, with the research behind each item: [docs/ROADMAP.md](docs/ROADMAP.md).
+
 ## What's new in 3.22: Gale - the Tradewind calling mode has a name
 
 Tradewind's own selcall mode is now called **Gale**: an open, documented HF calling and link mode with your

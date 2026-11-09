@@ -35,6 +35,7 @@ import hfcall as hfmod
 import iss as issmod
 import satrx
 import tnc as tncmod
+import translate as trmod
 import vhf_prop_aprs as eng
 import wx
 
@@ -48,7 +49,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.22.2"
+APP_VERSION = "3.23"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -190,6 +191,56 @@ def cached_get(path, url, max_age=None):
 HISTORY_KEEP_S = 48 * 3600
 
 IS_ANDROID = "ANDROID_ARGUMENT" in os.environ or hasattr(sys, "getandroidapilevel")
+UI_LANGS = ("auto", "en", "es", "pt")
+
+
+def _edition_defaults():
+    """Language editions (e.g. Tradewind-3.23-Sh) ship an edition.json next to the app or the .exe
+    with first-run defaults: {"lang": "es", "zone": "ar", "edition": "Sh"}. Saved settings still win."""
+    here = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+    for d in (here, HERE):
+        try:
+            with open(os.path.join(d, "edition.json"), encoding="utf-8") as f:
+                e = json.load(f)
+            return {k: v for k, v in e.items() if k in ("lang", "zone", "edition", "tr_engine")}
+        except (OSError, ValueError):
+            continue
+    return {}
+
+
+EDITION_DEFAULTS = _edition_defaults()
+_I18N_CACHE = {}
+
+
+def i18n_payload(lang):
+    """The face-plate dictionary for a language (i18n/<lang>.json): exact strings, plus patterns
+    with changing parts ("{0} stations heard"). None for English."""
+    if lang not in ("es", "pt"):
+        return None
+    if lang not in _I18N_CACHE:
+        try:
+            with open(os.path.join(HERE, "i18n", lang + ".json"), encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return None
+        exact = {k: v for k, v in d.items() if "{0}" not in k}
+        pat = [[k, v] for k, v in d.items() if "{0}" in k
+               and len(re.sub(r"[^A-Za-z]", "", re.sub(r"\{\d+\}", "", k))) >= 3]     # skip "{0} · {1}"
+        pat.sort(key=lambda kv: -len(re.sub(r"\{\d+\}", "", kv[0])))                   # most specific first
+        _I18N_CACHE[lang] = json.dumps({"lang": lang, "exact": exact, "pat": pat}, ensure_ascii=False)
+    return _I18N_CACHE[lang]
+
+
+def page_lang(cfg, accept=""):
+    lang = str(cfg.get("lang") or "auto")
+    if lang == "auto":
+        for part in str(accept or "").split(","):
+            code = part.split(";")[0].strip().lower()[:2]
+            if code in ("en", "es", "pt"):
+                return code
+        return "en"
+    return lang if lang in UI_LANGS else "en"
+EDITION_TAG = EDITION_DEFAULTS.pop("edition", "")
 
 CALL_RE = re.compile(r"^(?=.*\d)[A-Z0-9]{3,7}(-([0-9]|1[0-5]))?$")
 GRID_RE = re.compile(r"^[A-R]{2}[0-9]{2}([A-X]{2})?$", re.I)
@@ -226,6 +277,9 @@ DEFAULTS = {
     "disaster_on": False, "disaster_until": 0, "disaster_reason": "",
     "share_whatsapp": False, "share_facebook": False, "share_email": False, "share_email_to": "",   # opt-in alert sharing
     "uhf_range": "430-440", "allowed_hosts": "",     # v3.7: 70 cm range on your licence; extra face-plate host names
+    "lang": "auto",                     # v3.23: face-plate language (auto = the browser's language)
+    "tr_engine": "off", "tr_url": "", "tr_key": "", "tr_email": "",   # v3.23: chat translation engine
+    "tr_out": True, "tr_in": True,      # translate my chats to English before sending / others' chats into my language
     "zone": "auto", "qsy_mode": "auto",     # v3.6: band-plan zone from the grid square; chat channels auto or manual
     "qsy_freqs": "144.510,144.530,144.550,144.570,144.590,145.030,145.050,145.070,145.090",   # chat channels, 20 kHz apart            # callsigns whose hails and messages are ignored
     "pin_hash": "", "pin_salt": "", "lock_settings": False,   # station PIN (v3.2)
@@ -478,7 +532,7 @@ def _pin_hash(pin, salt):
 
 
 def load_config():
-    cfg, saved = dict(DEFAULTS), {}
+    cfg, saved = dict(DEFAULTS, **EDITION_DEFAULTS), {}
     if IS_ANDROID:
         cfg.update(tnc="none", preset="aprsis_only", rf_announce=False)
     try:
@@ -547,6 +601,14 @@ def validate(cfg):
             return ["Commercial / EmComm mode is part of Tradewind Commander. This is the amateur edition: clear text only."]
         return comstation.validate_commercial(cfg)
     errs = []
+    if str(cfg.get("lang") or "auto") not in UI_LANGS:
+        errs.append("Choose a language from the list.")
+    if str(cfg.get("tr_engine") or "off") not in trmod.ENGINES:
+        errs.append("Choose a translation engine from the list.")
+    if cfg.get("tr_engine") == "libretranslate" and not re.match(r"^https?://", str(cfg.get("tr_url") or "")):
+        errs.append("LibreTranslate needs its server address, e.g. http://192.168.1.20:5000")
+    if cfg.get("tr_engine") == "deepl" and not str(cfg.get("tr_key") or "").strip():
+        errs.append("DeepL needs your API key (free at deepl.com/pro-api).")
     if IS_ANDROID and cfg.get("tnc") in ("sound", "kiss_serial"):
         errs.append("On Android use 'APRS-IS only' or 'KISS over TCP' - the sound modem and USB/serial radios need the Windows/PC version.")
     call = cfg.get("call", "").upper().strip()
@@ -2665,6 +2727,53 @@ class Station:
         self.add_log("MSG", f"[{'+'.join(sent)}] {c['call']}>{call}: {info[11:]}")
         return link or "IS"
 
+    # ---- v3.23 chat translation (English on the air; each operator reads in their own language) ----
+    def _chat_peer(self, call):
+        chat = self.chat
+        return chat.peers.get(tncmod.norm_call(call)) if chat else None
+
+    def chat_msg_ids(self, call):
+        p = self._chat_peer(call)
+        return {id(m) for m in p["messages"]} if p else set()
+
+    def mark_translated(self, call, before, note):
+        """Keep the operator's original text beside the English that went on the air."""
+        p = self._chat_peer(call)
+        if not p:
+            return
+        with self.chat.lock:
+            new = [m for m in p["messages"] if id(m) not in before and m.get("dir") == "out"]
+            if new:
+                if note.get("error"):
+                    new[0]["tr_err"] = note["error"]
+                else:
+                    new[0].update(orig=note["orig"], tr_from=note["from"], tr_to="en")
+                self.chat.seq += 1
+
+    def translate_incoming(self):
+        """Background worker: translate received chats that are not in the operator's language.
+        Runs off the radio threads, so a slow or unreachable engine never holds up the station."""
+        while True:
+            time.sleep(1.5)
+            chat, cfg = self.chat, self.cfg
+            if not chat or (cfg.get("tr_engine") or "off") == "off" or not cfg.get("tr_in", True):
+                continue
+            with chat.lock:
+                todo = [m for p in chat.peers.values() for m in p["messages"][-30:]
+                        if m.get("dir") == "in" and m.get("kind", "chat") == "chat" and "tr" not in m]
+                for m in todo:
+                    m["tr"] = "..."
+            for m in todo:
+                try:
+                    out, src = trmod.incoming(m.get("text", ""), cfg)
+                    if out and out != m.get("text"):
+                        m.update(tr_text=out, tr_from=src, tr_to=trmod.user_lang(cfg))
+                    m["tr"] = src or ""
+                except Exception as e:
+                    m.update(tr="", tr_err=f"not translated ({e})")
+                with chat.lock:
+                    chat.seq += 1
+
     def set_block(self, call, block):
         call = tncmod.norm_call(call)
         if not tncmod.valid_call(call):
@@ -3059,6 +3168,11 @@ class Handler(BaseHTTPRequestHandler):
                 body = f.read()
             if comui:
                 body = comui.inject(body.decode("utf-8")).encode("utf-8")
+            lang = page_lang(STATION.cfg, self.headers.get("Accept-Language", ""))
+            pay = i18n_payload(lang)
+            if pay:
+                body = body.replace(b"/*TW:I18N*/null", pay.replace("</", "<\\/").encode("utf-8"), 1) \
+                           .replace(b'<html lang="en">', f'<html lang="{lang}">'.encode(), 1)
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -3299,7 +3413,14 @@ class Handler(BaseHTTPRequestHandler):
                 elif act in ("accept", "decline", "end", "read"):
                     getattr(STATION.chat, "mark_read" if act == "read" else act)(call)
                 elif act == "send":
-                    STATION.chat.send(call, str(b.get("text") or ""))
+                    text = str(b.get("text") or "")
+                    sent, note = trmod.outgoing(text, STATION.cfg)     # English on the air (v3.23)
+                    before = STATION.chat_msg_ids(call)
+                    STATION.chat.send(call, sent)
+                    if note:
+                        STATION.mark_translated(call, before, note)
+                        if note.get("error"):
+                            return self._json({"ok": True, "note": note["error"]})
                 else:
                     return self._json({"ok": False, "errors": ["Unknown chat action."]})
             except ValueError as e:
@@ -3348,6 +3469,7 @@ def main():
     ap.add_argument("--demo", metavar="XML", help="replay a saved PSKReporter XML file instead of querying live")
     a = ap.parse_args()
     STATION.demo_xml = a.demo
+    threading.Thread(target=STATION.translate_incoming, name="translate", daemon=True).start()
     try:
         srv = ThreadingHTTPServer((a.host, a.port), Handler)
     except OSError:

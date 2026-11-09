@@ -20,6 +20,7 @@ The Tradewind (amateur) packages never contain the commander/ folder or any encr
 the script checks every file it packs.
 """
 import argparse
+import json
 import os
 import re
 import sys
@@ -28,7 +29,8 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORE = ["app.py", "afsk.py", "digi.py", "dxmode.py", "fx25.py", "hfcall.py", "iss.py", "satrx.py", "tnc.py",
         "vhf_prop_aprs.py", "wx.py", "faceplate.html", "icon.png", "icon.ico", "requirements.txt",
-        "test_modem.py", "install_linux.sh", "README.md", "LICENSE"]
+        "test_modem.py", "install_linux.sh", "README.md", "LICENSE",
+        "translate.py", "i18n/es.json", "i18n/pt.json"]                  # v3.23 languages + chat translation
 ANDROID = ["android_main.py", "buildozer.spec"]
 CRYPTO_MARKS = (b"AESGCM", b"from cryptography", b"import cryptography")
 
@@ -98,6 +100,27 @@ def _add(z, src, arc, ham):
     z.writestr(info, data)
 
 
+# v3.23 language editions: same app, first-run language and band-plan zone, read-me and press release
+LANG_EDITIONS = {
+    "Sh": {"lang": "es", "zone": "ar", "name": "Edición en Español", "press": "docs/press/Tradewind-3.23-Sh-comunicado"},
+    "Pt": {"lang": "pt", "zone": "br", "name": "Edição em Português", "press": "docs/press/Tradewind-3.23-Pt-comunicado"},
+}
+FIRST_LANG = {
+    "es": {
+        "linux": "Tradewind {v} - {name} (Sh) para Linux (Debian, Ubuntu, Mint)\n\n1. Descomprima, abra una terminal en esta carpeta y ejecute:   bash install_linux.sh\n2. Cierre la sesión y vuelva a entrar una vez (permisos de radio / USB) y ejecute:   tradewind\n3. El navegador abre el panel en http://127.0.0.1:8073 , en español y con la zona de Argentina (APRS 144.930).\n",
+        "raspberrypi": "Tradewind {v} - {name} (Sh) para Raspberry Pi (Raspberry Pi OS Bookworm, 64 bits recomendado)\n\n1. Copie esta carpeta a la Pi, abra una terminal en ella y ejecute:\n       bash install_linux.sh --service      arranca al encender, accesible desde los teléfonos de su red\n2. Abra http://<dirección-de-la-pi>:8073 desde un teléfono o PC. Primero fije un PIN (MENÚ > ESTACIÓN).\n",
+        "windows": "Tradewind {v} - {name} (Sh) para Windows 10 / 11\n\nDescomprima la carpeta completa y haga doble clic en {exe}. Se abre una consola y el navegador muestra el panel en español.\nSi SmartScreen avisa de un editor desconocido: Más información > Ejecutar de todas formas (el .exe no está firmado).\nDeje edition.json junto al .exe: es lo que elige el español y la zona de Argentina en el primer arranque.\n",
+        "android": "Tradewind {v} - {name} (Sh) para Android 7 o superior\n\nCopie {apk} al teléfono y tóquelo; permita \"Instalar apps desconocidas\".\nEl panel aparece en el idioma del teléfono (o elíjalo en MENÚ > ESTACIÓN > Idioma).\n",
+    },
+    "pt": {
+        "linux": "Tradewind {v} - {name} (Pt) para Linux (Debian, Ubuntu, Mint)\n\n1. Descompacte, abra um terminal nesta pasta e execute:   bash install_linux.sh\n2. Saia da sessão e entre de novo uma vez (permissões de rádio / USB) e execute:   tradewind\n3. O navegador abre o painel em http://127.0.0.1:8073 , em português e com a zona do Brasil (APRS 145.570).\n",
+        "raspberrypi": "Tradewind {v} - {name} (Pt) para Raspberry Pi (Raspberry Pi OS Bookworm, 64 bits recomendado)\n\n1. Copie esta pasta para o Pi, abra um terminal nela e execute:\n       bash install_linux.sh --service      inicia ao ligar, acessível pelos celulares da sua rede\n2. Abra http://<endereço-do-pi>:8073 num celular ou PC. Primeiro defina um PIN (MENU > ESTAÇÃO).\n",
+        "windows": "Tradewind {v} - {name} (Pt) para Windows 10 / 11\n\nDescompacte a pasta inteira e dê um duplo clique em {exe}. Abre-se um console e o navegador mostra o painel em português.\nSe o SmartScreen avisar de um editor desconhecido: Mais informações > Executar assim mesmo (o .exe não é assinado).\nDeixe o edition.json ao lado do .exe: é ele que escolhe o português e a zona do Brasil na primeira vez.\n",
+        "android": "Tradewind {v} - {name} (Pt) para Android 7 ou superior\n\nCopie {apk} para o celular e toque nele; permita \"Instalar apps desconhecidos\".\nO painel aparece no idioma do celular (ou escolha em MENU > ESTAÇÃO > Idioma).\n",
+    },
+}
+
+
 def _commander_files():
     base = os.path.join(ROOT, "commander")
     for d, dirs, files in os.walk(base):
@@ -108,15 +131,25 @@ def _commander_files():
                 yield p, os.path.relpath(p, ROOT).replace(os.sep, "/")
 
 
-def package(edition, plat, out, v, exe=None, apk=None):
+def package(edition, plat, out, v, exe=None, apk=None, lang_ed=None):
     ham = edition == "ham"
     name = "Tradewind" if ham else "Tradewind Commander"
-    stem = ("Tradewind" if ham else "TradewindCommander") + f"-{v}-{plat}"
+    stem = ("Tradewind" if ham else "TradewindCommander") + f"-{v}-{plat}" + (f"-{lang_ed}" if lang_ed else "")
     top = stem + "/"
     path = os.path.join(out, stem + ".zip")
     cmd = "tradewind" if ham else "tradewind-commander"
     with zipfile.ZipFile(path, "w") as z:
         text = FIRST[plat].format(name=name, v=v, cmd=cmd, exe=os.path.basename(exe or ""), apk=os.path.basename(apk or ""))
+        if lang_ed:
+            ed = LANG_EDITIONS[lang_ed]
+            text = FIRST_LANG[ed["lang"]][plat].format(v=v, name=ed["name"], exe=os.path.basename(exe or ""),
+                                                      apk=os.path.basename(apk or "")) + "\n" + "-" * 60 + "\n\n" + text
+            info = zipfile.ZipInfo(top + "edition.json", date_time=(2026, 11, 9, 0, 0, 0))
+            z.writestr(info, json.dumps({"edition": lang_ed, "lang": ed["lang"], "zone": ed["zone"]}, indent=1))
+            for ext in (".pdf", ".md"):
+                f = os.path.join(ROOT, ed["press"] + ext)
+                if os.path.isfile(f):
+                    _add(z, f, top + os.path.basename(f), ham)
         z.writestr(top + "READ-ME-FIRST.txt", text.replace("\n", "\r\n") if plat.startswith("windows") else text)
         if plat == "windows":
             _add(z, exe, top + os.path.basename(exe), ham)
@@ -143,6 +176,7 @@ def main(argv=None):
     ap.add_argument("--exe", help="CI-built Tradewind.exe to wrap")
     ap.add_argument("--apk", help="CI-built Tradewind.apk to wrap")
     ap.add_argument("--ham-only", action="store_true")
+    ap.add_argument("--no-editions", action="store_true", help="skip the language editions (Sh, Pt)")
     a = ap.parse_args(argv)
     v = version()
     os.makedirs(a.out, exist_ok=True)
@@ -151,6 +185,13 @@ def main(argv=None):
         made.append(package("ham", "windows", a.out, v, exe=a.exe))
     if a.apk:
         made.append(package("ham", "android", a.out, v, apk=a.apk))
+    if not a.no_editions:
+        for ed in LANG_EDITIONS:
+            made += [package("ham", p, a.out, v, lang_ed=ed) for p in ("linux", "raspberrypi")]
+            if a.exe:
+                made.append(package("ham", "windows", a.out, v, exe=a.exe, lang_ed=ed))
+            if a.apk:
+                made.append(package("ham", "android", a.out, v, apk=a.apk, lang_ed=ed))
     if not a.ham_only and os.path.isfile(os.path.join(ROOT, "commander", "__init__.py")):
         made += [package("commander", p, a.out, v) for p in ("linux", "raspberrypi", "windows-kit", "android-kit")]
     for m in made:

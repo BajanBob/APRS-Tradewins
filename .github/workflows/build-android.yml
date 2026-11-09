@@ -29,7 +29,8 @@ jobs:
         run: |
           mkdir -p android_build/src
           cp buildozer.spec android_build/
-          cp app.py afsk.py digi.py dxmode.py fx25.py hfcall.py iss.py satrx.py tnc.py vhf_prop_aprs.py wx.py faceplate.html icon.png android_build/src/
+          cp app.py afsk.py digi.py dxmode.py fx25.py hfcall.py iss.py satrx.py tnc.py vhf_prop_aprs.py wx.py translate.py faceplate.html icon.png android_build/src/
+          mkdir -p android_build/src/i18n && cp i18n/es.json i18n/pt.json android_build/src/i18n/
           cp android_main.py android_build/src/main.py
           # version shown by Android = Tradewind's own version, with a rising version code
           V=$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' app.py)
@@ -75,11 +76,14 @@ jobs:
           APK=$(ls android_build/bin/*.apk | head -n 1)
           echo "Built: $APK"
           cp "$APK" Tradewind.apk
+          python3 tools/build_editions.py --ham-only --apk Tradewind.apk --out editions
 
       - uses: actions/upload-artifact@v4
         with:
           name: Tradewind-android
-          path: Tradewind.apk
+          path: |
+            Tradewind.apk
+            editions/Tradewind-*-android-*.zip
 
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.release_tag != ''
@@ -87,4 +91,6 @@ jobs:
         with:
           tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
           target_commitish: ${{ github.sha }}
-          files: Tradewind.apk
+          files: |
+            Tradewind.apk
+            editions/Tradewind-*-android-*.zip

@@ -6,7 +6,7 @@ version = 1.0
 
 # The GitHub workflow copies the app files into android_build/src before building
 source.dir = src
-source.include_exts = py,html,png
+source.include_exts = py,html,png,json
 
 # Pure-Python on Android: APRS-IS + KISS TCP (no numpy / soundcard / USB serial)
 requirements = python3,certifi

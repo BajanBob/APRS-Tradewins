@@ -337,6 +337,8 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
 .chat-msgs{height:240px;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:6px 2px;margin-bottom:10px}
 .cm{max-width:80%;padding:8px 12px;border-radius:12px;font-size:15px;line-height:1.35;word-break:break-word}
 .cm small{display:block;font:12px var(--mono);opacity:.75;margin-top:3px}
+.cm .trn{display:block;font-size:12px;opacity:.8;margin-top:4px;border-top:1px dashed rgba(255,255,255,.18);padding-top:3px}
+.cm .trn i{font-style:normal;opacity:.9}
 .cm.in{align-self:flex-start;background:#22282e;color:#e6edf3;border-radius:4px 12px 12px 12px}
 .cm.out{align-self:flex-end;background:#0f3b31;color:#dcfff7;border-radius:12px 4px 12px 12px}
 .cm.out.failed{background:#3a1512;color:#ffd9d4}
@@ -803,6 +805,26 @@ details.more summary::-webkit-details-marker{display:none}
     </div>
 
     <div class="pane" id="p-station">
+      <div class="set wide" style="border:1px solid var(--edge);border-radius:10px;padding:10px 12px;background:#11161b">
+        <label style="font-size:13px;letter-spacing:.1em;color:var(--engrave-hi)">LANGUAGE &amp; TRANSLATION</label>
+        <div class="set" style="margin-top:8px"><label>Language / Idioma</label>
+          <select class="inset" data-k="lang" id="f-lang" data-noi18n>
+            <option value="auto">Automatic (browser) / Automático</option>
+            <option value="en">English</option><option value="es">Español</option><option value="pt">Português (Brasil)</option></select></div>
+        <div class="set"><label>Chat translation engine</label>
+          <select class="inset" data-k="tr_engine" id="f-tr-engine">
+            <option value="off">Off - no translation</option>
+            <option value="mymemory">MyMemory - internet, no account</option>
+            <option value="libretranslate">LibreTranslate - your own server (works without internet on your network)</option>
+            <option value="deepl">DeepL - best quality, API key</option>
+            <option value="argos">Argos Translate - fully offline on this computer</option></select></div>
+        <div class="set tr-opt" data-eng="libretranslate"><label>LibreTranslate server</label><input class="inset" data-k="tr_url" placeholder="http://192.168.1.20:5000" autocomplete="off"></div>
+        <div class="set tr-opt" data-eng="libretranslate deepl"><label>API key</label><input class="inset" data-k="tr_key" autocomplete="off"></div>
+        <div class="set tr-opt" data-eng="mymemory"><label>Email for a higher daily limit (optional)</label><input class="inset" data-k="tr_email" autocomplete="off"></div>
+        <div class="set"><label class="chk"><input type="checkbox" data-k="tr_out"> Translate my chats to English before they are sent</label></div>
+        <div class="set"><label class="chk"><input type="checkbox" data-k="tr_in"> Translate chats I receive into my language</label></div>
+        <div class="set wide note">English stays the language on the air, so any station in the world can read you. Your original words stay on screen beside every translation. Machine translation can be wrong: in an emergency, confirm anything important.</div>
+      </div>
       <div class="set wide" style="border:1px solid var(--edge);border-radius:10px;padding:10px 12px;background:#11161b">
         <label style="font-size:13px;letter-spacing:.1em;color:var(--engrave-hi)">GLOBAL OPERATORS MAP</label>
         <div class="set" style="margin-top:8px"><label class="chk"><input type="checkbox" data-k="map_show"> Show me on the global operator map (others see my dot &amp; callsign)</label></div>
@@ -1278,6 +1300,66 @@ details.more summary::-webkit-details-marker{display:none}
 
 
 <script>
+/* ---------- v3.23 languages: the face plate in the operator's language (on-air text stays English) ---------- */
+const I18N = /*TW:I18N*/null;
+const LANGN = {en:'English', es:'Español', pt:'Português', fr:'Français', de:'Deutsch', ru:'Русский', pl:'Polski'};
+const trRe = ((I18N && I18N.pat) || []).map(([k, v])=>{
+  const order = []; let re = '^';
+  k.split(/\{(\d+)\}/).forEach((p, i)=>{ if (i % 2){ re += '(.+?)'; order.push(+p); } else re += p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
+  return [new RegExp(re + '$'), v, order];
+});
+function trT(s){
+  if (!I18N || !s) return s;
+  const m = /^(\s*)([\s\S]*?)(\s*:?\s*)$/.exec(s), core = m[2].replace(/\s+/g, ' ');
+  if (!core || !/[A-Za-z]/.test(core)) return s;
+  let t = I18N.exact[core];
+  if (t === undefined) for (const [re, dst, order] of trRe){
+    const mm = re.exec(core);
+    if (mm){ t = dst.replace(/\{(\d+)\}/g, (_, i)=>{ const k = order.indexOf(+i); return k < 0 ? '' : mm[k + 1]; }); break; }
+  }
+  return t === undefined ? s : m[1] + t + m[3];
+}
+const TR_REJECT = /^(SCRIPT|STYLE|TEXTAREA|CODE|PRE)$/;
+function trSkip(el){
+  for (let e = el; e && e.nodeType === 1; e = e.parentNode) if (TR_REJECT.test(e.tagName) || e.hasAttribute('data-noi18n')) return true;
+  return false;
+}
+function trNode(root){
+  if (!I18N || !root) return;
+  if (root.nodeType === 3){ if (!trSkip(root.parentNode)){ const t = trT(root.data); if (t !== root.data) root.data = t; } return; }
+  if (root.nodeType !== 1 || trSkip(root)) return;
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {acceptNode: n =>
+    n.nodeType === 1 && (TR_REJECT.test(n.tagName) || n.hasAttribute('data-noi18n')) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT});
+  for (let n = root; n; n = w.nextNode()){
+    if (n.nodeType === 3){ const t = trT(n.data); if (t !== n.data) n.data = t; }
+    else for (const a of ['placeholder', 'title', 'aria-label']) if (n.hasAttribute(a)){ const v = n.getAttribute(a), t = trT(v); if (t !== v) n.setAttribute(a, t); }
+  }
+}
+function trStart(){
+  if (!I18N) return;
+  document.documentElement.lang = I18N.lang;
+  document.title = trT(document.title);
+  trNode(document.body);
+  new MutationObserver(ms=>{ for (const m of ms){
+    if (m.type === 'childList') m.addedNodes.forEach(trNode); else trNode(m.target);
+  } }).observe(document.body, {childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['placeholder', 'title', 'aria-label']});
+}
+/* chat translation badge: what went on the air and what was typed / received are both shown */
+function trBadge(m){
+  if (m.tr_err) return `<small class="trn">🌐 <span>${esc(m.tr_err)}</span></small>`;
+  if (m.dir === 'in' && m.tr_text) return `<small class="trn">🌐 <span>Translated from</span> <span>${esc(LANGN[m.tr_from] || m.tr_from)}</span> · <span>original:</span> <i data-noi18n>${esc(m.text)}</i></small>`;
+  if (m.dir === 'out' && m.orig) return `<small class="trn">🌐 <span>Sent in English</span> · <span>you wrote:</span> <i data-noi18n>${esc(m.orig)}</i></small>`;
+  return '';
+}
+document.addEventListener('change', e=>{
+  const k = e.target && e.target.dataset ? e.target.dataset.k : '';
+  if (k === 'lang') save().then(()=>setTimeout(()=>location.reload(), 300));
+  if (k === 'tr_engine') trOpts();
+});
+function trOpts(){
+  const eng = ($('#f-tr-engine') || {}).value || 'off';
+  document.querySelectorAll('.tr-opt').forEach(el=>el.classList.toggle('hide', !el.dataset.eng.split(' ').includes(eng)));
+}
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const REG = {NA:'N.AMER', EU:'EUROPE', LA:'LAT.AM'};
 let cfg = {}, presets = [], logSince = 0, running = false, dirty = false, lastState = null;
@@ -2014,7 +2096,7 @@ async function poll(){
     for (const e of s.log){
       const d = document.createElement('div'); d.className = 'k-'+e.kind;
       const tt = document.createElement('span'); tt.className='t'; tt.textContent = hms(new Date(e.t*1000))+' '+e.kind.padEnd(4)+' ';
-      const tx = document.createElement('span'); tx.innerHTML = callify(e.text);
+      const tx = document.createElement('span'); tx.setAttribute('data-noi18n',''); tx.innerHTML = callify(e.text);
       d.append(tt, tx); mon.append(d);
       logSince = Math.max(logSince, e.id);
       alertFromLog(e);
@@ -2067,7 +2149,9 @@ function chime(){
 const SPOKEN = {NA:'North America', EU:'Europe', LA:'Latin America'};
 function say(text){
   try { if (!('speechSynthesis' in window)) return;
-        const u = new SpeechSynthesisUtterance(text); u.rate = 0.95; speechSynthesis.speak(u); } catch(e){}
+        const t = trT(text), u = new SpeechSynthesisUtterance(t); u.rate = 0.95;
+        if (t !== text && I18N) u.lang = I18N.lang === 'pt' ? 'pt-BR' : I18N.lang;
+        speechSynthesis.speak(u); } catch(e){}
 }
 function alertOpenings(cells){
   const nowOpen = new Set(cells.filter(c=>c.open).map(c=>c.band+':'+c.region));
@@ -2277,7 +2361,7 @@ function alertFromLog(e){
 function drawAlerts(){
   const L = $('#c-alert-list');
   if (!alerts.length){ L.innerHTML = '<div class="c-empty">Alerts, bulletins and chat requests appear here.</div>'; return; }
-  L.innerHTML = alerts.slice(0,8).map(a=>`<div class="c-alert"><span class="k ${a.kind}">${a.kind}</span><div>${esc(a.text)}<small>${hms(new Date(a.t*1000)).slice(0,5)} UTC</small></div></div>`).join('');
+  L.innerHTML = alerts.slice(0,8).map(a=>`<div class="c-alert"><span class="k ${a.kind}">${a.kind}</span><div><span data-noi18n>${esc(a.text)}</span><small>${hms(new Date(a.t*1000)).slice(0,5)} UTC</small></div></div>`).join('');
 }
 const REGION_LONG = {NA:'North America', EU:'Europe', LA:'Latin America'};
 const MODE_TAG = {TEP:'TEP', TROPO:'DUCT', ES:'Es'};
@@ -2574,7 +2658,7 @@ function drawChat(){
     m.state==='relayed' ? ' · with the relay - waiting for delivery' :
     ' · sending…' + (m.tries>1 ? ` (try ${m.tries})` : '')) + (m.link && m.link!=='IS' && (p.links||[]).length>1 ? ` · link ${m.link}` : '');
   const msgs = p.messages.map(m => m.dir==='sys' ? `<div class="cm sys">${hms(new Date(m.t*1000)).slice(0,5)} ${esc(m.text)}</div>` :
-    `<div class="cm ${m.dir} ${m.state==='failed'||m.state==='rejected'?'failed':''}"><span class="who">${m.dir==='in' ? esc(p.call) : 'YOU'}</span>${esc(m.text)}<small>${hms(new Date(m.t*1000)).slice(0,5)}${m.via?' · via '+m.via:''}${icon(m)}${m.error?' · '+esc(m.error):''}</small></div>`).join('');
+    `<div class="cm ${m.dir} ${m.state==='failed'||m.state==='rejected'?'failed':''}"><span class="who">${m.dir==='in' ? esc(p.call) : 'YOU'}</span><span data-noi18n>${esc(m.tr_text || m.text)}</span>${trBadge(m)}<small>${hms(new Date(m.t*1000)).slice(0,5)}${m.via?' · via '+m.via:''}${icon(m)}${m.error?' · '+esc(m.error):''}</small></div>`).join('');
   $('#chat-pane').innerHTML = `<div class="chat-status${ask?' ask pulse':''}"><span><button type="button" class="callk big" data-call="${esc(p.call)}">${esc(p.call)}</button> · ${esc(p.status_text)}${p.via?' · last heard via '+p.via:''}</span><span class="acts">${seg}${acts}</span></div>
     ${lstats}<div class="chat-legend" aria-hidden="true"><span><i style="background:#ef4444"></i>${esc(p.call)}</span><span><i style="background:#3b82f6"></i>You</span></div>
     <div class="chat-msgs" id="chat-msgs" role="log" aria-live="polite">${msgs || '<div class="cm sys">No messages yet</div>'}</div>
@@ -2687,7 +2771,7 @@ function formParts(){
 function drawForm(){
   const f = FORMS.find(x=>x.id===$('#form-pick').value);
   $('#form-fields').innerHTML = f.fields.map(x=>`<label class="${x.w?'w':''}">${x.label}${
-    x.type==='select' ? `<select class="inset" data-f="${x.k}">${x.opts.map(o=>`<option>${o}</option>`).join('')}</select>` :
+    x.type==='select' ? `<select class="inset" data-f="${x.k}">${x.opts.map(o=>`<option value="${esc(o)}">${o}</option>`).join('')}</select>` :
     `<input class="inset" data-f="${x.k}" ${x.type==='num'?'inputmode="numeric"':''} autocomplete="off">`}</label>`).join('');
   previewForm();
 }
@@ -2950,6 +3034,13 @@ function hfInit(){
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hfInit); else hfInit();
 const HELP = {
+  lang:'The language of the face plate. Messages sent on the air stay in English.',
+  tr_engine:'Translates chats: what you type is sent in English, and chats you receive are shown in your language. LibreTranslate on a computer on your own network keeps working when the internet is down.',
+  tr_url:'Address of your LibreTranslate server, e.g. http://192.168.1.20:5000 on a Raspberry Pi at the club or the EOC.',
+  tr_key:'API key for DeepL, or for a hosted LibreTranslate server.',
+  tr_email:'MyMemory allows about 5,000 characters a day without an email address, 50,000 with one.',
+  tr_out:'Your chats are translated to English before they are transmitted. Your original text stays on your screen.',
+  tr_in:'Chats in another language are translated into yours before they are shown, with the original underneath.',
   hf_enabled:'HF Calling: Tradewind decodes HF selective calls (CCIR-493 style selcall, 100 baud FSK) and 2G ALE (8-FSK, MIL-STD-188-141) from the radio audio, answers calls to your IDs, and measures link quality so you know which channel and data mode to use. Needs the built-in sound modem and an SSB radio in USB.',
   hf_ids:'Your own selcall IDs - 4 or 6 digits, up to 10, separated by commas. The first is the one you call from.',
   hf_ale_addrs:'Your ALE addresses (letters and digits, up to 15). Blank uses your callsign, which is the amateur HFN practice.',
@@ -3162,6 +3253,7 @@ $('#f-grid').addEventListener('blur', e=>{ const v=e.target.value.trim(); e.targ
   if (!(cfg.call||'').trim() && !lsGet('tw_wizard_done')) openWizard();
   tick(); setInterval(tick, 1000); setInterval(poll, 1500);
   addHelp();
+  trOpts(); trStart();
   setFp(lsGet('tw_fp') || 'classic');
   await checkMissed('load');
   initMap();

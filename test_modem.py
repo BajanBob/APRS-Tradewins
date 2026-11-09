@@ -81,6 +81,7 @@ def main():
     test_v36()
     test_v37()
     test_edition()
+    test_v323()
     test_v3171()
     test_hf()
     test_android_imports()
@@ -190,6 +191,65 @@ def test_hf():
     st._hf_stop()
     assert not st.tnc.audio_taps and st.hf is None
     print("HF Calling ok: CCIR 493-4 + Tradewind selcall, ALE, SELCAL 32, presets, alerts, band guard, station wiring")
+
+
+def test_v323():
+    """v3.23: face-plate languages (es, pt) and chat translation - English on the air."""
+    import json
+    import re
+    import app
+    import translate as tr
+    here = os.path.dirname(os.path.abspath(__file__))
+    # dictionaries: valid, placeholders kept, the important screens covered
+    for lang in ("es", "pt"):
+        d = json.load(open(os.path.join(here, "i18n", lang + ".json"), encoding="utf-8"))
+        assert len(d) > 1000, (lang, len(d))
+        for k, v in d.items():
+            assert sorted(re.findall(r"\{\d+\}", k)) == sorted(re.findall(r"\{\d+\}", v)), (lang, k, v)
+        for must in ("Station OFF", "Two-way chat", "Settings saved", "Turn the station ON first."):
+            assert must in d, (lang, must)
+        pay = json.loads(app.i18n_payload(lang))
+        assert pay["lang"] == lang and pay["exact"]["Settings saved"] and pay["pat"]
+    assert app.i18n_payload("en") is None
+    assert app.page_lang({"lang": "auto"}, "pt-BR,pt;q=0.9,en;q=0.8") == "pt"
+    assert app.page_lang({"lang": "auto"}, "de-DE") == "en" and app.page_lang({"lang": "es"}, "pt") == "es"
+    # language detection and protected words
+    assert tr.detect("necesito agua y comida en el refugio por favor") == "es"
+    assert tr.detect("preciso de água e comida no abrigo por favor") == "pt"
+    assert tr.detect("we need water and food at the shelter please") == "en"
+    assert tr.detect("QSL 73") == ""
+    body, keep = tr.protect("LU1XX-9 QSL en GF05tj 144.930 MHz 73")
+    assert "LU1XX-9" not in body and "GF05tj" not in body and tr.restore(body, keep) == "LU1XX-9 QSL en GF05tj 144.930 MHz 73"
+    # a stand-in engine (no internet needed): outgoing becomes English, incoming becomes the operator's language
+    seen = []
+
+    def fake(text, src, dst, cfg):
+        seen.append((src, dst, text))
+        return {"es": "We need water at the shelter [0]", "en": "Necesitamos agua en el refugio [0]"}.get(src, text)
+    tr._ENGINE["mymemory"], real = fake, tr._ENGINE["mymemory"]
+    try:
+        cfg = {"tr_engine": "mymemory", "lang": "es", "tr_out": True, "tr_in": True}
+        sent, note = tr.outgoing("Necesitamos agua en el refugio LU1XX", cfg)
+        assert sent == "We need water at the shelter LU1XX" and note["orig"].startswith("Necesitamos") and note["from"] == "es"
+        assert tr.outgoing("We need water at the shelter", cfg) == ("We need water at the shelter", None)
+        assert tr.outgoing("hola", dict(cfg, tr_engine="off")) == ("hola", None)
+        got, src = tr.incoming("We need water at the shelter 8P6XX", cfg)
+        assert src == "en" and got == "Necesitamos agua en el refugio 8P6XX"
+        assert tr.incoming("necesitamos agua en el refugio", cfg) == (None, "es")      # already my language
+        # a broken engine never stops the message: it goes out as typed, with a note
+        tr._ENGINE["mymemory"] = lambda *a: (_ for _ in ()).throw(IOError("no internet"))
+        tr._cache.clear()
+        sent, note = tr.outgoing("Necesitamos agua en el refugio ahora mismo", cfg)
+        assert sent.startswith("Necesitamos") and "not translated" in note["error"]
+    finally:
+        tr._ENGINE["mymemory"] = real
+        tr._cache.clear()
+    # settings are checked
+    base = dict(app.DEFAULTS, call="8P6XX-10", grid="GK03fd")
+    assert any("language" in e for e in app.validate(dict(base, lang="xx")))
+    assert any("LibreTranslate" in e for e in app.validate(dict(base, tr_engine="libretranslate")))
+    assert not [e for e in app.validate(dict(base, lang="pt", tr_engine="mymemory")) if "language" in e or "engine" in e]
+    print("v3.23 ok (Spanish and Portuguese face plate, chat translation: English on the air)")
 
 
 def test_edition():

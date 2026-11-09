@@ -103,6 +103,28 @@ licence profiles by grid square, with the research behind each item: [docs/ROADM
 - v3.22's face plate had a JavaScript error (an apostrophe in the new Gale help text), so its buttons and panels
   did not work. Fixed, and the test suite now checks that the face plate's JavaScript parses. Use 3.22.1 for testing.
 
+## What's new in 3.23: Spanish and Portuguese, and chat translation - English stays on the air
+
+- **The face plate in Spanish and Brazilian Portuguese.** MENU > STATION > Language. *Automatic* follows the
+  browser or phone language. About 1,100 texts are translated, including every hover help. Callsigns, the
+  packet log and received bulletins are never translated: they show exactly what was on the air.
+- **Language editions.** `Tradewind-3.23-<platform>-Sh.zip` is Spanish, set for Argentina (APRS 144.930).
+  `-Pt.zip` is Portuguese, set for Brazil (APRS 145.570). They are the same app: a small `edition.json` chooses
+  the first-run language and band-plan zone. Each zip carries its press release.
+- **Chat translation (MENU > STATION > Language & translation).** English stays the language on the air for global
+  communication:
+  - a chat typed in another language is translated to English **before it is transmitted**;
+  - a chat received in another language is translated into yours **before it is shown**;
+  - the original is always shown under the translation, because machine translation can be wrong;
+  - engines: MyMemory (internet, no account), **LibreTranslate** (your own server - on a Raspberry Pi at the club
+    or the EOC it keeps working when the internet is down), DeepL (API key, best quality) and Argos Translate
+    (fully offline on the PC);
+  - callsigns, Q-codes, grid squares, numbers and frequencies are protected, and the emergency forms always go
+    out in English.
+- If the engine can't be reached, the chat goes out as typed and says so. It is never held back.
+- Translations: `i18n/es.json`, `i18n/pt.json`. `python tools/i18n_extract.py --missing es` lists new screen text
+  that still needs translating. The next languages planned are French (Fh), German (Gn), Russian (Rn) and Polish (Ph).
+
 ## What's new in 3.22: Gale - the Tradewind calling mode has a name
 
 Tradewind's own selcall mode is now called **Gale**: an open, documented HF calling and link mode with your

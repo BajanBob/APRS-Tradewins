@@ -1,0 +1,29 @@
+# Builds GrannyMartha.apk and attaches it to the "granny-martha-v1.0" release.
+name: Build Granny Martha apk
+on:
+  push:
+    branches: [granny-martha]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build APK in the Buildozer container
+        run: |
+          set -o pipefail
+          chmod -R a+rwX .
+          docker run --rm --volume "$PWD":/home/user/hostcwd ghcr.io/kivy/buildozer:latest android debug 2>&1 | tee build.log | tail -n 200
+          cp "$(ls bin/*.apk | head -n 1)" GrannyMartha.apk
+      - name: Show build errors
+        if: failure()
+        run: |
+          TAIL=$(tail -n 40 build.log | cut -c1-300 | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::error title=Build log (last 40 lines)::${TAIL}"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: granny-martha-v1.0
+          name: Granny Martha 1.0
+          target_commitish: ${{ github.sha }}
+          files: GrannyMartha.apk

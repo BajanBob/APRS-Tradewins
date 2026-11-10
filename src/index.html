@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Granny Martha</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Gabarito:wght@600;800&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: Granny's kitchen table. Left: one question card at a time. Right: Granny herself (chat) and the progress shelf. */
+:root{
+  --bg:#eef3f0; --card:#ffffff; --ink:#1d2a2c; --muted:#56666a; --line:#cfdad5;
+  --plum:#7b2d5b; --plum-ink:#ffffff; --mustard:#b97f0c; --teal:#1c726b;
+  --good:#1f7a43; --good-bg:#e2f3e7; --bad:#b3361f; --bad-bg:#fbe7e2; --warn-bg:#fdf1d3;
+  --display:'Gabarito','Trebuchet MS',sans-serif; --body:'Atkinson Hyperlegible',Verdana,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#141c1d; --card:#1e292b; --ink:#e9f0ee; --muted:#a3b3b3; --line:#34444a;
+    --plum:#d98fbd; --plum-ink:#22101b; --mustard:#e9b84a; --teal:#6fd0c6;
+    --good:#7ed79b; --good-bg:#18382a; --bad:#ff9d88; --bad-bg:#43211b; --warn-bg:#3d3216;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#141c1d; --card:#1e292b; --ink:#e9f0ee; --muted:#a3b3b3; --line:#34444a;
+  --plum:#d98fbd; --plum-ink:#22101b; --mustard:#e9b84a; --teal:#6fd0c6;
+  --good:#7ed79b; --good-bg:#18382a; --bad:#ff9d88; --bad-bg:#43211b; --warn-bg:#3d3216;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:17px;line-height:1.5}
+.wrap{max-width:1080px;margin:0 auto;padding:20px 16px 48px;display:flex;flex-direction:column;gap:18px}
+h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--mustard);outline-offset:2px}
+
+.top{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.top svg{flex:none}
+.top h1{font-size:34px;font-weight:800;color:var(--plum)}
+.hello{color:var(--muted);margin:2px 0 0}
+.stars{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-weight:700;font-variant-numeric:tabular-nums}
+.chip b{color:var(--mustard)}
+
+.subjects{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.subj{background:var(--card);border:2px solid var(--line);border-radius:14px;padding:10px 12px;text-align:left;display:flex;flex-direction:column;gap:6px}
+.subj[aria-pressed="true"]{border-color:var(--plum);box-shadow:0 3px 0 var(--plum)}
+.subj .n{font-family:var(--display);font-weight:800;font-size:18px}
+.subj .p{font-size:13px;color:var(--muted)}
+.bar{height:8px;background:var(--line);border-radius:6px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--teal);border-radius:6px;transition:width .4s}
+
+.cols{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:18px;align-items:start}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px}
+.meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:14px;color:var(--muted)}
+.tag{border:1px solid var(--line);border-radius:999px;padding:2px 10px}
+.q{font-family:var(--display);font-weight:600;font-size:24px;line-height:1.25}
+.step{font-weight:700;font-size:15px;color:var(--teal)}
+.conf{display:flex;gap:8px;flex-wrap:wrap}
+.conf button{background:var(--bg);border:2px solid var(--line);border-radius:999px;padding:8px 16px;min-height:44px}
+.conf button[aria-pressed="true"]{border-color:var(--teal);background:var(--card);font-weight:700}
+.opts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.opt{background:var(--bg);border:2px solid var(--line);border-radius:14px;padding:14px;text-align:left;min-height:56px;font-size:18px}
+.opt:hover:not(:disabled){border-color:var(--plum)}
+.opt:disabled{cursor:default;opacity:.75}
+.opt.right{background:var(--good-bg);border-color:var(--good);opacity:1;font-weight:700}
+.opt.wrong{background:var(--bad-bg);border-color:var(--bad);opacity:1}
+.opts.locked .opt{opacity:.5;pointer-events:none}
+.says{border-radius:14px;padding:14px 16px;border-left:0;background:var(--warn-bg)}
+.says.good{background:var(--good-bg)} .says.bad{background:var(--bad-bg)}
+.says .who{font-family:var(--display);font-weight:800;color:var(--plum);display:block;margin-bottom:2px}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.btn{background:var(--plum);color:var(--plum-ink);border:0;border-radius:12px;padding:12px 18px;font-weight:700;min-height:46px}
+.btn.ghost{background:transparent;color:var(--plum);border:2px solid var(--plum)}
+.btn:disabled{opacity:.5;cursor:default}
+textarea,input[type=text]{font:inherit;color:var(--ink);background:var(--bg);border:2px solid var(--line);border-radius:12px;padding:10px 12px;width:100%}
+label{font-weight:700;font-size:15px}
+.side{display:flex;flex-direction:column;gap:18px}
+.chat{display:flex;flex-direction:column;gap:10px;max-height:340px;overflow-y:auto}
+.msg{border-radius:14px;padding:10px 12px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:16px}
+.msg.g{background:var(--warn-bg)} .msg.me{background:var(--bg);border:1px solid var(--line);align-self:flex-end}
+.small{font-size:14px;color:var(--muted);margin:0}
+.says.gift{background:var(--card);border:2px dashed var(--mustard)}
+.shelf{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+.gift-i{border:1px solid var(--line);border-radius:12px;padding:8px 4px;text-align:center;font-size:12px;line-height:1.2;color:var(--muted)}
+.gift-i span{display:block;font-size:26px}
+.gift-i.locked{opacity:.45}.gift-i.locked span{filter:grayscale(1)}
+.hide{display:none!important}
+ul.tips{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+@media (max-width:860px){.cols{grid-template-columns:minmax(0,1fr)}.subjects{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:460px){.opts{grid-template-columns:minmax(0,1fr)}.q{font-size:21px}.top h1{font-size:28px}}
+@media (prefers-reduced-motion:reduce){.bar i{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <svg width="72" height="72" viewBox="0 0 72 72" role="img" aria-label="Granny Martha">
+      <circle cx="36" cy="14" r="10" fill="#c9ced1"/><circle cx="36" cy="38" r="24" fill="#c9ced1"/>
+      <circle cx="36" cy="41" r="19" fill="#f1c9a5"/>
+      <circle cx="28" cy="40" r="6" fill="none" stroke="#7b2d5b" stroke-width="2.5"/><circle cx="44" cy="40" r="6" fill="none" stroke="#7b2d5b" stroke-width="2.5"/>
+      <path d="M34 40h4" stroke="#7b2d5b" stroke-width="2.5"/><circle cx="28" cy="40" r="1.8" fill="#1d2a2c"/><circle cx="44" cy="40" r="1.8" fill="#1d2a2c"/>
+      <path d="M29 50q7 6 14 0" fill="none" stroke="#1d2a2c" stroke-width="2.5" stroke-linecap="round"/>
+    </svg>
+    <div>
+      <h1>Granny Martha</h1>
+      <p class="hello" id="hello">Hello Bubba, pet. Kettle's on. Pick a subject and we'll take it one question at a time.</p>
+    </div>
+    <div class="stars">
+      <button class="chip hide" type="button" id="b-voice" aria-pressed="false">Granny's voice: off</button>
+      <span class="chip">Stars <b id="stars">0</b></span>
+      <span class="chip">Streak <b id="streak">0</b></span>
+    </div>
+  </header>
+
+  <nav class="subjects" id="subjects" aria-label="Subjects"></nav>
+
+  <div class="cols">
+    <main class="card" id="quiz" aria-live="polite">
+      <div class="meta"><span class="tag" id="q-subj"></span><span class="tag" id="q-topic"></span><span class="tag" id="q-level"></span><span id="q-again"></span></div>
+      <div class="q" id="q-text"></div>
+
+      <div id="conf-wrap">
+        <div class="step">Step 1. Before you answer, how sure are you?</div>
+        <div class="conf" id="conf" role="group" aria-label="How sure are you">
+          <button type="button" data-c="sure">I know this</button>
+          <button type="button" data-c="think">I think so</button>
+          <button type="button" data-c="guess">I'd be guessing</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="step" id="step2">Step 2. Choose your answer</div>
+        <div class="opts locked" id="opts"></div>
+      </div>
+
+      <div class="says hide" id="hint"><span class="who">Granny's hint</span><span id="hint-text"></span></div>
+      <div class="says hide" id="fb"><span class="who" id="fb-who"></span><span id="fb-text"></span></div>
+
+      <div class="says gift hide" id="gift"><span class="who">A gift from Granny</span><span id="gift-text"></span></div>
+
+      <div class="hide" id="explain">
+        <label for="ex-text">Step 3. Now teach Granny. In your own words, why is that the answer?</label>
+        <textarea id="ex-text" rows="3" placeholder="Explaining it makes it stick. One or two sentences will do."></textarea>
+        <div class="row" style="margin-top:8px"><button class="btn ghost" type="button" id="ex-send">Show Granny my explanation</button></div>
+        <div class="says hide" id="ex-fb" style="margin-top:10px"><span class="who">Granny Martha</span><span id="ex-fb-text"></span></div>
+      </div>
+
+      <div class="row">
+        <button class="btn ghost" type="button" id="b-hint">Give me a hint</button>
+        <button class="btn ghost hide" type="button" id="b-read">Read it to me</button>
+        <button class="btn hide" type="button" id="b-next">Next question</button>
+      </div>
+    </main>
+
+    <aside class="side">
+      <section class="card" id="ask-card">
+        <h2>Ask Granny anything</h2>
+        <div class="chat" id="chat"><div class="msg g">Stuck on homework, or want something explained a different way? Ask me, love. I'll help you work it out rather than just hand you the answer.</div></div>
+        <form id="ask-form" class="row" style="flex-wrap:nowrap">
+          <input type="text" id="ask-in" aria-label="Your question for Granny" placeholder="e.g. What is a metaphor?" maxlength="400" autocomplete="off">
+          <button class="btn" type="submit" id="ask-go">Ask</button>
+        </form>
+        <p class="small" id="ask-note">Granny's answers are written by AI. Check anything important with your teacher.</p>
+      </section>
+
+      <section class="card">
+        <h2 id="shelf-h">Bubba's gift shelf</h2>
+        <div class="shelf" id="shelf"></div>
+        <p class="small" id="shelf-note"></p>
+      </section>
+
+      <section class="card">
+        <h2>How Granny helps you remember</h2>
+        <ul class="tips">
+          <li><b>Guess first.</b> Saying how sure you are shows you what you really know.</li>
+          <li><b>Mistakes come back.</b> Anything you miss turns up again soon, until it sticks.</li>
+          <li><b>Teach it back.</b> If you can explain it to Granny, you can explain it in an exam.</li>
+          <li><b>It gets harder as you get better.</b> Three right in a row and I raise the level.</li>
+        </ul>
+        <div class="row"><button class="btn ghost" type="button" id="b-name">Change the name</button><button class="btn ghost" type="button" id="b-reset">Start again from zero</button></div>
+        <form id="name-form" class="row hide" style="flex-wrap:nowrap"><input type="text" id="name-in" aria-label="Your first name" placeholder="Your first name" maxlength="20"><button class="btn" type="submit">Save</button></form>
+        <p class="small">Your progress is saved in this browser only.</p>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const R = n => Math.floor(Math.random()*n);
+const shuffle = a => { a = a.slice(); for (let i=a.length-1;i>0;i--){ const j=R(i+1); [a[i],a[j]]=[a[j],a[i]]; } return a; };
+// q(id, level, topic, question, [correct, wrong, wrong, wrong], hint, why)
+const q = (id,l,t,text,o,hint,why) => ({id,l,t,text,o,hint,why});
+
+const BANK = {
+  maths: { name:'Maths', qs:[
+    q('m1',1,'Negative numbers','What is −3 × −4?',['12','−12','−7','7'],'Two negatives multiplied together make a...?','A negative times a negative is a positive, so −3 × −4 = 12.'),
+    q('m2',1,'Fractions','Simplify 12/18 as far as you can.',['2/3','6/9','3/4','4/6'],'What is the biggest number that goes into both 12 and 18?','Divide top and bottom by 6, the highest common factor: 12 ÷ 6 = 2 and 18 ÷ 6 = 3.'),
+    q('m3',1,'Angles','Two angles in a triangle are 50° and 60°. What is the third?',['70°','80°','110°','250°'],'What do the angles in any triangle add up to?','Angles in a triangle add up to 180°. 180 − 50 − 60 = 70°.'),
+    q('m4',2,'Algebra','Solve 3x + 5 = 20.',['x = 5','x = 3','x = 7.5','x = 8⅓'],'Undo the + 5 first, then undo the × 3.','Take 5 from both sides: 3x = 15. Divide both sides by 3: x = 5.'),
+    q('m5',2,'Area','A triangle has base 10 cm and height 6 cm. What is its area?',['30 cm²','60 cm²','16 cm²','32 cm²'],'A triangle is half of a rectangle.','Area = ½ × base × height = ½ × 10 × 6 = 30 cm².'),
+    q('m6',2,'Algebra','Expand 3(x + 4).',['3x + 12','3x + 4','x + 12','7x'],'The 3 multiplies everything inside the bracket.','3 × x = 3x and 3 × 4 = 12, so 3(x + 4) = 3x + 12.'),
+    q('m7',2,'Averages','Find the mean of 4, 7, 9, 10, 10.',['8','9','10','40'],'Add them all up, then share equally between how many numbers?','The total is 40 and there are 5 numbers. 40 ÷ 5 = 8.'),
+    q('m8',3,'Ratio','Share £40 in the ratio 2 : 3.',['£16 and £24','£20 and £20','£10 and £30','£8 and £32'],'How many equal parts are there altogether?','2 + 3 = 5 parts. One part is £40 ÷ 5 = £8. So 2 parts = £16 and 3 parts = £24.'),
+    q('m9',3,'Probability','You roll a fair six-sided dice. What is the probability of a prime number?',['1/2','1/3','2/3','1/6'],'List the primes from 1 to 6. Careful, 1 is not prime.','The primes are 2, 3 and 5. That is 3 out of 6 outcomes, which is 1/2.'),
+    {id:'mg1',l:2,t:'Percentages',gen(){ const p=[5,10,15,20,25,30,40,75][R(8)], n=[40,60,80,120,160,200,240][R(7)], a=p*n/100;
+      const w=[...new Set([a+n/20, Math.abs(a-n/20)||a+3, a*2, p+n/10, a/2].map(x=>+x.toFixed(2)).filter(x=>x!==a))].slice(0,3);
+      return {text:`What is ${p}% of ${n}?`, o:[a,...w].map(String), hint:'Find 10% first by dividing by 10, then build up or halve.', why:`10% of ${n} is ${n/10}. ${p}% of ${n} = ${p} ÷ 100 × ${n} = ${a}.`}; }},
+    {id:'mg2',l:3,t:'Algebra',gen(){ const a=2+R(5), x=2+R(8), b=1+R(9), c=a*x-b;
+      return {text:`Solve ${a}x − ${b} = ${c}.`, o:[x,x+1,x-1,c+b].map(v=>'x = '+v), hint:`Undo the − ${b} first by adding ${b} to both sides.`, why:`Add ${b} to both sides: ${a}x = ${c+b}. Divide by ${a}: x = ${x}.`}; }}
+  ]},
+  english: { name:'English', qs:[
+    q('e1',1,'Language devices','"The moon was like a silver coin." Which device is this?',['Simile','Metaphor','Personification','Alliteration'],'Look for the word "like" or "as".','A simile compares two things using "like" or "as". A metaphor says one thing is another.'),
+    q('e2',1,'Grammar','Choose the correct word: "The dog wagged ___ tail."',['its','it\'s','its\'','it is'],'Try reading it as "it is". Does it still make sense?','"It\'s" always means "it is" or "it has". For belonging, use "its" with no apostrophe.'),
+    q('e3',1,'Language devices','"Peter Piper picked a peck of pickled peppers." Which device is this?',['Alliteration','Onomatopoeia','Simile','Rhyme'],'Listen to the first sound of each word.','Alliteration is the same starting sound repeated in words close together.'),
+    q('e4',2,'Language devices','"The wind whispered through the trees." Which device is this?',['Personification','Simile','Hyperbole','Metaphor only'],'Can wind really whisper? Who can?','Personification gives human actions or feelings to something that is not human.'),
+    q('e5',2,'Language devices','"Time is a thief." Which device is this?',['Metaphor','Simile','Alliteration','Oxymoron'],'It does not use "like" or "as". It says time IS something.','A metaphor describes something by saying it is something else, to suggest they share qualities.'),
+    q('e6',2,'Writing about texts','In a PEE paragraph, what comes after your Point and your Evidence?',['Explain how the evidence proves the point','End the essay','Add a second quotation','Retell the story'],'P, E, and then another E.','Point, Evidence, Explain. The explanation is where the marks are: say what the quotation shows and how.'),
+    q('e7',2,'Narrative voice','A story is told using "I" and "my". What is this called?',['First person','Second person','Third person','Omniscient'],'I am the first person I think of.','First person uses "I". Second person uses "you". Third person uses "he", "she" or "they".'),
+    q('e8',3,'Punctuation','What is a semicolon mainly used for?',['Joining two closely linked sentences','Starting a list','Showing a pause for breath','Showing belonging'],'Each half could stand alone as a sentence.','A semicolon joins two main clauses that are closely related, for example: "It was late; we went home."'),
+    q('e9',3,'Writer\'s methods','A writer suddenly uses lots of very short sentences. What is the most likely effect?',['Builds tension and pace','Makes the scene feel calm','Shows the writer ran out of ideas','Gives more description'],'Read some short sentences aloud. He stopped. He listened. Nothing.','Short sentences speed up the pace and can create tension or shock.'),
+    q('e10',3,'Literature','In "A Christmas Carol", how does Scrooge change by the end?',['From miserly to generous','From generous to miserly','From poor to rich','He does not change'],'Think about how he treats Bob Cratchit at the start and at the end.','Dickens shows Scrooge transformed from a cold miser into a generous man, to show that people can change.')
+  ]},
+  geography: { name:'Geography', qs:[
+    q('g1',1,'Rivers','What is a meander?',['A bend in a river','The start of a river','Where a river meets the sea','A waterfall'],'Meandering means wandering from side to side.','A meander is a bend in a river, formed by erosion on the outside and deposition on the inside.'),
+    q('g2',1,'Energy','Which of these is a renewable energy source?',['Wind','Coal','Natural gas','Oil'],'Which one will never run out?','Wind is renewable because it is naturally replaced. Coal, oil and gas are fossil fuels.'),
+    q('g3',1,'Climate','Which gas is the main greenhouse gas released by burning fossil fuels?',['Carbon dioxide','Oxygen','Nitrogen','Helium'],'Its formula is CO₂.','Burning fossil fuels releases carbon dioxide, which traps heat in the atmosphere.'),
+    q('g4',2,'Map skills','On an OS map, the contour lines are very close together. What does this show?',['A steep slope','Flat land','A river','A forest'],'Each line is a change in height. Lots of change in a short distance means...?','Close contours mean the height changes quickly, so the slope is steep.'),
+    q('g5',2,'Rivers','Rocks carried by a river scrape the bed and banks like sandpaper. Which erosion process is this?',['Abrasion','Attrition','Solution','Hydraulic action'],'Think of something abrasive, like sandpaper.','Abrasion is the load wearing away the bed and banks. Attrition is rocks knocking into each other.'),
+    q('g6',2,'Population','What does urbanisation mean?',['More of a country\'s people living in towns and cities','People moving to the countryside','A city getting older','Building more farms'],'"Urban" means town or city.','Urbanisation is the increase in the proportion of people living in urban areas.'),
+    q('g7',2,'Ecosystems','In a tropical rainforest, which layer forms a thick roof of leaves?',['The canopy','The forest floor','The shrub layer','The emergent layer'],'A canopy is a cover overhead.','The canopy is a dense layer of treetops. Emergents are the few giant trees poking above it.'),
+    q('g8',3,'Tectonics','At a destructive plate boundary, the plates are...',['Moving towards each other','Moving apart','Sliding past each other','Not moving'],'Something gets destroyed when one plate is pushed under another.','At a destructive boundary plates move together and the denser oceanic plate is subducted.'),
+    q('g9',3,'Tectonics','What is the epicentre of an earthquake?',['The point on the surface directly above the focus','Where the earthquake starts underground','The strongest aftershock','The edge of a plate'],'"Epi" means upon or above.','The focus is where the earthquake starts underground. The epicentre is on the surface directly above it.'),
+    q('g10',3,'Coasts','What is longshore drift?',['The movement of sediment along a coast by waves','Waves eroding a cliff','The tide going out','Sand dunes forming'],'Swash goes up the beach at an angle, backwash comes straight back.','Waves hit the beach at an angle and move sand and pebbles along the coast in a zigzag.')
+  ]},
+  re: { name:'RE', qs:[
+    q('r1',1,'Islam','What is the holy book of Islam?',['The Qur\'an','The Torah','The Bible','The Guru Granth Sahib'],'Muslims believe it was revealed to the Prophet Muhammad.','The Qur\'an is the holy book of Islam. The Torah is Jewish and the Guru Granth Sahib is Sikh.'),
+    q('r2',1,'Sikhism','What is a Sikh place of worship called?',['Gurdwara','Mandir','Synagogue','Mosque'],'It means "door to the Guru".','Sikhs worship in a gurdwara. A mandir is Hindu, a synagogue Jewish and a mosque Muslim.'),
+    q('r3',1,'Hinduism','Which Hindu festival is known as the festival of lights?',['Diwali','Holi','Eid','Hanukkah'],'Lamps called divas are lit.','Diwali is the festival of lights. Holi is the festival of colours.'),
+    q('r4',2,'Christianity','What do Christians mean by the Trinity?',['One God as Father, Son and Holy Spirit','Three different gods','The three wise men','Three holy books'],'"Tri" means three, but Christians believe in how many gods?','Christians believe in one God in three persons: Father, Son and Holy Spirit.'),
+    q('r5',2,'Judaism','What is the Jewish day of rest called?',['Shabbat','Passover','Yom Kippur','Bar Mitzvah'],'It runs from Friday sunset to Saturday nightfall.','Shabbat is the weekly day of rest, remembering that God rested on the seventh day.'),
+    q('r6',2,'Islam','Zakah is one of the Five Pillars of Islam. What is it?',['Giving to charity','Fasting','Pilgrimage','Prayer five times a day'],'It is about sharing wealth.','Zakah is giving 2.5% of savings to those in need. Sawm is fasting, Hajj is pilgrimage and Salah is prayer.'),
+    q('r7',2,'Buddhism','Who founded Buddhism?',['Siddhartha Gautama','Guru Nanak','Abraham','Confucius'],'He became known as the Buddha, the enlightened one.','Siddhartha Gautama became the Buddha. Guru Nanak founded Sikhism.'),
+    q('r8',3,'Islam','What is Hajj?',['Pilgrimage to Makkah','The month of fasting','The call to prayer','The declaration of faith'],'It is a journey Muslims try to make once in a lifetime.','Hajj is the pilgrimage to Makkah, one of the Five Pillars. The fasting month is Ramadan.'),
+    q('r9',3,'Ethics','What does "sanctity of life" mean?',['Life is sacred and precious','Life is short','Everyone should be healthy','Only humans matter'],'"Sanctity" is linked to the word "sacred".','Sanctity of life is the belief that life is holy and precious, often because it is given by God.'),
+    q('r10',3,'Beliefs','What does an atheist believe?',['That there is no God','That we cannot know if God exists','That there are many gods','That all religions are true'],'One of the wrong answers describes an agnostic.','An atheist believes there is no God. An agnostic believes we cannot know either way.')
+  ]},
+  history: { name:'History', qs:[
+    q('h1',1,'Normans','Who won the Battle of Hastings in 1066?',['William of Normandy','Harold Godwinson','Harald Hardrada','King John'],'He became known as "the Conqueror".','William, Duke of Normandy, defeated King Harold and became King William I.'),
+    q('h2',1,'Source skills','Which of these is a primary source for the First World War?',['A soldier\'s diary from 1916','A textbook written in 2020','A modern film about the war','A website summary'],'Primary means made at the time, by someone who was there.','A primary source comes from the time being studied. Textbooks and films made later are secondary.'),
+    q('h3',1,'20th century','In which year did the First World War begin?',['1914','1918','1939','1901'],'It ended in 1918 and lasted four years.','The First World War ran from 1914 to 1918. The Second began in 1939.'),
+    q('h4',2,'Medieval','Which king was forced to agree to Magna Carta in 1215?',['King John','King Henry VIII','King Richard I','King Alfred'],'He is the unpopular king in the Robin Hood stories.','The barons made King John agree to Magna Carta, which said even the king must obey the law.'),
+    q('h5',2,'Medieval','What was the Black Death, which reached England in 1348?',['A plague that killed a third or more of the people','A war with France','A great fire','A famine caused by floods'],'It spread along trade routes and caused swellings called buboes.','The Black Death was a plague. It killed between a third and a half of England\'s population.'),
+    q('h6',2,'Normans','What was the Domesday Book of 1086?',['A survey of who owned what in England','A book of laws','A Bible translation','A list of battles'],'William wanted to know what he could tax.','William I ordered a survey of land, people and wealth so he knew what taxes he could collect.'),
+    q('h7',2,'20th century','Which event triggered the First World War?',['The assassination of Archduke Franz Ferdinand','The sinking of the Titanic','The invasion of Poland','The Russian Revolution'],'It happened in Sarajevo in June 1914.','The Archduke\'s assassination set off a chain of alliances that pulled Europe into war.'),
+    q('h8',3,'Tudors','Why did Henry VIII break away from the Catholic Church?',['The Pope would not end his marriage to Catherine of Aragon','He wanted to become Pope','Spain invaded England','Parliament forced him to'],'He wanted a son and wished to marry Anne Boleyn.','The Pope refused an annulment, so Henry made himself Head of the Church of England in 1534.'),
+    q('h9',3,'20th century','Which treaty punished Germany after the First World War?',['The Treaty of Versailles','Magna Carta','The Treaty of Rome','The Act of Union'],'It was signed in a palace near Paris in 1919.','The Treaty of Versailles (1919) made Germany accept blame, pay reparations and lose land.'),
+    q('h10',3,'Modern Britain','In which year was the NHS founded?',['1948','1918','1966','1901'],'It was just after the Second World War.','The National Health Service began on 5 July 1948, giving free healthcare to everyone.')
+  ]}
+};
+const ORDER = ['maths','english','geography','re','history'];
+
+/* ---------- saved progress ---------- */
+let S = {name:'Bubba', stars:0, gifts:0, box:{}, streak:{}, subj:'maths'};
+try { const v = JSON.parse(localStorage.getItem('granny_martha_v1')); if (v && typeof v==='object') S = Object.assign(S, v); } catch(e){}
+const save = () => { try { localStorage.setItem('granny_martha_v1', JSON.stringify(S)); } catch(e){} };
+
+let cur = null, conf = null, answered = false, recent = [];
+const GIFTS = [['🍪','Jam tart'],['🧣','Knitted scarf'],['⭐','Gold star badge'],['⚽','Football'],['🧭','Explorer\'s compass'],['🔭','Telescope'],['🎩','Wizard hat'],['🚀','Rocket'],['👑','Crown'],['🏆','Champion\'s trophy']];
+const PER_GIFT = 10;
+const N = () => S.name || 'Bubba';
+const PRAISE = ['Well done, {n}!','That\'s my {n}!','You clever sausage, {n}.','Brilliant thinking, {n}.','Granny is proud of you, {n}.','Top marks, {n}!','You\'re getting sharper every day, {n}.','Lovely work, {n}.'];
+const praise = () => PRAISE[R(PRAISE.length)].replace('{n}', N()) + ' ';
+const mastery = k => { const qs = BANK[k].qs; return Math.round(100 * qs.reduce((a,x)=>a+(S.box[x.id]||0),0) / (qs.length*3)); };
+const target = k => { const s = S.streak[k]||0; return s<3 ? 1 : s<6 ? 2 : 3; };
+
+function drawSubjects(){
+  $('#subjects').innerHTML = '';
+  ORDER.forEach(k=>{
+    const b = document.createElement('button'); b.type='button'; b.className='subj'; b.setAttribute('aria-pressed', String(k===S.subj));
+    const m = mastery(k);
+    b.innerHTML = `<span class="n"></span><span class="bar"><i style="width:${m}%"></i></span><span class="p">${m}% secure</span>`;
+    b.querySelector('.n').textContent = BANK[k].name;
+    b.onclick = ()=>{ S.subj=k; save(); drawSubjects(); nextQ(); };
+    $('#subjects').append(b);
+  });
+  $('#stars').textContent = S.stars; $('#streak').textContent = S.streak[S.subj]||0;
+  $('#hello').textContent = `Hello ${N()}, pet. Kettle's on. Pick a subject and we'll take it one question at a time.`;
+  const earned = Math.min(GIFTS.length, Math.floor(S.stars / PER_GIFT));
+  $('#shelf-h').textContent = N() + "'s gift shelf";
+  $('#shelf').innerHTML = GIFTS.map((g,i)=>`<div class="gift-i${i<earned?'':' locked'}"><span aria-hidden="true">${g[0]}</span>${i<earned?g[1]:'Locked'}</div>`).join('');
+  $('#shelf-note').textContent = earned >= GIFTS.length ? `Every gift earned. Granny is ever so proud, ${N()}.` : `${PER_GIFT - S.stars % PER_GIFT} more star${PER_GIFT - S.stars % PER_GIFT === 1 ? '' : 's'} until your next gift.`;
+  if (earned > (S.gifts||0)){ const g = GIFTS[earned-1]; S.gifts = earned; save();
+    $('#gift-text').textContent = `${g[0]} ${N()}, you've earned ${S.stars} stars, so here's a ${g[1].toLowerCase()} for your shelf. Keep going, love!`; $('#gift').classList.remove('hide'); }
+}
+
+function nextQ(){
+  const k = S.subj, t = target(k);
+  const pool = BANK[k].qs.filter(x=>!recent.includes(x.id));
+  // lowest memory box first (things missed come back), then nearest to the right level
+  const pick = pool.map(x=>({x, s:(S.box[x.id]||0)*10 + Math.abs(x.l-t)*4 + Math.random()*3})).sort((a,b)=>a.s-b.s)[0].x;
+  recent.push(pick.id); if (recent.length>3) recent.shift();
+  const d = pick.gen ? pick.gen() : pick;
+  cur = {id:pick.id, l:pick.l, t:pick.t, text:d.text, right:d.o[0], opts:shuffle(d.o), hint:d.hint, why:d.why, seen:(pick.id in S.box)};
+  conf = null; answered = false;
+  $('#q-subj').textContent = BANK[k].name; $('#q-topic').textContent = cur.t; $('#q-level').textContent = 'Level ' + cur.l + ' of 3';
+  $('#q-again').textContent = cur.seen && (S.box[cur.id]||0)===0 ? 'Back again so it sticks' : '';
+  $('#q-text').textContent = cur.text;
+  document.querySelectorAll('#conf button').forEach(b=>b.setAttribute('aria-pressed','false'));
+  $('#conf-wrap').classList.remove('hide');
+  const o = $('#opts'); o.innerHTML=''; o.classList.add('locked');
+  cur.opts.forEach(txt=>{ const b=document.createElement('button'); b.type='button'; b.className='opt'; b.textContent=txt; b.onclick=()=>answer(b,txt); o.append(b); });
+  ['#hint','#fb','#gift','#explain','#ex-fb','#b-next'].forEach(s=>$(s).classList.add('hide'));
+  $('#b-hint').classList.remove('hide'); $('#b-hint').disabled=false;
+  $('#ex-text').value=''; $('#ex-send').disabled=false;
+  say(cur.text);
+}
+
+document.querySelectorAll('#conf button').forEach(b=> b.onclick = ()=>{
+  if (answered) return; conf = b.dataset.c;
+  document.querySelectorAll('#conf button').forEach(x=>x.setAttribute('aria-pressed', String(x===b)));
+  $('#opts').classList.remove('locked');
+});
+
+$('#b-hint').onclick = ()=>{ $('#hint-text').textContent = cur.hint; $('#hint').classList.remove('hide'); $('#b-hint').disabled = true; cur.hinted = true; say(cur.hint); };
+
+function answer(btn, txt){
+  if (answered || !conf) return; answered = true;
+  const ok = txt === cur.right, k = S.subj, box = S.box[cur.id]||0;
+  document.querySelectorAll('#opts .opt').forEach(b=>{ b.disabled=true; if (b.textContent===cur.right) b.classList.add('right'); });
+  if (!ok) btn.classList.add('wrong');
+  let say;
+  if (ok && conf==='guess'){ say = "Right, but you said you were guessing, so I'll bring this one back to make sure it's really yours. "; S.box[cur.id] = box; S.stars += 1; S.streak[k]=(S.streak[k]||0)+1; }
+  else if (ok){ say = praise() + (conf==='sure' ? "Spot on, and you knew it. " : "That's right, trust yourself a bit more. "); S.box[cur.id] = Math.min(3, box + (cur.hinted?1:(conf==='sure'?2:1))); S.stars += cur.hinted?1:2; S.streak[k]=(S.streak[k]||0)+1; }
+  else if (conf==='sure'){ say = "Not this time, and you felt sure, so this is a really useful one to catch now. Read this carefully, pet. "; S.box[cur.id]=0; S.streak[k]=0; }
+  else { say = `Not quite, ${N()}, and that's fine. Mistakes are how it gets in. `; S.box[cur.id]=0; S.streak[k]=0; }
+  $('#fb').className = 'says ' + (ok?'good':'bad'); $('#fb-who').textContent = ok ? 'Granny says: correct' : 'Granny says: the answer is ' + cur.right;
+  $('#fb-text').textContent = say + cur.why;
+  $('#conf-wrap').classList.add('hide'); $('#b-hint').classList.add('hide');
+  $('#explain').classList.remove('hide'); $('#b-next').classList.remove('hide');
+  const st = S.streak[k]||0;
+  if (ok && (st===3 || st===5 || st===10)) $('#fb-text').textContent += ` That's ${st} in a row, ${N()}. You're on a roll!`;
+  save(); drawSubjects();
+  say($('#fb-who').textContent + '. ' + $('#fb-text').textContent + ($('#gift').classList.contains('hide') ? '' : ' ' + $('#gift-text').textContent));
+}
+$('#b-next').onclick = nextQ;
+
+/* ---------- Granny's voice: a British English voice from the device when it has one, otherwise a Claude voice ---------- */
+let voiceOn = false, tts = null, gb = null;
+function pickGB(){ try { const vs = speechSynthesis.getVoices().filter(v=>/^en[-_]GB/i.test(v.lang));
+  gb = vs.find(v=>/female|sonia|libby|maisie|kate|serena|hazel|martha|susan|stephanie/i.test(v.name)) || vs[0] || null; if (gb) voiceReady(); } catch(e){} }
+function voiceReady(){ $('#b-voice').classList.remove('hide'); $('#b-read').classList.remove('hide'); }
+try { if ('speechSynthesis' in window){ pickGB(); speechSynthesis.onvoiceschanged = pickGB; } } catch(e){}
+if (window.claude && claude.use) claude.use('tts').then(t=>{ tts = t; if (t) voiceReady(); }).catch(()=>{});
+function hush(){ try { speechSynthesis.cancel(); } catch(e){} try { tts && tts.stop(); } catch(e){} }
+function say(text, force){
+  if (!(voiceOn || force) || !text) return; text = String(text).replace(/[\u{1F300}-\u{1FAFF}\u2B50\u26BD]/gu,'').slice(0,1500);
+  try {
+    if (gb){ speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.voice = gb; u.lang = 'en-GB'; u.rate = 0.92; u.pitch = 1.05; speechSynthesis.speak(u); }
+    else if (tts) tts.speak(text, {voice:'rounded', rate:0.9, language:'en'}).catch(e=>{ if (e && e.code==='not_granted'){ tts = null; if (!gb){ $('#b-voice').classList.add('hide'); $('#b-read').classList.add('hide'); } } });
+  } catch(e){}
+}
+$('#b-voice').onclick = ()=>{ voiceOn = !voiceOn; $('#b-voice').setAttribute('aria-pressed', String(voiceOn)); $('#b-voice').textContent = "Granny's voice: " + (voiceOn?'on':'off');
+  if (voiceOn) say(`Hello ${N()}, it's Granny Martha. I'll read things out for you now.`); else hush(); };
+$('#b-read').onclick = ()=>{ const parts = [cur.text]; if (!answered) parts.push('Is it: ' + cur.opts.join(', or, ') + '?'); else parts.push($('#fb-who').textContent + '. ' + $('#fb-text').textContent); say(parts.join(' '), true); };
+
+/* ---------- Granny's brain (asks Claude when the page is allowed to) ---------- */
+let sample = null;
+const PERSONA = "You are Granny Martha, a warm, patient, gently funny English grandmother and retired teacher tutoring a 12-year-old in England (Key Stage 3, building towards GCSEs in Maths, English, Geography, RE and History). Use British English and British curriculum terms. Keep replies under 90 words, plain text only, no markdown. Be encouraging but honest. Guide the child to the answer with a clue or a question rather than just giving it, unless they ask for a fact. Stay on schoolwork and learning; if asked about anything unsuitable for a child or anything personal or worrying, kindly suggest they talk to a parent, carer or teacher. Be fair and respectful about every religion.";
+if (window.claude && claude.use) claude.use('sample').then(s=>{ sample = s; if (!s) noBrain(); }).catch(noBrain); else noBrain();
+function noBrain(){ sample = null; $('#ask-form').classList.add('hide'); $('#ask-note').textContent = "Granny's question box isn't switched on for this view, but all the practice questions and hints work."; }
+
+async function ask(input, el){
+  el.textContent = 'Granny is thinking...';
+  try { const r = await sample(input, {cache:false, modelTier:'default', onText: ({text}) => { if (text) el.textContent = text; }}); el.textContent = r.text || el.textContent; say(el.textContent); return true; }
+  catch(e){ el.textContent = e && e.code==='rate_limited' ? "Granny needs a little rest. Try again in a minute, pet." : "Granny can't answer just now. Use the hint and the explanation instead."; if (e && e.code==='not_granted') noBrain(); return false; }
+}
+
+const history = [];
+$('#ask-form').addEventListener('submit', async e=>{
+  e.preventDefault(); const t = $('#ask-in').value.trim(); if (!t || !sample) return;
+  $('#ask-in').value=''; $('#ask-go').disabled = true;
+  const me = document.createElement('div'); me.className='msg me'; me.textContent=t;
+  const g = document.createElement('div'); g.className='msg g'; $('#chat').append(me,g); $('#chat').scrollTop = 1e6;
+  const ctx = cur ? ` The child is currently on this ${BANK[S.subj].name} practice question: "${cur.text}"${answered ? ' (already answered; correct answer: '+cur.right+')' : ' (not yet answered: do not reveal the answer, give a clue instead)'}.` : '';
+  history.push({role:'user', content:t});
+  const msgs = history.slice(-6).map((m,i)=> i===0 ? {role:m.role, content: PERSONA + ctx + ' The child is called '+N()+'; use the name warmly now and then.' + '\n\nChild: ' + m.content} : m);
+  if (msgs[0].role !== 'user') msgs.shift();
+  const ok = await ask(msgs, g);
+  if (ok) history.push({role:'assistant', content:g.textContent}); else history.pop();
+  $('#ask-go').disabled = false; $('#chat').scrollTop = 1e6;
+});
+
+$('#ex-send').onclick = async ()=>{
+  const t = $('#ex-text').value.trim(); const out = $('#ex-fb-text');
+  if (t.length < 8){ $('#ex-fb').classList.remove('hide'); out.textContent = "Give me a full sentence, love. Start with \"Because...\""; return; }
+  $('#ex-fb').classList.remove('hide'); $('#ex-send').disabled = true;
+  if (!sample){ out.textContent = "Lovely. Now compare yours with mine: " + cur.why + " If yours says the same idea in your own words, you've got it."; S.stars += 1; save(); drawSubjects(); return; }
+  const ok = await ask(PERSONA + `\n\nPractice question: "${cur.text}"\nCorrect answer: ${cur.right}\nModel explanation: ${cur.why}\n\nThe child was asked to explain in their own words why that is the answer. The child is called ${N()}. Their explanation: "${t.slice(0,500)}"\n\nRespond as Granny Martha in under 70 words: say what they got right, gently fix any misunderstanding, and end with one short follow-up question that stretches them a little.`, out);
+  if (ok){ S.stars += 1; save(); drawSubjects(); } else out.textContent += " Here's mine to compare: " + cur.why;
+};
+
+$('#b-name').onclick = ()=>{ $('#name-form').classList.toggle('hide'); $('#name-in').value = S.name; $('#name-in').focus(); };
+$('#name-form').addEventListener('submit', e=>{ e.preventDefault(); S.name = $('#name-in').value.trim().slice(0,20); save(); $('#name-form').classList.add('hide'); drawSubjects(); });
+let armed = false;
+$('#b-reset').onclick = ()=>{ if (!armed){ armed = true; $('#b-reset').textContent = 'Press again to wipe progress'; setTimeout(()=>{ armed=false; $('#b-reset').textContent='Start again from zero'; }, 4000); return; }
+  S = {name:S.name, stars:0, gifts:0, box:{}, streak:{}, subj:S.subj}; save(); armed=false; $('#b-reset').textContent='Start again from zero'; drawSubjects(); nextQ(); };
+
+if (!BANK[S.subj]) S.subj = 'maths';
+drawSubjects(); nextQ();
+</script>
+</body>
+</html>

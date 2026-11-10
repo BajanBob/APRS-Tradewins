@@ -802,6 +802,7 @@
 "Shortest path that counts towards an opening. Shorter paths are usually normal local coverage.": "Trayecto más corto que cuenta para una apertura. Los trayectos más cortos suelen ser cobertura local normal.",
 "Show aircraft ARINC SELCAL codes heard on the channel (receive only - Tradewind never sends SELCAL).": "Mostrar los códigos ARINC SELCAL de aeronaves oídos en el canal (solo recepción - Tradewind nunca envía SELCAL).",
 "Show me on the global operator map (others see my dot & callsign)": "Mostrarme en el mapa mundial de operadores (otros ven mi punto y mi indicativo)",
+"Sign my check-in": "Firmar mi reporte",
 "Single path that counts alone (km)": "Un solo trayecto que cuenta por sí solo (km)",
 "Situation report (SITREP)": "Informe de situación (SITREP)",
 "Sound": "Sonido",

@@ -50,7 +50,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.25.1"
+APP_VERSION = "3.25.2"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -190,10 +190,16 @@ def thursday_state(cfg, now=None, local=time.localtime):
     if days == 0 and since_mid >= THU_OPEN_H * 3600:
         days = 0 if is_open else 7
     return {"today": g.tm_wday == 3, "checked_in": g.tm_wday == 3 and last >= midnight,
-            "subscribed": now - last < THU_HOURS * 3600, "until": last + THU_HOURS * 3600 if last else 0, "max": THU_MAX,
+            "subscribed": now - last < THU_HOURS * 3600, "until": last + THU_HOURS * 3600 if last else 0,
+            "max": THU_MAX - (len(thursday_tag()) if cfg.get("thu_tag", True) else 0), "tag": thursday_tag().strip(),
             "open": is_open, "opens_in": 0 if is_open else int(days * 86400 + THU_OPEN_H * 3600 - since_mid),
             "closes_in": int(THU_CLOSE_H * 3600 - since_mid) if is_open else 0,
             "window": f"{THU_OPEN_H}:00-{THU_CLOSE_H}:00"}
+
+
+def thursday_tag():
+    """What a check-in is signed with, so the net sees which app it came from."""
+    return f" via {APP_TITLE}"
 
 
 def thursday_autolock(st, now=None, local=time.localtime):
@@ -233,8 +239,10 @@ def thursday_action(st, b, now=None, local=time.localtime):
     if not text:
         raise ValueError("Type a short check-in message, e.g. Hello from Barbados.")
     text, _note = trmod.outgoing(text, st.cfg)             # English on the air
-    if len(text) > THU_MAX:
-        raise ValueError(f"Keep the check-in to {THU_MAX} characters so it fits one APRS message.")
+    tag = thursday_tag() if st.cfg.get("thu_tag", True) else ""
+    if len(text) > THU_MAX - len(tag):
+        raise ValueError(f"Keep the check-in to {THU_MAX - len(tag)} characters so it fits one APRS message.")
+    text += tag
     via = "APRSPH" if str(b.get("via") or "").lower() == "aprsph" else "ANSRVR"
     st.chat.open_direct(via, "smart")
     st.chat.send(via, (f"CQ {THU_GROUP} " if via == "ANSRVR" else f"{THU_GROUP} ") + text)
@@ -386,6 +394,7 @@ DEFAULTS = {
     "disaster_on": False, "disaster_until": 0, "disaster_reason": "",
     "share_whatsapp": False, "share_facebook": False, "share_email": False, "share_email_to": "",   # opt-in alert sharing
     "uhf_range": "430-440", "allowed_hosts": "",     # v3.7: 70 cm range on your licence; extra face-plate host names
+    "thu_tag": True,                    # v3.25.2: sign #APRSThursday check-ins "via Tradewind" / "via Tradewind Commander"
     "thu_last": 0,                      # v3.25: time of the last #APRSThursday check-in
     "firms_key": "", "osint_fires": True, "osint_storms": True, "osint_ais": False, "ais_port": 10110,   # v3.24 OSINT map
     "lang": "auto",                     # v3.23: face-plate language (auto = the browser's language)

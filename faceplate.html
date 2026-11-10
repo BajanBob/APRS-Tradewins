@@ -1084,6 +1084,7 @@ details.more summary::-webkit-details-marker{display:none}
         <input class="inset" id="thu-text" maxlength="59" autocomplete="off" placeholder="Your check-in, e.g. Hello from Barbados" style="flex:1 1 240px">
         <button class="btn accent" type="button" id="b-thu-in">CHECK IN</button>
         <button class="btn" type="button" id="b-thu-out">LEAVE THE NET</button></div>
+      <div style="margin-top:6px"><label class="chk"><input type="checkbox" data-k="thu_tag" id="thu-tag"> <span>Sign my check-in</span> "<span id="thu-tagtxt" data-noi18n>via Tradewind</span>"</label></div>
       <div class="note" id="thu-status" style="margin-top:6px"></div>
       <div class="note" style="margin-top:4px">Your check-in goes to ANSRVR as "CQ HOTG" plus your text. The net's messages then arrive in the ANSRVR chat for 12 hours. It needs a path to the internet: your APRS-IS connection, or an iGate that hears you. At 9:00 am the feature locks and Tradewind leaves the net for you.</div>
     </div>
@@ -2285,6 +2286,7 @@ async function initMap(){
 function thuDraw(s){
   const t = s.thursday; if (!t || !$('#b-thu')) return;
   thuOpen = !!t.open; thuIn = t.opens_in;
+  $('#thu-text').maxLength = t.max; $('#thu-tagtxt').textContent = t.tag;
   $('#b-thu').classList.toggle('accent', t.open && !t.checked_in);
   $('#b-thu').classList.toggle('hide', s.op_mode === 'commercial');
   $('#b-thu').textContent = (t.open ? '' : '🔒 ') + '#APRSTHURSDAY';
@@ -2311,7 +2313,7 @@ document.addEventListener('click', e=>{
   if (e.target.id === 'b-thu'){
     if (!thuOpen) return toast('#APRSThursday is locked. It unlocks by itself on Thursdays from 6:00 to 9:00 am. Opens in ' + thuWhen(thuIn) + '.');
     $('#thu-box').classList.toggle('hide'); }
-  if (e.target.id === 'b-thu-in') thuAct({action:'checkin', text: $('#thu-text').value});
+  if (e.target.id === 'b-thu-in') (dirty ? save() : Promise.resolve()).then(()=>thuAct({action:'checkin', text: $('#thu-text').value}));
   if (e.target.id === 'b-thu-out') thuAct({action:'leave'});
 });
 

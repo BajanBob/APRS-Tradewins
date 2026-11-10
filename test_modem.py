@@ -202,7 +202,8 @@ def test_v325():
     thu = calendar.timegm((2026, 11, 12, 7, 30, 0))             # Thursday 07:30 (tests use UTC as the local clock)
     L = time.gmtime
     s = app.thursday_state({"thu_last": 0}, thu, L)
-    assert s["today"] and s["open"] and s["closes_in"] == 5400 and not s["checked_in"] and s["max"] == 59
+    assert s["today"] and s["open"] and s["closes_in"] == 5400 and not s["checked_in"] and s["max"] == 59 - len(" via " + app.APP_TITLE)
+    assert app.thursday_state({"thu_tag": False}, thu, L)["max"] == 59 and s["tag"] == "via " + app.APP_TITLE
     s = app.thursday_state({"thu_last": thu - 3600}, thu, L)
     assert s["checked_in"] and s["subscribed"]
     # locked outside Thursday 06:00-09:00, and it says when it opens
@@ -221,7 +222,7 @@ def test_v325():
             sent.append((call, text))
     st = app.Station.__new__(app.Station)
     app.Station.__init__(st)
-    st.cfg = dict(app.DEFAULTS, call="8P5AB-10", tr_engine="off")
+    st.cfg = dict(app.DEFAULTS, call="8P5AB-10", tr_engine="off", thu_tag=False)
     st.running, st.commercial, st.chat = True, False, Chat()
     keep, app.save_config = app.save_config, lambda cfg: saved.append(dict(cfg))
     try:
@@ -233,6 +234,10 @@ def test_v325():
         assert not sent
         msg = app.thursday_action(st, {"action": "checkin", "text": "  Hello  from Barbados via Tradewind "}, thu, L)
         assert sent[-1] == ("ANSRVR", "CQ HOTG Hello from Barbados via Tradewind") and st.cfg["thu_last"] > 0 and saved and msg
+        st.cfg["thu_tag"] = True
+        app.thursday_action(st, {"text": "Hello from Barbados"}, thu, L)
+        assert sent[-1] == ("ANSRVR", "CQ HOTG Hello from Barbados via " + app.APP_TITLE) and len(sent[-1][1]) <= 67
+        st.cfg["thu_tag"] = False
         assert not app.thursday_autolock(st, thu + 600, L) and st.cfg["thu_last"]        # still open: stays in
         assert app.thursday_autolock(st, thu + 2 * 3600, L)                                # 09:30: leaves by itself
         assert sent[-1] == ("ANSRVR", "U HOTG") and st.cfg["thu_last"] == 0

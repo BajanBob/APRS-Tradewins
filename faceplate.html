@@ -1079,13 +1079,13 @@ details.more summary::-webkit-details-marker{display:none}
     </section>
     <div class="disaster hide" id="disaster-banner" role="status"></div>
     <div class="hide" id="thu-box" style="border:1px solid var(--edge);border-radius:10px;padding:10px 12px;margin:8px 0;background:#11161b">
-      <b style="letter-spacing:.08em">#APRSTHURSDAY</b> <span class="note">- the world-wide APRS net, every Thursday 00:00-23:59 UTC</span>
+      <b style="letter-spacing:.08em">#APRSTHURSDAY</b> <span class="note">- the world-wide APRS net. Unlocked on Thursdays, 6:00 to 9:00 am</span>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
         <input class="inset" id="thu-text" maxlength="59" autocomplete="off" placeholder="Your check-in, e.g. Hello from Barbados" style="flex:1 1 240px">
         <button class="btn accent" type="button" id="b-thu-in">CHECK IN</button>
         <button class="btn" type="button" id="b-thu-out">LEAVE THE NET</button></div>
       <div class="note" id="thu-status" style="margin-top:6px"></div>
-      <div class="note" style="margin-top:4px">Your check-in goes to ANSRVR as "CQ HOTG" plus your text. The net's messages then arrive in the ANSRVR chat for 12 hours. It needs a path to the internet: your APRS-IS connection, or an iGate that hears you. Press LEAVE THE NET when you stop watching, to keep your local frequency clear.</div>
+      <div class="note" style="margin-top:4px">Your check-in goes to ANSRVR as "CQ HOTG" plus your text. The net's messages then arrive in the ANSRVR chat for 12 hours. It needs a path to the internet: your APRS-IS connection, or an iGate that hears you. At 9:00 am the feature locks and Tradewind leaves the net for you.</div>
     </div>
     <div class="chat-tools">
       <button class="btn" type="button" id="b-email" title="Send a short email by radio">EMAIL</button>
@@ -2284,24 +2284,33 @@ async function initMap(){
 /* ---------- v3.25 #APRSThursday ---------- */
 function thuDraw(s){
   const t = s.thursday; if (!t || !$('#b-thu')) return;
-  $('#b-thu').classList.toggle('accent', t.today && !t.checked_in);
+  thuOpen = !!t.open; thuIn = t.opens_in;
+  $('#b-thu').classList.toggle('accent', t.open && !t.checked_in);
   $('#b-thu').classList.toggle('hide', s.op_mode === 'commercial');
+  $('#b-thu').textContent = (t.open ? '' : '🔒 ') + '#APRSTHURSDAY';
+  $('#b-thu').style.opacity = t.open ? '' : '.55';
+  if (!t.open) $('#thu-box').classList.add('hide');          // locks itself when the window closes
   const hm = d => { const x = new Date(d * 1000); return pad(x.getUTCHours()) + ':' + pad(x.getUTCMinutes()) + ' UTC'; };
-  $('#thu-status').innerHTML = (t.today ? '<b><span>It is Thursday (UTC): the net is on.</span></b> ' : `<span>Next net in</span> ${t.next_in_days} <span>day(s).</span> `)
+  $('#thu-status').innerHTML = `<b><span>Unlocked: the net window is open for another</span> ${Math.max(1, Math.round(t.closes_in / 60))} min.</b> `
     + (t.checked_in ? '<b>✓ <span>Checked in today.</span></b> ' : '')
-    + (t.subscribed ? `<span>Receiving the net's messages until</span> ${hm(t.until)}.` : '');
-  if (t.today && !t.checked_in && s.running && s.op_mode !== 'commercial'){
+    + (t.subscribed ? `<span>Receiving the net's messages until the window closes.</span>` : '');
+  if (t.open && !t.checked_in && s.running && s.op_mode !== 'commercial'){
     const day = new Date().toISOString().slice(0, 10);
-    if (lsGet('tw_thu_nudge') !== day){ lsSet('tw_thu_nudge', day); toast('It is #APRSThursday: check in to the world-wide APRS net with the #APRSTHURSDAY button.', true, 12000); }
+    if (lsGet('tw_thu_nudge') !== day){ lsSet('tw_thu_nudge', day); toast('#APRSThursday is unlocked until 9:00 am: check in with the #APRSTHURSDAY button.', true, 12000); }
   }
 }
+let thuOpen = false, thuIn = 0;
+function thuWhen(sec){ const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.round(sec % 3600 / 60);
+  return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${m} min`; }
 async function thuAct(body){
   const r = await api('/api/thursday', body);
   if (r.errors && r.errors.length) return toast(r.errors[0]);
   toast(r.msg, true, 10000); if (body.action !== 'leave') $('#thu-text').value = ''; poll();
 }
 document.addEventListener('click', e=>{
-  if (e.target.id === 'b-thu') $('#thu-box').classList.toggle('hide');
+  if (e.target.id === 'b-thu'){
+    if (!thuOpen) return toast('#APRSThursday is locked. It unlocks by itself on Thursdays from 6:00 to 9:00 am. Opens in ' + thuWhen(thuIn) + '.');
+    $('#thu-box').classList.toggle('hide'); }
   if (e.target.id === 'b-thu-in') thuAct({action:'checkin', text: $('#thu-text').value});
   if (e.target.id === 'b-thu-out') thuAct({action:'leave'});
 });

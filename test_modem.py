@@ -199,14 +199,18 @@ def test_v325():
     """v3.25 #APRSThursday: check in through ANSRVR ("CQ HOTG text"), leave ("U HOTG"), APRSPH, limits."""
     import calendar
     import app
-    thu = calendar.timegm((2026, 11, 12, 15, 0, 0))            # a Thursday, 15:00 UTC
-    s = app.thursday_state({"thu_last": 0}, thu)
-    assert s["today"] and not s["checked_in"] and not s["subscribed"] and s["max"] == 59
-    s = app.thursday_state({"thu_last": thu - 3600}, thu)
-    assert s["checked_in"] and s["subscribed"] and s["until"] == thu + 11 * 3600
-    assert not app.thursday_state({"thu_last": thu - 20 * 3600}, thu)["checked_in"]      # yesterday's doesn't count
-    wed = app.thursday_state({}, thu - 86400)
-    assert not wed["today"] and wed["next_in_days"] == 1
+    thu = calendar.timegm((2026, 11, 12, 7, 30, 0))             # Thursday 07:30 (tests use UTC as the local clock)
+    L = time.gmtime
+    s = app.thursday_state({"thu_last": 0}, thu, L)
+    assert s["today"] and s["open"] and s["closes_in"] == 5400 and not s["checked_in"] and s["max"] == 59
+    s = app.thursday_state({"thu_last": thu - 3600}, thu, L)
+    assert s["checked_in"] and s["subscribed"]
+    # locked outside Thursday 06:00-09:00, and it says when it opens
+    assert not app.thursday_state({}, thu - 2 * 3600, L)["open"] and app.thursday_state({}, thu - 2 * 3600, L)["opens_in"] == 1800
+    late = app.thursday_state({}, thu + 2 * 3600, L)
+    assert not late["open"] and late["opens_in"] == 7 * 86400 - 3 * 3600 - 1800
+    wed = app.thursday_state({}, thu - 86400, L)
+    assert not wed["open"] and wed["opens_in"] == 86400 - 5400
     sent, saved = [], []
 
     class Chat:
@@ -221,34 +225,44 @@ def test_v325():
     st.running, st.commercial, st.chat = True, False, Chat()
     keep, app.save_config = app.save_config, lambda cfg: saved.append(dict(cfg))
     try:
-        msg = app.thursday_action(st, {"action": "checkin", "text": "  Hello  from Barbados via Tradewind "})
+        try:
+            app.thursday_action(st, {"text": "too early"}, thu - 2 * 3600, L)
+            raise AssertionError("check-in accepted while locked")
+        except ValueError as e:
+            assert "locked" in str(e)
+        assert not sent
+        msg = app.thursday_action(st, {"action": "checkin", "text": "  Hello  from Barbados via Tradewind "}, thu, L)
         assert sent[-1] == ("ANSRVR", "CQ HOTG Hello from Barbados via Tradewind") and st.cfg["thu_last"] > 0 and saved and msg
-        app.thursday_action(st, {"action": "checkin", "text": "73 de 8P5AB", "via": "aprsph"})
+        assert not app.thursday_autolock(st, thu + 600, L) and st.cfg["thu_last"]        # still open: stays in
+        assert app.thursday_autolock(st, thu + 2 * 3600, L)                                # 09:30: leaves by itself
+        assert sent[-1] == ("ANSRVR", "U HOTG") and st.cfg["thu_last"] == 0
+        assert not app.thursday_autolock(st, thu + 2 * 3600, L)                            # only once
+        app.thursday_action(st, {"action": "checkin", "text": "73 de 8P5AB", "via": "aprsph"}, thu, L)
         assert sent[-1] == ("APRSPH", "HOTG 73 de 8P5AB")
         app.thursday_action(st, {"action": "leave"})
         assert sent[-1] == ("ANSRVR", "U HOTG") and st.cfg["thu_last"] == 0
         for bad, why in (({"text": ""}, "Type"), ({"text": "x" * 60}, "59 characters")):
             try:
-                app.thursday_action(st, bad)
+                app.thursday_action(st, bad, thu, L)
                 raise AssertionError("bad check-in accepted")
             except ValueError as e:
                 assert why in str(e), e
         st.commercial = True
         try:
-            app.thursday_action(st, {"text": "hi"})
+            app.thursday_action(st, {"text": "hi"}, thu, L)
             raise AssertionError("APRS net allowed in commercial mode")
         except ValueError:
             pass
         st.commercial, st.running = False, False
         try:
-            app.thursday_action(st, {"text": "hi"})
+            app.thursday_action(st, {"text": "hi"}, thu, L)
             raise AssertionError("check-in with the station off")
         except ValueError:
             pass
     finally:
         app.save_config = keep
     assert "thu_last" in app.GUARDED_KEYS
-    print("v3.25 ok (#APRSThursday: CQ HOTG check-in through ANSRVR, APRSPH, leave, Thursday reminder)")
+    print("v3.25 ok (#APRSThursday: unlocks Thursdays 06:00-09:00, CQ HOTG check-in, leaves by itself at 09:00)")
 
 
 def test_v324():

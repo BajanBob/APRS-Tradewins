@@ -111,7 +111,9 @@ The weekly world-wide APRS net runs every Thursday from 00:00 to 23:59 UTC. Unde
 - Type a short message and press **CHECK IN**. Tradewind sends `CQ HOTG your text` to ANSRVR. The net's messages
   then arrive in the ANSRVR chat for 12 hours.
 - **LEAVE THE NET** sends `U HOTG`, so your local frequency is not loaded with the net's traffic once you stop watching.
-- On Thursdays (UTC) the button lights up and Tradewind reminds you once.
+- **It locks and unlocks by itself (3.25.1).** The button is unlocked on Thursdays from 6:00 to 9:00 am, by this
+  computer's clock, and shows a padlock the rest of the week. At 9:00 am Tradewind leaves the net for you (`U HOTG`).
+  The net itself runs all Thursday in UTC; the hours are `THU_OPEN_H` and `THU_CLOSE_H` in `app.py`.
 - The check-in is kept to 59 characters so it fits one APRS message. With chat translation on, it goes out in English.
 - It needs a path to the internet: your APRS-IS connection, or an iGate that hears you. Amateur mode only.
 

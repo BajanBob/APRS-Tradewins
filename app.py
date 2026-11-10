@@ -50,7 +50,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.25"
+APP_VERSION = "3.25.1"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -176,20 +176,48 @@ def _web_json(url, obj=None, timeout=12):
 THU_GROUP = "HOTG"
 THU_HOURS = 12
 THU_MAX = tncmod.MAX_TEXT - len("CQ HOTG ")
+THU_OPEN_H, THU_CLOSE_H = 6, 9          # v3.25.1: the feature unlocks itself on Thursdays 06:00-09:00, this computer's local time
 
 
-def thursday_state(cfg, now=None):
+def thursday_state(cfg, now=None, local=time.localtime):
     now = now or time.time()
     last = float(cfg.get("thu_last") or 0)
-    g = time.gmtime(now)
+    g, l = time.gmtime(now), local(now)
     midnight = now - (g.tm_hour * 3600 + g.tm_min * 60 + g.tm_sec)
+    is_open = l.tm_wday == 3 and THU_OPEN_H <= l.tm_hour < THU_CLOSE_H
+    since_mid = l.tm_hour * 3600 + l.tm_min * 60 + l.tm_sec
+    days = (3 - l.tm_wday) % 7
+    if days == 0 and since_mid >= THU_OPEN_H * 3600:
+        days = 0 if is_open else 7
     return {"today": g.tm_wday == 3, "checked_in": g.tm_wday == 3 and last >= midnight,
             "subscribed": now - last < THU_HOURS * 3600, "until": last + THU_HOURS * 3600 if last else 0, "max": THU_MAX,
-            "next_in_days": (3 - g.tm_wday) % 7}
+            "open": is_open, "opens_in": 0 if is_open else int(days * 86400 + THU_OPEN_H * 3600 - since_mid),
+            "closes_in": int(THU_CLOSE_H * 3600 - since_mid) if is_open else 0,
+            "window": f"{THU_OPEN_H}:00-{THU_CLOSE_H}:00"}
 
 
-def thursday_action(st, b):
+def thursday_autolock(st, now=None, local=time.localtime):
+    """When the window closes, leave the net by itself so its messages stop coming."""
+    if st.commercial or not (st.running and st.chat) or not st.cfg.get("thu_last"):
+        return False
+    if thursday_state(st.cfg, now, local)["open"]:
+        return False
+    try:
+        st.chat.open_direct("ANSRVR", "smart")
+        st.chat.send("ANSRVR", f"U {THU_GROUP}")
+    except Exception:
+        pass
+    with st.lock:
+        st.cfg["thu_last"] = 0
+        save_config(st.cfg)
+    st.add_log("SYS", "#APRSThursday window closed: left the net (U HOTG)")
+    return True
+
+
+def thursday_action(st, b, now=None, local=time.localtime):
     act = str(b.get("action") or "checkin")
+    if act != "leave" and not thursday_state(st.cfg, now, local)["open"]:
+        raise ValueError(f"#APRSThursday is locked. It unlocks by itself on Thursdays from {THU_OPEN_H}:00 to {THU_CLOSE_H}:00 am.")
     if st.commercial:
         raise ValueError("#APRSThursday is an amateur APRS net: switch to amateur mode first.")
     if not (st.running and st.chat):
@@ -213,8 +241,6 @@ def thursday_action(st, b):
     with st.lock:
         st.cfg["thu_last"] = time.time() if via == "ANSRVR" else float(st.cfg.get("thu_last") or 0)
         save_config(st.cfg)
-    if not thursday_state(st.cfg)["today"]:
-        return "Sent. Note: the net runs on Thursdays (UTC); today's message still reaches the group."
     return ("Checked in to #APRSThursday. The net's messages will arrive in the ANSRVR chat for 12 hours."
             if via == "ANSRVR" else "Check-in logged with APRSPH.")
 
@@ -1148,6 +1174,7 @@ class Station:
             if self.chat:
                 try:
                     self.chat.tick()
+                    thursday_autolock(self)
                     if self.chat.seq != self._chat_saved and time.time() - self._chat_save_t > 5:
                         self._save_chat()
                 except Exception as e:

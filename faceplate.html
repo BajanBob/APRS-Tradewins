@@ -1023,6 +1023,25 @@ details.more summary::-webkit-details-marker{display:none}
     </div>
     <div class="map-box"><div id="map"></div><div class="map-msg" id="map-msg">Loading map...</div></div>
     <div class="map-legend"><b style="color:#45f08a">●</b> you &middot; <b style="color:#ff4b3e">●</b> operator available to hail &middot; <b style="color:#ffb547">●</b> do not disturb &middot; <b style="color:#5b6168">●</b> offline — hover a dot for the callsign, click to hail. Lines join Caribbean stations heard on PSKReporter (solid = 2m, dashed = 70cm). Map areas you view are saved, so they still show with no internet.</div>
+    <div class="map-legend" id="osint" style="margin-top:8px;border-top:1px solid var(--edge);padding-top:8px">
+      <b style="letter-spacing:.1em">OSINT</b> <span>- open satellite and public data, receive only</span>
+      <div style="display:flex;gap:10px 16px;flex-wrap:wrap;align-items:center;margin-top:6px">
+        <label class="chk"><input type="checkbox" data-k="osint_fires"> <b style="color:#ff7a3c">●</b> Fire hotspots</label>
+        <label class="chk"><input type="checkbox" data-k="osint_storms"> <b style="color:#e9b8ff">◎</b> Storms</label>
+        <label class="chk"><input type="checkbox" data-k="osint_ais"> <b style="color:#6fd3ff">▲</b> Ships (AIS receiver)</label>
+        <select class="inset" id="os-layer" style="max-width:260px"><option value="">Satellite imagery: off</option></select>
+        <input class="inset" id="os-date" type="date" style="max-width:150px" aria-label="Imagery date">
+        <button class="btn" type="button" id="b-os-save">SAVE FOR OFFLINE</button>
+        <button class="btn" type="button" id="b-os-set">OSINT SETTINGS</button>
+      </div>
+      <div id="os-set" class="hide" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+        <input class="inset" data-k="firms_key" placeholder="NASA FIRMS MAP_KEY (free)" autocomplete="off" style="flex:1 1 240px">
+        <input class="inset" data-k="ais_port" data-num type="number" min="1024" max="65535" style="max-width:110px" aria-label="AIS UDP port">
+        <button class="btn accent" type="button" id="b-os-apply">SAVE</button>
+        <span>Fire hotspots need a free key from firms.modaps.eosdis.nasa.gov/api/map_key . Ships: run rtl_ais or AIS-catcher with an RTL-SDR and send NMEA to this UDP port.</span>
+      </div>
+      <div id="os-status" style="margin-top:6px"></div>
+    </div>
   </section>
 
   <section class="chat-wrap" id="chat-wrap" aria-label="Two-way chat">
@@ -2235,7 +2254,7 @@ async function initMap(){
   map = L.map('map', {worldCopyJump:true, zoomSnap:0.5, attributionControl:true}).setView([16,-62], 3);
   // Free basemaps that need no API key: Esri dark grey canvas, falling back to OpenStreetMap
   const esri = L.tileLayer('/tile/esri/{z}/{y}/{x}', {
-    maxZoom: 10, minZoom: 2, maxNativeZoom: 10,
+    maxZoom: 12, minZoom: 2, maxNativeZoom: 12,
     attribution:'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ &middot; spots: PSKReporter'
   });
   const osm = L.tileLayer('/tile/osm/{z}/{x}/{y}', {
@@ -2246,8 +2265,70 @@ async function initMap(){
   esri.on('tileerror', ()=>{ if (++tileErrs === 4){ map.removeLayer(esri); osm.addTo(map); } });
   esri.addTo(map);
   mapLayer = L.layerGroup().addTo(map);
+  osintInit();
   await refreshMap(); setInterval(refreshMap, 30000);
   setInterval(mapClock, 1000);
+}
+
+/* ---------- v3.24 OSINT: open satellite imagery, fire hotspots, storms and ships on the map (receive only) ---------- */
+let osLayer = null, osImg = null, osData = null;
+function osImagery(){
+  if (!map) return;
+  if (osImg){ map.removeLayer(osImg); osImg = null; }
+  const key = $('#os-layer').value, date = $('#os-date').value, L0 = ((osData||{}).layers||[]).find(l=>l.key===key);
+  lsSet('tw_os_layer', key); if (date) lsSet('tw_os_date', date);
+  if (!key || !date || !L0) return;
+  osImg = L.tileLayer(`/gibs/${key}/${date}/{z}/{y}/{x}`, {maxZoom: 12, minZoom: 2, maxNativeZoom: L0.maxz, opacity: 0.85,
+    attribution: 'Imagery: NASA GIBS / Worldview'}).addTo(map);
+  if (osLayer) osLayer.bringToFront && osLayer.eachLayer(l=>l.bringToFront && l.bringToFront());
+}
+function osDraw(){
+  if (!map || !osData) return;
+  osLayer.clearLayers();
+  const ageTxt = s => s==null ? '' : s < 5400 ? Math.round(s/60) + ' min' : Math.round(s/3600) + ' h';
+  if (cfg.osint_fires !== false) (osData.fires||[]).forEach(f=>
+    L.circleMarker([f.lat, f.lon], {radius: Math.max(4, Math.min(10, 3 + Math.sqrt(f.frp||0))), color:'#3a1500', weight:1, fillColor: f.conf==='l' ? '#ffb86b' : '#ff7a3c', fillOpacity:.9})
+      .bindTooltip(`Fire hotspot · ${f.when}${f.frp ? ' · ' + f.frp + ' MW' : ''}`).addTo(osLayer));
+  if (cfg.osint_storms !== false) (osData.storms||[]).forEach(t=>
+    L.circleMarker([t.lat, t.lon], {radius:13, color:'#e9b8ff', weight:3, fillColor:'#7a2e9a', fillOpacity:.55})
+      .bindTooltip(`${t.name} ${t.cls||''} · ${t.wind||'?'} kt${t.move ? ' · ' + t.move : ''}`, {permanent:true, direction:'right'}).addTo(osLayer));
+  if (cfg.osint_ais) (osData.ships||[]).forEach(v=>
+    L.circleMarker([v.lat, v.lon], {radius:5, color:'#062a3a', weight:1, fillColor:'#6fd3ff', fillOpacity:.95})
+      .bindTooltip(`${v.name || 'MMSI ' + v.mmsi}${v.sog!=null ? ' · ' + v.sog + ' kn' : ''}${v.cog!=null ? ' · ' + Math.round(v.cog) + '°' : ''} · ${ageTxt(v.age)}`).addTo(osLayer));
+  const sv = osData.save || {}, bits = [];
+  if (cfg.osint_fires !== false) bits.push(osData.fires_err && !osData.fires.length ? (osData.fires_err === 'no FIRMS key' ? '<span>Fire hotspots: add your free FIRMS key under OSINT SETTINGS</span>' : `<span data-noi18n>${esc(osData.fires_err)}</span>`)
+    : `${(osData.fires||[]).length} <span>fire hotspots</span>${osData.fires_age!=null ? ' (' + ageTxt(osData.fires_age) + ')' : ''}`);
+  if (cfg.osint_storms !== false) bits.push(`${(osData.storms||[]).length} <span>storms</span>`);
+  if (cfg.osint_ais) bits.push(osData.ais.err ? `<span data-noi18n>${esc(osData.ais.err)}</span>` : `${(osData.ships||[]).length} <span>ships</span> · <span>listening on UDP</span> ${osData.ais.port}`);
+  if (sv.busy) bits.push(`<b><span>Saving for offline</span> ${sv.done} / ${sv.total}</b>`);
+  else if (sv.total) bits.push(`<span>Saved for offline</span>: ${sv.total - sv.failed} / ${sv.total} <span>map tiles</span>`);
+  $('#os-status').innerHTML = bits.join(' · ');
+}
+async function osPoll(){
+  try { osData = await (await fetch('/api/osint', {headers: stationPin ? {'X-TW-PIN': stationPin} : {}})).json(); } catch(e){ return; }
+  const sel = $('#os-layer');
+  if (sel.options.length <= 1 && osData.layers){
+    osData.layers.forEach(l=>{ const o = document.createElement('option'); o.value = l.key; o.textContent = l.name; sel.append(o); });
+    sel.value = lsGet('tw_os_layer') || '';
+    osImagery();
+  }
+  osDraw();
+}
+function osintInit(){
+  osLayer = L.layerGroup().addTo(map);
+  const d = new Date(Date.now() - 86400000);              // yesterday: today's passes are often not published yet
+  $('#os-date').value = lsGet('tw_os_date') || d.toISOString().slice(0, 10);
+  $('#os-date').max = new Date().toISOString().slice(0, 10);
+  $('#os-layer').onchange = osImagery; $('#os-date').onchange = osImagery;
+  $('#b-os-set').onclick = ()=>$('#os-set').classList.toggle('hide');
+  $('#b-os-apply').onclick = async ()=>{ await save(); osPoll(); };
+  $$('#osint input[type=checkbox]').forEach(el=>el.addEventListener('change', async ()=>{ await save(); cfg[el.dataset.k] = el.checked; osDraw(); }));
+  $('#b-os-save').onclick = async ()=>{
+    const r = await api('/api/osint/save', {layer: $('#os-layer').value, date: $('#os-date').value});
+    if (r.errors && r.errors.length) return toast(r.errors[0]);
+    toast('Saving the map around your station for offline use...', true, 8000); osPoll();
+  };
+  osPoll(); setInterval(osPoll, 20000);
 }
 async function refreshMap(){
   let d; try { d = await api('/api/map'); } catch(e){ return; }

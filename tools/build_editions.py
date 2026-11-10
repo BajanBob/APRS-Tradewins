@@ -30,7 +30,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORE = ["app.py", "afsk.py", "digi.py", "dxmode.py", "fx25.py", "hfcall.py", "iss.py", "satrx.py", "tnc.py",
         "vhf_prop_aprs.py", "wx.py", "faceplate.html", "icon.png", "icon.ico", "requirements.txt",
         "test_modem.py", "install_linux.sh", "README.md", "LICENSE",
-        "translate.py", "i18n/es.json", "i18n/pt.json"]                  # v3.23 languages + chat translation
+        "translate.py", "osint.py", "i18n/es.json", "i18n/pt.json"]                  # v3.23 languages + chat translation
 ANDROID = ["android_main.py", "buildozer.spec"]
 CRYPTO_MARKS = (b"AESGCM", b"from cryptography", b"import cryptography")
 

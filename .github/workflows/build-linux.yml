@@ -45,7 +45,7 @@ jobs:
           mkdir -p Tradewind
           cp app.py afsk.py digi.py dxmode.py fx25.py hfcall.py iss.py satrx.py tnc.py vhf_prop_aprs.py wx.py faceplate.html icon.png \
              requirements.txt test_modem.py install_linux.sh README.md LICENSE Tradewind/
-          cp translate.py Tradewind/ && mkdir -p Tradewind/i18n && cp i18n/es.json i18n/pt.json Tradewind/i18n/
+          cp translate.py osint.py Tradewind/ && mkdir -p Tradewind/i18n && cp i18n/es.json i18n/pt.json Tradewind/i18n/
           chmod +x Tradewind/install_linux.sh
           tar czf Tradewind-linux.tar.gz Tradewind
           python tools/build_editions.py --ham-only

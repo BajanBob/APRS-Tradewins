@@ -82,6 +82,7 @@ def main():
     test_v37()
     test_edition()
     test_v323()
+    test_v324()
     test_v3171()
     test_hf()
     test_android_imports()
@@ -191,6 +192,50 @@ def test_hf():
     st._hf_stop()
     assert not st.tnc.audio_taps and st.hf is None
     print("HF Calling ok: CCIR 493-4 + Tradewind selcall, ALE, SELCAL 32, presets, alerts, band guard, station wiring")
+
+
+def test_v324():
+    """v3.24 OSINT: AIS decoding, FIRMS hotspots, imagery tile addresses, offline save, settings."""
+    import tempfile
+    import app
+    import osint
+    m = osint.decode_ais("!AIVDM,1,1,,B,177KQJ5000G?tO`K>RA1wUbN0TKH,0*5C")          # published reference sentence
+    assert m == {"mmsi": 477553000, "lat": 47.58283, "lon": -122.34583, "sog": 0.0, "cog": 51.0}, m
+    assert osint.decode_ais("!AIVDM,2,1,3,B,55P5TL01VIaAL@7WKO@mBplU@<PDhh000000001S;AJ::4A80?4i@E53,0*3E") is None   # multi-part: skipped
+    assert osint.decode_ais("$GPGGA,garbage") is None and osint.decode_ais("!AIVDM,1,1,,A,###,0*00") is None
+    csv_text = ("latitude,longitude,bright_ti4,scan,track,acq_date,acq_time,satellite,instrument,confidence,version,bright_ti5,frp,daynight\n"
+                "13.21,-59.55,330.1,0.4,0.4,2026-11-09,1706,N,VIIRS,n,2.0NRT,290.2,4.5,D\nbad,row\n")
+    fires = osint.parse_firms(csv_text)
+    assert len(fires) == 1 and fires[0]["lat"] == 13.21 and fires[0]["when"] == "2026-11-09 17:06 UTC" and fires[0]["frp"] == 4.5
+    url = osint.gibs_tile_url("viirs", "2026-11-08", 6, 29, 21)
+    assert url.endswith("/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/2026-11-08/GoogleMapsCompatible_Level9/6/29/21.jpg")
+    assert osint.tile_xy(0, 0, 1) == (1, 1) and (10, 342, 474) in osint.tiles_around(13.1, -59.6, 0.05, [10])
+    asked = []
+
+    def web(u):
+        asked.append(u)
+        return csv_text.encode()
+    o = osint.Osint(tempfile.mkdtemp(), web)
+    o.tick({"firms_key": "KEY123", "osint_storms": False}, 13.1, -59.6)
+    assert "/KEY123/VIIRS_SNPP_NRT/-65.60,7.10,-53.60,19.10/2" in asked[0] and len(o.state()["fires"]) == 1
+    o.tick({"firms_key": "KEY123", "osint_storms": False}, 13.1, -59.6)
+    assert len(asked) == 1, "hotspots are fetched at most every 30 minutes"
+    o2 = osint.Osint(os.path.dirname(o.dir), lambda u: (_ for _ in ()).throw(IOError("offline")))
+    assert len(o2.state()["fires"]) == 1, "the last hotspots still show with no internet"
+    o.feed_ais("!AIVDM,1,1,,B,177KQJ5000G?tO`K>RA1wUbN0TKH,0*5C")
+    assert o.state()["ships"][0]["mmsi"] == 477553000
+    got = []
+    assert o.save_offline(13.1, -59.6, lambda z, x, y: got.append(("b", z)) or True, "viirs", "2026-11-08",
+                          lambda z, x, y: got.append(("i", z)) or True)
+    for _ in range(100):
+        if not o.save["busy"]:
+            break
+        time.sleep(0.05)
+    assert o.save["done"] == o.save["total"] > 100 and {z for k, z in got if k == "i"} <= set(range(4, 10))
+    base = dict(app.DEFAULTS, call="8P6XX-10", grid="GK03fd")
+    assert any("AIS port" in e for e in app.validate(dict(base, ais_port=80)))
+    assert abs(app.station_latlon(base)[0] - 13.15) < 0.1 and app.OSINT.state()["layers"][0]["key"] == "viirs"
+    print("v3.24 ok (OSINT: AIS ships, FIRMS hotspots, NASA imagery tiles, save for offline)")
 
 
 def test_v323():

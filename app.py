@@ -36,6 +36,7 @@ import iss as issmod
 import satrx
 import tnc as tncmod
 import translate as trmod
+import osint as osintmod
 import vhf_prop_aprs as eng
 import wx
 
@@ -49,7 +50,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.23"
+APP_VERSION = "3.24"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -169,6 +170,39 @@ def _web_json(url, obj=None, timeout=12):
         return None
 
 
+def station_latlon(cfg):
+    """Centre of the station's grid square, or the weather position when no grid is set."""
+    try:
+        g = eng.grid_to_latlon(str(cfg.get("grid") or "").strip())
+        if g:
+            return float(g[0]), float(g[1])
+    except Exception:
+        pass
+    return float(cfg.get("wx_lat") or 13.1), float(cfg.get("wx_lon") or -59.6)
+
+
+def gibs_tile(key, date, z, y, x):
+    ext = osintmod.GIBS[key][2]
+    return cached_get(os.path.join(CACHE_DIR, "gibs", key, date, str(z), str(x), f"{y}.{ext}"),
+                      osintmod.gibs_tile_url(key, date, z, y, x), None)
+
+
+def base_tile(z, x, y):
+    return cached_get(os.path.join(CACHE_DIR, "tiles", "esri", str(z), str(x), f"{y}.png"),
+                      TILE_SRC["esri"].format(z=z, x=x, y=y), TILE_MAX_AGE)
+
+
+def osint_loop():
+    """Background: fire hotspots, storms and the AIS listener. Receive only."""
+    while True:
+        try:
+            lat, lon = station_latlon(STATION.cfg)
+            OSINT.tick(STATION.cfg, lat, lon, wx.fetch_storms, wx.storm_position)
+        except Exception:
+            pass
+        time.sleep(5)
+
+
 def cached_get(path, url, max_age=None):
     """Serve from the disk cache; refresh from the internet when missing or old. None if neither."""
     fresh = os.path.exists(path) and (max_age is None or time.time() - os.path.getmtime(path) < max_age)
@@ -277,6 +311,7 @@ DEFAULTS = {
     "disaster_on": False, "disaster_until": 0, "disaster_reason": "",
     "share_whatsapp": False, "share_facebook": False, "share_email": False, "share_email_to": "",   # opt-in alert sharing
     "uhf_range": "430-440", "allowed_hosts": "",     # v3.7: 70 cm range on your licence; extra face-plate host names
+    "firms_key": "", "osint_fires": True, "osint_storms": True, "osint_ais": False, "ais_port": 10110,   # v3.24 OSINT map
     "lang": "auto",                     # v3.23: face-plate language (auto = the browser's language)
     "tr_engine": "off", "tr_url": "", "tr_key": "", "tr_email": "",   # v3.23: chat translation engine
     "tr_out": True, "tr_in": True,      # translate my chats to English before sending / others' chats into my language
@@ -601,6 +636,11 @@ def validate(cfg):
             return ["Commercial / EmComm mode is part of Tradewind Commander. This is the amateur edition: clear text only."]
         return comstation.validate_commercial(cfg)
     errs = []
+    try:
+        if not 1024 <= int(cfg.get("ais_port") or 10110) <= 65535:
+            raise ValueError
+    except (TypeError, ValueError):
+        errs.append("AIS port must be 1024-65535 (10110 is the usual one).")
     if str(cfg.get("lang") or "auto") not in UI_LANGS:
         errs.append("Choose a language from the list.")
     if str(cfg.get("tr_engine") or "off") not in trmod.ENGINES:
@@ -3009,6 +3049,7 @@ class Station:
 
 
 STATION = Station()
+OSINT = osintmod.Osint(CACHE_DIR, _web_get)
 
 
 NOTICES_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -3206,6 +3247,16 @@ class Handler(BaseHTTPRequestHandler):
             data = cached_get(os.path.join(CACHE_DIR, "tiles", src, str(z), str(x), f"{y}.png"),
                               TILE_SRC[src].format(z=z, x=x, y=y), TILE_MAX_AGE)
             self._bytes(data, "image/png", "public, max-age=604800")
+        elif path.startswith("/gibs/"):         # v3.24 OSINT: NASA GIBS imagery, kept on disk for offline use
+            m = re.fullmatch(r"/gibs/([a-z0-9]+)/(\d{4}-\d{2}-\d{2})/(\d{1,2})/(\d{1,6})/(\d{1,6})", path)
+            if not m or m.group(1) not in osintmod.GIBS or int(m.group(3)) > osintmod.GIBS[m.group(1)][3]:
+                return self._json({"error": "bad tile"}, 404)
+            data = gibs_tile(m.group(1), m.group(2), int(m.group(3)), int(m.group(4)), int(m.group(5)))
+            if not data:
+                return self._json({"error": "not available offline yet"}, 404)
+            self._bytes(data, "image/png" if osintmod.GIBS[m.group(1)][2] == "png" else "image/jpeg", "public, max-age=604800")
+        elif path == "/api/osint":
+            self._json(OSINT.state())
         elif path == "/api/commlog.csv":
             body = STATION.commlog_csv().encode("utf-8-sig")
             self.send_response(200)
@@ -3363,6 +3414,15 @@ class Handler(BaseHTTPRequestHandler):
                         STATION.cfg[k] = str(b.get(k) or "")
                 save_config(STATION.cfg)
             return self._json({"ok": True})
+        elif path == "/api/osint/save":       # download the base map and imagery around the station for offline use
+            b = self._body()
+            lat, lon = station_latlon(STATION.cfg)
+            layer, date = str(b.get("layer") or ""), str(b.get("date") or "")
+            if layer and (layer not in osintmod.GIBS or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date)):
+                return self._json({"ok": False, "errors": ["Pick an imagery layer and a date first."]})
+            ok = OSINT.save_offline(lat, lon, lambda z, x, y: base_tile(z, x, y), layer, date,
+                                    lambda z, x, y: gibs_tile(layer, date, z, y, x))
+            self._json({"ok": ok, "errors": [] if ok else ["A save is already running."], "osint": OSINT.state()})
         elif path == "/api/comkey":
             if not comstation:
                 return self._json({"ok": False, "errors": ["Commercial / EmComm mode is part of Tradewind Commander."]})
@@ -3470,6 +3530,7 @@ def main():
     a = ap.parse_args()
     STATION.demo_xml = a.demo
     threading.Thread(target=STATION.translate_incoming, name="translate", daemon=True).start()
+    threading.Thread(target=osint_loop, name="osint", daemon=True).start()
     try:
         srv = ThreadingHTTPServer((a.host, a.port), Handler)
     except OSError:

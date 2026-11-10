@@ -103,6 +103,23 @@ licence profiles by grid square, with the research behind each item: [docs/ROADM
 - v3.22's face plate had a JavaScript error (an apostrophe in the new Gale help text), so its buttons and panels
   did not work. Fixed, and the test suite now checks that the face plate's JavaScript parses. Use 3.22.1 for testing.
 
+## What's new in 3.24: Tradewind OSINT - open satellite data on the live map
+
+Under the live map there is now an **OSINT** strip. Everything in it is public data and receive only.
+
+- **Satellite imagery** from NASA GIBS, free and with no account: daily VIIRS and MODIS true colour (250 m),
+  and 30 m Sentinel-2 and Landsat (HLS). Pick a layer and a date. After a hurricane, cloud often hides the
+  ground for days, and 30 m shows flooded areas and coastline change, not single buildings.
+- **Fire hotspots** from NASA FIRMS, refreshed every 30 minutes. Needs a free MAP_KEY
+  (firms.modaps.eosdis.nasa.gov/api/map_key), entered under OSINT SETTINGS.
+- **Storms** from the US National Hurricane Center.
+- **Ships (AIS)** from your own receiver, with no internet: run `rtl_ais` or AIS-catcher on an RTL-SDR and send
+  NMEA to UDP port 10110 on this computer.
+- **SAVE FOR OFFLINE** downloads the base map and the chosen imagery around your station, so they still show
+  when the internet is down. Do it before the storm arrives. The last hotspots and storms are kept too.
+
+Code: `osint.py`. The imagery layer names are in one table at the top of that file.
+
 ## What's new in 3.23: Spanish and Portuguese, and chat translation - English stays on the air
 
 - **The face plate in Spanish and Brazilian Portuguese.** MENU > STATION > Language. *Automatic* follows the

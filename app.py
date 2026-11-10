@@ -50,7 +50,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.24"
+APP_VERSION = "3.25"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -168,6 +168,55 @@ def _web_json(url, obj=None, timeout=12):
             return json.loads(r.read().decode("utf-8", "replace"))
     except Exception:
         return None
+
+
+# ---- v3.25 #APRSThursday: the weekly world-wide APRS net (every Thursday, 00:00-23:59 UTC) ----
+# Check in with an APRS message to ANSRVR: "CQ HOTG your text". ANSRVR then passes the net's messages
+# on to you for 12 hours; "U HOTG" leaves. "HOTG your text" to APRSPH logs a check-in without the relay.
+THU_GROUP = "HOTG"
+THU_HOURS = 12
+THU_MAX = tncmod.MAX_TEXT - len("CQ HOTG ")
+
+
+def thursday_state(cfg, now=None):
+    now = now or time.time()
+    last = float(cfg.get("thu_last") or 0)
+    g = time.gmtime(now)
+    midnight = now - (g.tm_hour * 3600 + g.tm_min * 60 + g.tm_sec)
+    return {"today": g.tm_wday == 3, "checked_in": g.tm_wday == 3 and last >= midnight,
+            "subscribed": now - last < THU_HOURS * 3600, "until": last + THU_HOURS * 3600 if last else 0, "max": THU_MAX,
+            "next_in_days": (3 - g.tm_wday) % 7}
+
+
+def thursday_action(st, b):
+    act = str(b.get("action") or "checkin")
+    if st.commercial:
+        raise ValueError("#APRSThursday is an amateur APRS net: switch to amateur mode first.")
+    if not (st.running and st.chat):
+        raise ValueError("Turn the station ON first.")
+    if act == "leave":
+        st.chat.open_direct("ANSRVR", "smart")
+        st.chat.send("ANSRVR", f"U {THU_GROUP}")
+        with st.lock:
+            st.cfg["thu_last"] = 0
+            save_config(st.cfg)
+        return "You have left the net: ANSRVR stops sending you its messages."
+    text = re.sub(r"\s+", " ", str(b.get("text") or "")).strip()
+    if not text:
+        raise ValueError("Type a short check-in message, e.g. Hello from Barbados.")
+    text, _note = trmod.outgoing(text, st.cfg)             # English on the air
+    if len(text) > THU_MAX:
+        raise ValueError(f"Keep the check-in to {THU_MAX} characters so it fits one APRS message.")
+    via = "APRSPH" if str(b.get("via") or "").lower() == "aprsph" else "ANSRVR"
+    st.chat.open_direct(via, "smart")
+    st.chat.send(via, (f"CQ {THU_GROUP} " if via == "ANSRVR" else f"{THU_GROUP} ") + text)
+    with st.lock:
+        st.cfg["thu_last"] = time.time() if via == "ANSRVR" else float(st.cfg.get("thu_last") or 0)
+        save_config(st.cfg)
+    if not thursday_state(st.cfg)["today"]:
+        return "Sent. Note: the net runs on Thursdays (UTC); today's message still reaches the group."
+    return ("Checked in to #APRSThursday. The net's messages will arrive in the ANSRVR chat for 12 hours."
+            if via == "ANSRVR" else "Check-in logged with APRSPH.")
 
 
 def station_latlon(cfg):
@@ -311,6 +360,7 @@ DEFAULTS = {
     "disaster_on": False, "disaster_until": 0, "disaster_reason": "",
     "share_whatsapp": False, "share_facebook": False, "share_email": False, "share_email_to": "",   # opt-in alert sharing
     "uhf_range": "430-440", "allowed_hosts": "",     # v3.7: 70 cm range on your licence; extra face-plate host names
+    "thu_last": 0,                      # v3.25: time of the last #APRSThursday check-in
     "firms_key": "", "osint_fires": True, "osint_storms": True, "osint_ais": False, "ais_port": 10110,   # v3.24 OSINT map
     "lang": "auto",                     # v3.23: face-plate language (auto = the browser's language)
     "tr_engine": "off", "tr_url": "", "tr_key": "", "tr_email": "",   # v3.23: chat translation engine
@@ -369,7 +419,7 @@ DEFAULTS = {
     "cfg_ver": 4,
 }
 SECRET_KEYS = ("com_key", "pin_hash", "pin_salt", "smtp_pass", "imap_pass")   # never sent to the face plate
-GUARDED_KEYS = SECRET_KEYS + ("lock_settings", "disaster_on", "disaster_until", "disaster_reason")      # only changed through their own endpoints
+GUARDED_KEYS = SECRET_KEYS + ("thu_last",) + ("lock_settings", "disaster_on", "disaster_until", "disaster_reason")      # only changed through their own endpoints
 
 # Radio / interface presets. Fields override DEFAULTS when chosen in the UI.
 PRESETS = [
@@ -3011,6 +3061,7 @@ class Station:
             "tw": self.tw_summary(),
             "qsy_hz": self.qsy_hz,
             "wolf": self.wolf_state(),
+            "thursday": thursday_state(c),
             "disaster": {"on": self.disaster_active(), "until": c.get("disaster_until") or 0,
                          "reason": c.get("disaster_reason") or ""},
             "mail_error": self.mail_error,
@@ -3414,6 +3465,11 @@ class Handler(BaseHTTPRequestHandler):
                         STATION.cfg[k] = str(b.get(k) or "")
                 save_config(STATION.cfg)
             return self._json({"ok": True})
+        elif path == "/api/thursday":
+            try:
+                return self._json({"ok": True, "msg": thursday_action(STATION, self._body())})
+            except (ValueError, IOError) as e:
+                return self._json({"ok": False, "errors": [str(e)]})
         elif path == "/api/osint/save":       # download the base map and imagery around the station for offline use
             b = self._body()
             lat, lon = station_latlon(STATION.cfg)

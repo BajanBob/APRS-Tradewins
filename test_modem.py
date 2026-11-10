@@ -83,6 +83,7 @@ def main():
     test_edition()
     test_v323()
     test_v324()
+    test_v325()
     test_v3171()
     test_hf()
     test_android_imports()
@@ -192,6 +193,62 @@ def test_hf():
     st._hf_stop()
     assert not st.tnc.audio_taps and st.hf is None
     print("HF Calling ok: CCIR 493-4 + Tradewind selcall, ALE, SELCAL 32, presets, alerts, band guard, station wiring")
+
+
+def test_v325():
+    """v3.25 #APRSThursday: check in through ANSRVR ("CQ HOTG text"), leave ("U HOTG"), APRSPH, limits."""
+    import calendar
+    import app
+    thu = calendar.timegm((2026, 11, 12, 15, 0, 0))            # a Thursday, 15:00 UTC
+    s = app.thursday_state({"thu_last": 0}, thu)
+    assert s["today"] and not s["checked_in"] and not s["subscribed"] and s["max"] == 59
+    s = app.thursday_state({"thu_last": thu - 3600}, thu)
+    assert s["checked_in"] and s["subscribed"] and s["until"] == thu + 11 * 3600
+    assert not app.thursday_state({"thu_last": thu - 20 * 3600}, thu)["checked_in"]      # yesterday's doesn't count
+    wed = app.thursday_state({}, thu - 86400)
+    assert not wed["today"] and wed["next_in_days"] == 1
+    sent, saved = [], []
+
+    class Chat:
+        def open_direct(self, call, route):
+            sent.append(("open", call, route))
+
+        def send(self, call, text):
+            sent.append((call, text))
+    st = app.Station.__new__(app.Station)
+    app.Station.__init__(st)
+    st.cfg = dict(app.DEFAULTS, call="8P5AB-10", tr_engine="off")
+    st.running, st.commercial, st.chat = True, False, Chat()
+    keep, app.save_config = app.save_config, lambda cfg: saved.append(dict(cfg))
+    try:
+        msg = app.thursday_action(st, {"action": "checkin", "text": "  Hello  from Barbados via Tradewind "})
+        assert sent[-1] == ("ANSRVR", "CQ HOTG Hello from Barbados via Tradewind") and st.cfg["thu_last"] > 0 and saved and msg
+        app.thursday_action(st, {"action": "checkin", "text": "73 de 8P5AB", "via": "aprsph"})
+        assert sent[-1] == ("APRSPH", "HOTG 73 de 8P5AB")
+        app.thursday_action(st, {"action": "leave"})
+        assert sent[-1] == ("ANSRVR", "U HOTG") and st.cfg["thu_last"] == 0
+        for bad, why in (({"text": ""}, "Type"), ({"text": "x" * 60}, "59 characters")):
+            try:
+                app.thursday_action(st, bad)
+                raise AssertionError("bad check-in accepted")
+            except ValueError as e:
+                assert why in str(e), e
+        st.commercial = True
+        try:
+            app.thursday_action(st, {"text": "hi"})
+            raise AssertionError("APRS net allowed in commercial mode")
+        except ValueError:
+            pass
+        st.commercial, st.running = False, False
+        try:
+            app.thursday_action(st, {"text": "hi"})
+            raise AssertionError("check-in with the station off")
+        except ValueError:
+            pass
+    finally:
+        app.save_config = keep
+    assert "thu_last" in app.GUARDED_KEYS
+    print("v3.25 ok (#APRSThursday: CQ HOTG check-in through ANSRVR, APRSPH, leave, Thursday reminder)")
 
 
 def test_v324():

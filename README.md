@@ -103,6 +103,18 @@ licence profiles by grid square, with the research behind each item: [docs/ROADM
 - v3.22's face plate had a JavaScript error (an apostrophe in the new Gale help text), so its buttons and panels
   did not work. Fixed, and the test suite now checks that the face plate's JavaScript parses. Use 3.22.1 for testing.
 
+## What's new in 3.25: #APRSThursday
+
+The weekly world-wide APRS net runs every Thursday from 00:00 to 23:59 UTC. Under the chat there is now an
+**#APRSTHURSDAY** button:
+
+- Type a short message and press **CHECK IN**. Tradewind sends `CQ HOTG your text` to ANSRVR. The net's messages
+  then arrive in the ANSRVR chat for 12 hours.
+- **LEAVE THE NET** sends `U HOTG`, so your local frequency is not loaded with the net's traffic once you stop watching.
+- On Thursdays (UTC) the button lights up and Tradewind reminds you once.
+- The check-in is kept to 59 characters so it fits one APRS message. With chat translation on, it goes out in English.
+- It needs a path to the internet: your APRS-IS connection, or an iGate that hears you. Amateur mode only.
+
 ## What's new in 3.24: Tradewind OSINT - open satellite data on the live map
 
 Under the live map there is now an **OSINT** strip. Everything in it is public data and receive only.

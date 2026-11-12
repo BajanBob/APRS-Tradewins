@@ -53,7 +53,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.27.2"
+APP_VERSION = "3.27.3"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -796,6 +796,8 @@ def validate(cfg):
     if cfg.get("igate_tx") and not cfg.get("igate") and not no_radio:
         errs.append("The full iGate needs 'RX iGate' switched on too (MENU > APRS-IS).")
     if cfg.get("digi"):
+        if cfg.get("tnc") == "sdr" and not cfg.get("link2_enabled"):
+            errs.append("The fill-in digipeater needs a radio that transmits (MENU > RADIO / TNC).")
         if cfg.get("tnc") == "sound" and cfg.get("modem") in ("robust", "robust_dx", "robust_fm", "300"):
             errs.append("The digipeater works on 1200-baud VHF/UHF APRS, not on the Robust or HF modems.")
         if cfg.get("digi_alias") and not digimod.valid_call(cfg.get("digi_alias")):
@@ -1046,15 +1048,12 @@ class Station:
             self.commercial = c.get("op_mode") == "commercial"
             self.sec, self.last_id = None, 0
             self.digi = None
-            no_tx = c.get("tnc") == "none" or (c.get("tnc") == "sdr" and not c.get("link2_enabled"))
             if c.get("tnc") == "none":
                 off = [n for k, n in (("digi", "digipeater"), ("igate", "iGate"), ("hf_enabled", "HF Calling"),
                                       ("kiss_server", "KISS server")) if c.get(k)]
                 if off:
                     self.add_log("SYS", "APRS-IS only: " + ", ".join(off) + " stay off until a radio is chosen")
-            if c.get("digi") and not self.commercial and no_tx and c.get("tnc") != "none":
-                self.add_log("SYS", "Digipeater not started: it needs a radio that transmits")
-            if c.get("digi") and not self.commercial and not no_tx:
+            if c.get("digi") and not self.commercial and c.get("tnc") != "none":
                 self.digi = digimod.FillInDigi(c["call"], c.get("digi_alias") or "", int(c.get("digi_max_per_min") or 10),
                                                mode=c.get("digi_mode") or "fill")
                 kind = "Wide-area digipeater ON (WIDE1-1, WIDE2-1, WIDE2-2" if self.digi.mode == "wide" else \

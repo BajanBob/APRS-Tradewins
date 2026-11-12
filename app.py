@@ -53,7 +53,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.27.1"
+APP_VERSION = "3.27.2"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -792,7 +792,8 @@ def validate(cfg):
         errs.append("The RTL-SDR receiver needs the Windows, Linux or Raspberry Pi version.")
     if cfg.get("tnc") == "sdr" and not tncmod.aprs_freq_hz(cfg):
         errs.append("APRS frequency must be in MHz within the 2m or 70cm band, e.g. 144.390.")
-    if cfg.get("igate_tx") and not cfg.get("igate"):
+    no_radio = cfg.get("tnc") == "none"     # v3.27.2: APRS-IS only - radio features stay off, they never block power-on
+    if cfg.get("igate_tx") and not cfg.get("igate") and not no_radio:
         errs.append("The full iGate needs 'RX iGate' switched on too (MENU > APRS-IS).")
     if cfg.get("digi"):
         if cfg.get("tnc") == "sound" and cfg.get("modem") in ("robust", "robust_dx", "robust_fm", "300"):
@@ -844,7 +845,7 @@ def validate(cfg):
             errs.append("Satellite frequency must be a 2 m or 70 cm frequency in MHz, e.g. 145.825.")
         if cfg.get("iss_path") and check_path(cfg.get("iss_path")):
             errs.append("ISS path: " + check_path(cfg.get("iss_path")).removeprefix("RF path: "))
-    if cfg.get("hf_enabled"):
+    if cfg.get("hf_enabled") and not no_radio:
         errs += hf_validate(cfg)
     if cfg.get("tnc") == "kiss_serial" and not cfg.get("kiss_serial"):
         errs.append("Choose the radio / TNC serial port.")
@@ -1046,8 +1047,13 @@ class Station:
             self.sec, self.last_id = None, 0
             self.digi = None
             no_tx = c.get("tnc") == "none" or (c.get("tnc") == "sdr" and not c.get("link2_enabled"))
-            if c.get("digi") and not self.commercial and no_tx:
-                self.add_log("SYS", "Digipeater not started: it needs a radio that transmits (APRS-IS only now)")
+            if c.get("tnc") == "none":
+                off = [n for k, n in (("digi", "digipeater"), ("igate", "iGate"), ("hf_enabled", "HF Calling"),
+                                      ("kiss_server", "KISS server")) if c.get(k)]
+                if off:
+                    self.add_log("SYS", "APRS-IS only: " + ", ".join(off) + " stay off until a radio is chosen")
+            if c.get("digi") and not self.commercial and no_tx and c.get("tnc") != "none":
+                self.add_log("SYS", "Digipeater not started: it needs a radio that transmits")
             if c.get("digi") and not self.commercial and not no_tx:
                 self.digi = digimod.FillInDigi(c["call"], c.get("digi_alias") or "", int(c.get("digi_max_per_min") or 10),
                                                mode=c.get("digi_mode") or "fill")
@@ -1750,7 +1756,7 @@ class Station:
     # ---- v3.18 HF Calling (selcall / ALE)
     def _hf_start(self, c):
         self.hf = None
-        if not c.get("hf_enabled") or self.commercial:
+        if not c.get("hf_enabled") or self.commercial or c.get("tnc") == "none":
             return
         taps = getattr(self.tnc, "audio_taps", None)
         if taps is None or not hasattr(self.tnc, "send_audio"):

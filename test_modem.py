@@ -2031,7 +2031,9 @@ def test_v327():
         raise AssertionError("1200 APRS")
     except IOError:
         pass
-    assert app.validate(dict(app.DEFAULTS, call="8P5AB-1", grid="GK03gc", tnc="none", digi=True)) == []   # 3.27.1
+    # 3.27.2: APRS-IS only never asks for a radio - every radio option ticked still powers on
+    every = {k: True for k, v in app.DEFAULTS.items() if isinstance(v, bool)}
+    assert app.validate(dict(app.DEFAULTS, call="8P5AB-1", grid="GK03gc", tnc="none", **every)) == []
     errs = app.validate(dict(app.DEFAULTS, call="8P5AB", tnc="sound", modem="twfast", digi=True))
     assert any("Tradewind Fast" in e for e in errs)
     assert any("sound modem" in e for e in app.validate(dict(app.DEFAULTS, call="8P5AB", tnc="kiss_tcp", modem="9600")))

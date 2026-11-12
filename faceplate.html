@@ -766,7 +766,7 @@ details.more summary::-webkit-details-marker{display:none}
       <div class="set m-kissrv"><label class="chk"><input type="checkbox" data-k="kiss_server"> KISS TNC server: let other APRS apps (Xastir, YAAC, APRSIS32) use this modem</label></div>
       <div class="set m-kissrv"><label>KISS server port</label><input class="inset" data-k="kiss_server_port" data-num type="number" min="1024" max="65535"></div>
       <div class="set m-kissrv"><label class="chk"><input type="checkbox" data-k="kiss_server_lan"> Allow other computers on my network (KISS has no password - trusted networks only)</label></div>
-      <div class="set wide"><label class="chk"><input type="checkbox" data-k="digi"> Digipeater (VHF/UHF 1200 baud)</label></div>
+      <div class="set wide"><label class="chk"><input type="checkbox" data-k="digi" id="f-digi"> Digipeater (VHF/UHF 1200 baud)</label><span class="note hide m-digi-none">Needs a radio: with APRS-IS only it stays off. It starts by itself when you choose a radio.</span></div>
       <div class="set"><label>Digipeater type</label><select class="inset" data-k="digi_mode">
         <option value="fill">Fill-in: WIDE1-1 only (other digipeaters nearby)</option>
         <option value="wide">Wide-area: WIDE1-1, WIDE2-1, WIDE2-2 (high site, sparse area)</option></select></div>
@@ -1599,6 +1599,7 @@ function updateVisibility(){
   $$('.m-sdr').forEach(e=>e.classList.toggle('hide', t!=='sdr'));
   $$('.m-kissrv').forEach(e=>e.classList.toggle('hide', !['sound','sdr','kiss_serial'].includes(t)));
   $$('.m-rf').forEach(e=>e.classList.toggle('hide', t==='none'));
+  $$('.m-digi-none').forEach(e=>e.classList.toggle('hide', !(t==='none' && $('#f-digi') && $('#f-digi').checked)));
   if (t!=='none') $$('.m-rfsel').forEach(e=>e.classList.toggle('hide', $('#f-rfwhen').value!=='selected'));
   if (t==='sound'){
     const md = $('#f-modem').value;
@@ -3576,7 +3577,7 @@ $('#b-close').onclick = ()=>{ $('#drawer').classList.remove('open'); $('#b-menu'
 $('#b-save').onclick = save; $('#b-save-top').onclick = save;
 $$('.tab').forEach(t=>t.onclick=()=>{ $$('.tab').forEach(x=>x.classList.toggle('on',x===t)); $$('.pane').forEach(p=>p.classList.toggle('on',p.id===t.dataset.p)); });
 $('#f-preset').onchange = e=>applyPreset(e.target.value);
-$('#f-tnc').onchange = updateVisibility; $('#f-modem').addEventListener('change', updateVisibility);
+$('#f-tnc').onchange = updateVisibility; $('#f-digi') && $('#f-digi').addEventListener('change', updateVisibility); $('#f-modem').addEventListener('change', updateVisibility);
 ['dx_freq','fm_freq'].forEach(k=>$(`[data-k="${k}"]`).addEventListener('input', updateVisibility));
 $('#b-rescan').onclick = ()=>loadDevices(true); $('#f-rfwhen').onchange = updateVisibility; $('#f-ptt').onchange = updateVisibility;
 const MAILPROV = {

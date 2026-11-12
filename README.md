@@ -103,6 +103,14 @@ licence profiles by grid square, with the research behind each item: [docs/ROADM
 - v3.22's face plate had a JavaScript error (an apostrophe in the new Gale help text), so its buttons and panels
   did not work. Fixed, and the test suite now checks that the face plate's JavaScript parses. Use 3.22.1 for testing.
 
+## What's new in 3.25.3: P2P practice form
+
+FORMS in the chat now has **P2P practice (partner exercise)**, for weekly peer-to-peer drills like the Winlink P2P practice.
+Pick whether it is the first call, the reply or the confirmation, the path you used (Tradewind RF chat, or Winlink
+Telnet / VARA FM / VARA HF / Packet P2P), the frequency, the signal report and your location. It goes out as a short
+`P2P` message that fits APRS, so partners can log the exercise in Tradewind and in the ICS-309 log.
+Tradewind does not speak the Winlink protocol: Winlink P2P itself is still done in Winlink Express.
+
 ## What's new in 3.25: #APRSThursday
 
 The weekly world-wide APRS net runs every Thursday from 00:00 to 23:59 UTC. Under the chat there is now an

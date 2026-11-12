@@ -50,7 +50,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.25.2"
+APP_VERSION = "3.25.3"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))

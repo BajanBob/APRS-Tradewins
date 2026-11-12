@@ -132,7 +132,7 @@ def test_hf():
     assert app.validate(dict(base, hf_channels="7102, 99999"))
     assert app.validate(dict(base, hf_scan=True, hf_channels="7102"))
     assert app.validate(dict(base, hf_sound_min=5))
-    assert app.validate(dict(base, tnc="none"))
+    assert not app.validate(dict(base, tnc="none"))           # 3.27.2: APRS-IS only - HF Calling just stays off
     assert app.validate(dict(base, hf_selcall_tones="xyz"))
     assert app.validate(dict(base, hf_call_format="oem")) and app.validate(dict(base, hf_ccir_dots_s=40))
     ps = hfcall.presets()

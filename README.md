@@ -103,6 +103,15 @@ licence profiles by grid square, with the research behind each item: [docs/ROADM
 - v3.22's face plate had a JavaScript error (an apostrophe in the new Gale help text), so its buttons and panels
   did not work. Fixed, and the test suite now checks that the face plate's JavaScript parses. Use 3.22.1 for testing.
 
+## What's new in 3.26: longer messages, pictures and voice clips by radio, ICS forms, Winlink via Pat
+
+- **200-character messages between Tradewind stations.** Tradewind knows which stations run Tradewind (the green TRADEWIND badge). To them a message carries up to 200 characters; to every other APRS station it stays at the standard 67 and is split as before. The text is not compressed or hidden - any APRS program that hears it can read it.
+- **Pictures, voice clips and files over Tradewind's own modem.** 📎 sends a PNG, GIF, JPEG or WebP picture (shrunk in the browser to about 40 kB), a text, CSV, PDF or form file; 🎤 records a voice clip of up to 20 seconds at about 8 kbit/s. Up to 64 kB per file. The file is split into frames with a checksum; the receiver asks for missing pieces and confirms when it has it all. It is clear text (base64, a public encoding) with NOGATE in the path, so iGates don't copy it to the internet.
+  - **Never on the APRS frequency.** Files go only after the chat has used **QSY** to move to a chat channel (two stations alone there may use up to 50% of the airtime; back on APRS the normal 10% applies), or on a **9600-baud second radio link**. Anywhere else Tradewind says why and doesn't send.
+  - A 40 kB picture takes about 10 minutes at 1200 baud on a chat channel, and well under 2 minutes on a 9600 link.
+- **ICS forms as real forms.** FORMS now includes ICS-213 General Message, ICS-213RR Resource Request, ICS-214 Activity Log and ICS-205 Incident Radio Communications Plan, laid out by the paper form's numbered boxes, with tables for orders, activity logs and channel plans. On a chat channel or fast link the form goes as a form file and opens as the form at the other end (OPEN FORM, then REPLY / EDIT A COPY). Otherwise it goes as text messages.
+- **Winlink via Pat.** Pat (getpat.io), the Winlink client, does the Winlink protocol and VARA; Tradewind now drives it. Run Pat on the same computer with its web interface on (`pat --listen varafm,telnet http`). Under **WINLINK VIA PAT**, write the message, add attachments or an ICS form (SEND VIA PAT on the form), choose VARA FM, VARA HF, Telnet P2P, ARDOP, AX.25 or the Winlink CMS, and press SEND. Tradewind puts the message in Pat's outbox and tells Pat to connect. PAT INBOX shows what arrived. Tradewind only talks to Pat on this computer: it looks for Pat at http://127.0.0.1:8080 (set `pat_url` in config.json if Pat uses another port).
+
 ## What's new in 3.25.3: P2P practice form
 
 FORMS in the chat now has **P2P practice (partner exercise)**, for weekly peer-to-peer drills like the Winlink P2P practice.

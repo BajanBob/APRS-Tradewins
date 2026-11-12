@@ -452,6 +452,12 @@ class BaseTNC:
         self._stop = threading.Event()
         self.airtime = AirtimeGuard()
         self.on_frame = None
+        self.air_baud = 1200                   # on-air speed of a KISS radio link (9600 for a G3RUH data radio)
+
+    def tx_pending(self):
+        """v3.26: frames still waiting to go out (file transfer sends the next piece when this is 0)."""
+        q = getattr(self, "txq", None)
+        return (q.qsize() if q else 0) + (1 if self.tx_active else 0)
 
     def _heard(self, frame_no_fcs):
         if self.on_frame:                      # KISS server: pass the raw frame to other APRS apps
@@ -516,6 +522,14 @@ class AirtimeGuard:
     def add(self, dur):
         with self.lock:
             self.log.append((self.now(), dur))
+
+    def set_pct(self, pct):
+        """v3.26: change the share (a QSY'd two-station chat channel may use more than the APRS channel)."""
+        with self.lock:
+            self.budget = self.window * float(pct) / 100.0
+
+    def pct(self):
+        return round(self.budget * 100 / self.window)
 
 
 def frame_airtime(nbytes, baud=1200, txdelay_ms=300, txtail_ms=50):
@@ -807,18 +821,18 @@ class _KissStreamTNC(BaseTNC):
 
     def send(self, src, dst, path, info):
         frame = _strip_fcs(afsk.encode_ax25(src, dst, path, info))
-        dur = frame_airtime(len(frame))
+        dur = frame_airtime(len(frame), self.air_baud)
         wait = self.airtime.wait(dur)
         if wait > 0:
-            raise IOError(f"airtime limit (10% of 10 min) - try again in {int(wait)} s")
+            raise IOError(f"airtime limit ({self.airtime.pct()}% of 10 min) - try again in {int(wait)} s")
         self.airtime.add(dur)
         self._send_kiss(frame)
 
     def send_frame(self, frame_no_fcs):
-        dur = frame_airtime(len(frame_no_fcs))
+        dur = frame_airtime(len(frame_no_fcs), self.air_baud)
         wait = self.airtime.wait(dur)
         if wait > 0:
-            raise IOError(f"airtime limit (10% of 10 min) - try again in {int(wait)} s")
+            raise IOError(f"airtime limit ({self.airtime.pct()}% of 10 min) - try again in {int(wait)} s")
         self.airtime.add(dur)
         self._send_kiss(frame_no_fcs)
 
@@ -1236,6 +1250,7 @@ def list_serial_ports():
 
 
 MAX_TEXT = 67                        # APRS message text limit
+LONG_TEXT = 200                      # v3.26: between Tradewind stations only (other APRS radios cut longer text)
 RETRY_S = (30, 60, 120)              # resend delays until acked
 LINK_TIMEOUT_S = 15 * 60             # unanswered hail / confirmation expires
 # ---- abuse limits (v3.2)
@@ -1448,10 +1463,10 @@ def valid_call(c):
     return bool(CHAT_CALL_RE.match(norm_call(c)))
 
 
-def format_message(addressee, text, msgno=None, replyack=None):
+def format_message(addressee, text, msgno=None, replyack=None, maxlen=MAX_TEXT):
     """APRS message info field: ':ADDRESSEE:text{NN', or with an APRS 1.1 reply-ack ':ADDRESSEE:text{NN}AA'
     (AA = their message we acknowledge inside this one; '' = just say we understand reply-acks)."""
-    t = text.replace("|", "/").replace("~", "-").replace("{", "(").replace("}", ")")[:MAX_TEXT]
+    t = text.replace("|", "/").replace("~", "-").replace("{", "(").replace("}", ")")[:maxlen]
     if msgno and replyack is not None:
         return f":{norm_call(addressee):<9}:{t}{{{msgno}}}{replyack}"
     return f":{norm_call(addressee):<9}:{t}" + (f"{{{msgno}" if msgno else "")
@@ -1482,15 +1497,15 @@ def parse_message(line):
             "replyack": replyack, "ra": ra}
 
 
-def split_text(text):
+def split_text(text, limit=MAX_TEXT):
     text = " ".join(text.split())
     out = []
     while text:
-        if len(text) <= MAX_TEXT:
+        if len(text) <= limit:
             out.append(text)
             break
-        cut = text.rfind(" ", 0, MAX_TEXT)
-        cut = cut if cut > 20 else MAX_TEXT
+        cut = text.rfind(" ", 0, limit)
+        cut = cut if cut > 20 else limit
         out.append(text[:cut])
         text = text[cut:].strip()
     return out
@@ -1616,6 +1631,7 @@ class ChatManager:
         self.is_ok = None             # callable() -> True when APRS-IS can carry a message
         self.relay_wait = []          # RF-first: relayed messages waiting for "RELAY OK delivered"
         self.on_tw = None             # callable(call): a station spoke the Tradewind handshake
+        self.is_tw = None             # callable(call) -> True when the station runs Tradewind (long messages allowed)
         self.on_qsy = None            # callable(mhz or None): retune the radio for a QSY / back to APRS
         self.qsy_delay = 6            # seconds to let the last ack go out before retuning
         self.qsy_active = None        # the peer we moved off the APRS frequency with
@@ -1665,6 +1681,22 @@ class ChatManager:
         self.seq += 1
         return m
 
+    def file_note(self, call, direction, meta):
+        """v3.26: show a file transfer (picture, voice clip, file) in the chat with this station, and keep it current."""
+        with self.lock:
+            p = self._peer(call)
+            for m in reversed(p["messages"]):
+                if (m.get("file") or {}).get("id") == meta["id"]:
+                    m["file"] = dict(meta)
+                    self.seq += 1
+                    return m
+            label = ("Picture" if meta["mime"].startswith("image/") else
+                     "Voice clip" if meta["mime"].startswith("audio/") else "File")
+            m = self._log(p, direction, f"[{label}: {meta['name']}, {max(1, meta['size'] // 1024)} kB]", file=dict(meta))
+            if direction == "in":
+                p["unread"] = p.get("unread", 0) + 1
+            return m
+
     def _next_no(self):
         self.counter = self.counter % 999 + 1
         return str(self.counter)
@@ -1684,7 +1716,7 @@ class ChatManager:
         return self.now() - self.last_msg_t.get(call, -1e9) < MSG_GAP_S
 
     def _send(self, p, text, show=True, kind="chat", delays=None, forever=False, orig=None, entry=None,
-              route=None, smart=None, released=False):
+              route=None, smart=None, released=False, long=False):
         """Send one numbered message (retried until acked).
         delays: seconds between tries (default RETRY_S); forever: keep the last delay until acked.
         Chat and relay messages wait their turn: one unanswered message per station at a time."""
@@ -1695,7 +1727,7 @@ class ChatManager:
                                                   (not released and any(h["call"] == p["call"] for h in self.held))):
             entry["state"] = "waiting"
             self.held.append({"call": p["call"], "text": text, "kind": kind, "delays": delays,
-                              "entry": entry, "orig": orig, "route": route, "smart": smart})
+                              "entry": entry, "orig": orig, "route": route, "smart": smart, "long": long})
             self.seq += 1
             return entry
         if route is None and p["route"] == "smart" and smart is None:
@@ -1708,7 +1740,7 @@ class ChatManager:
         entry.update(state="sending", no=no)
         self.pending[no] = {"call": p["call"], "text": text, "route": route or p["route"], "tries": 0,
                             "next": 0, "entry": entry, "delays": list(delays or self.retry), "forever": forever,
-                            "kind": kind, "orig": orig, "start": self.now(), "smart": smart}
+                            "kind": kind, "orig": orig, "start": self.now(), "smart": smart, "long": long}
         if kind in ("chat", "relay"):
             self.last_msg_t[p["call"]] = self.now()
         self._transmit(no)
@@ -1724,7 +1756,8 @@ class ChatManager:
             if h["entry"].get("state") == "cancelled":
                 continue
             self._send(self._peer(h["call"]), h["text"], kind=h["kind"], delays=h["delays"],
-                       orig=h["orig"], entry=h["entry"], route=h.get("route"), smart=h.get("smart"), released=True)
+                       orig=h["orig"], entry=h["entry"], route=h.get("route"), smart=h.get("smart"), released=True,
+                       long=h.get("long", False))
 
     # ---- RF-first routing: direct RF -> relay through heard Tradewind stations -> APRS-IS
     def _smart_next(self, o):
@@ -1817,7 +1850,8 @@ class ChatManager:
                     o["ra_embed"] = hold["no"]       # their message's ack rides in this one
                     q["ack_hold"] = None
                 ra = o.get("ra_embed") or ""
-            link = self.send_fn(o["call"], format_message(o["call"], o["text"], no, ra), o["route"])
+            link = self.send_fn(o["call"], format_message(o["call"], o["text"], no, ra,
+                                                          LONG_TEXT if o.get("long") else MAX_TEXT), o["route"])
             o["entry"]["error"] = ""
             o["link"], o["t"] = (link if isinstance(link, str) else None), self.now()
             if o["link"]:
@@ -1847,7 +1881,7 @@ class ChatManager:
             if self.store_forward and o.get("kind") in ("chat", "relay", "mail") and not o.get("probe"):
                 o["entry"]["state"] = "queued"          # store and forward: resend when they are heard
                 self._outbox_add({"call": o["call"], "text": o["text"], "entry": o["entry"], "t": self.now(),
-                                  "kind": o.get("kind"), "orig": o.get("orig")})
+                                  "kind": o.get("kind"), "orig": o.get("orig"), "long": o.get("long", False)})
             else:
                 o["entry"]["state"] = "failed"
             self._stat(o, "no ack", "")
@@ -1950,11 +1984,12 @@ class ChatManager:
             p = self._peer(call)
             if p["status"] != OPEN and not p.get("direct"):
                 raise ValueError("Open a link first: hail the station and wait for both sides to accept.")
-            parts = split_text(text)
+            long = bool(self.is_tw and self.is_tw(p["call"]))
+            parts = split_text(text, LONG_TEXT if long else MAX_TEXT)
             if not parts:
                 raise ValueError("Type a message first.")
             for part in parts:
-                self._send(p, part)
+                self._send(p, part, long=long)
             p["unread"] = 0
             if not p.get("qsy") and p["status"] == OPEN and not str(p["route"]).startswith(("is",)):
                 p["sent_here"] = p.get("sent_here", 0) + len(parts)
@@ -2221,7 +2256,8 @@ class ChatManager:
             p = self._peer(call)
             self._log(p, "sys", f"{call} heard again - resending {len(due)} stored message{'s' if len(due) > 1 else ''}")
             for o in due:
-                self._send(p, o["text"], kind=o.get("kind") or "chat", orig=o.get("orig"), entry=o["entry"])
+                self._send(p, o["text"], kind=o.get("kind") or "chat", orig=o.get("orig"), entry=o["entry"],
+                           long=o.get("long", False))
 
     def probe(self, call):
         """Send a short test message on every radio link and time the replies."""
@@ -2586,6 +2622,7 @@ class ChatManager:
                                "can_send": p["status"] == OPEN or bool(p.get("direct")),
                                "forever": bool(p.get("forever")),
                                "nogate": bool(p.get("nogate")),
+                               "tw": bool(self.is_tw and self.is_tw(p["call"])),
                                "last": (p["messages"][-1]["text"][:60] if p["messages"] else ""),
                                "last_t": (p["messages"][-1]["t"] if p["messages"] else p["since"]),
                                "qsy": {k: v for k, v in (p.get("qsy") or {}).items() if k in ("freq", "state")} or None,

@@ -356,6 +356,19 @@ body[data-fp="field"] .map-wrap,body[data-fp="field"] .chat-wrap{margin-top:0;ba
 .forms-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px}
 .forms-grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;letter-spacing:.08em;color:var(--engrave)}
 .forms-grid label.w{grid-column:1/-1}
+.cm .tf{display:flex;flex-direction:column;gap:6px;margin:4px 0}
+.cm .tf img{max-width:min(320px,100%);border-radius:8px;border:1px solid var(--edge)}
+.cm .tf .bar{height:6px;background:#1c242c;border-radius:3px;overflow:hidden;max-width:240px}
+.cm .tf .bar i{display:block;height:100%;background:var(--accent,#3b82f6)}
+.ics-tab{width:100%;border-collapse:collapse;font-size:12px}
+.ics-tab th{color:var(--engrave);font-weight:normal;text-align:left;padding:2px 4px}
+.ics-tab td{padding:2px}
+.ics-tab input{width:100%;min-width:60px}
+.ics-view{white-space:pre-wrap;font:12px/1.45 ui-monospace,monospace;background:#0d1217;border:1px solid var(--edge);border-radius:8px;padding:10px;max-height:60vh;overflow:auto}
+#pat-box .row{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin:6px 0}
+#pat-box label{display:flex;flex-direction:column;gap:4px;font-size:12px;letter-spacing:.08em;color:var(--engrave);flex:1;min-width:140px}
+#pat-box .pat-in div{padding:6px 0;border-bottom:1px solid var(--edge);cursor:pointer}
+.rec{color:#ef4444}
 .forms-prev{margin-top:10px;font:13px var(--mono);color:#cfe8ff;background:#0d1217;border-radius:6px;padding:8px 10px;white-space:pre-wrap}
 .forms-acts{display:flex;gap:8px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}
 @media (max-width:560px){ .forms-grid{grid-template-columns:1fr} }
@@ -1075,8 +1088,27 @@ details.more summary::-webkit-details-marker{display:none}
       </div>
       <div class="forms-grid" id="form-fields"></div>
       <div class="forms-prev" id="form-prev" aria-live="polite"></div>
-      <div class="forms-acts"><button class="btn" type="button" id="form-cancel">CLOSE</button><button class="btn accent" type="button" id="form-send">SEND FORM</button></div>
+      <div class="forms-acts"><button class="btn" type="button" id="form-cancel">CLOSE</button><button class="btn hide" type="button" id="form-pat" title="Send this form as Winlink mail through Pat">SEND VIA PAT</button><button class="btn accent" type="button" id="form-send">SEND FORM</button></div>
     </section>
+    <section class="forms hide" id="ics-view-box" aria-label="Received ICS form">
+      <div class="forms-head"><b id="ics-view-title">ICS form</b></div>
+      <div class="ics-view" id="ics-view"></div>
+      <div class="forms-acts"><button class="btn" type="button" id="ics-view-close">CLOSE</button><button class="btn" type="button" id="ics-view-reply">REPLY / EDIT A COPY</button></div>
+    </section>
+    <details class="forms" id="pat-box">
+      <summary><b style="letter-spacing:.08em">WINLINK VIA PAT</b> <span class="note" id="pat-st">- Tradewind writes the message, Pat sends it</span></summary>
+      <p class="note">Run <b>Pat</b> on this computer with its web interface on: <code>pat --listen varafm,telnet http</code>. Tradewind puts the message (with an ICS form and attachments) in Pat's outbox and asks Pat to connect over VARA FM, VARA HF or Telnet P2P. Pat speaks Winlink; Tradewind does not.</p>
+      <div class="row"><label>To (callsign, or email for the CMS)<input class="inset" id="pat-to" autocomplete="off"></label><label>Subject<input class="inset" id="pat-subj" autocomplete="off"></label></div>
+      <div class="row"><label style="flex:1 1 100%">Message<textarea class="inset" id="pat-body" rows="4"></textarea></label></div>
+      <div class="row"><label>Attachments (pictures, files - 120 kB in all)<input type="file" id="pat-files" multiple></label><span class="note" id="pat-form-note"></span></div>
+      <div class="row"><label>Connect by<select class="inset" id="pat-tr"><option value="varafm">VARA FM (P2P)</option><option value="varahf">VARA HF (P2P)</option><option value="telnet_p2p">Telnet P2P</option><option value="ardop">ARDOP (P2P)</option><option value="ax25">AX.25 packet (P2P)</option><option value="cms">Winlink CMS (internet)</option></select></label>
+        <label>Peer callsign<input class="inset" id="pat-peer" autocomplete="off" placeholder="same as To"></label>
+        <label id="pat-host-l">Peer address (Telnet P2P)<input class="inset" id="pat-host" autocomplete="off" placeholder="10.0.0.5:8774"></label></div>
+      <div class="row"><label class="chk" style="flex-direction:row;align-items:center"><input type="checkbox" id="pat-now" checked> Connect now</label>
+        <button class="btn" type="button" id="pat-connect">CONNECT ONLY</button><button class="btn" type="button" id="pat-abort">ABORT</button><button class="btn accent" type="button" id="pat-send">SEND</button></div>
+      <div class="row"><button class="btn" type="button" id="pat-inbox">PAT INBOX</button><span class="note" id="pat-last"></span></div>
+      <div class="pat-in" id="pat-in"></div>
+    </details>
     <div class="disaster hide" id="disaster-banner" role="status"></div>
     <div class="hide" id="thu-box" style="border:1px solid var(--edge);border-radius:10px;padding:10px 12px;margin:8px 0;background:#11161b">
       <b style="letter-spacing:.08em">#APRSTHURSDAY</b> <span class="note">- the world-wide APRS net. Unlocked on Thursdays, 6:00 to 9:00 am</span>
@@ -2786,13 +2818,19 @@ function drawChat(){
     m.state==='relayed' ? ' · with the relay - waiting for delivery' :
     ' · sending…' + (m.tries>1 ? ` (try ${m.tries})` : '')) + (m.link && m.link!=='IS' && (p.links||[]).length>1 ? ` · link ${m.link}` : '');
   const msgs = p.messages.map(m => m.dir==='sys' ? `<div class="cm sys">${hms(new Date(m.t*1000)).slice(0,5)} ${esc(m.text)}</div>` :
-    `<div class="cm ${m.dir} ${m.state==='failed'||m.state==='rejected'?'failed':''}"><span class="who">${m.dir==='in' ? esc(p.call) : 'YOU'}</span><span data-noi18n>${esc(m.tr_text || m.text)}</span>${trBadge(m)}<small>${hms(new Date(m.t*1000)).slice(0,5)}${m.via?' · via '+m.via:''}${icon(m)}${m.error?' · '+esc(m.error):''}</small></div>`).join('');
+    `<div class="cm ${m.dir} ${m.state==='failed'||m.state==='rejected'?'failed':''}"><span class="who">${m.dir==='in' ? esc(p.call) : 'YOU'}</span>${m.file ? fileHtml(m.file, m.dir) : `<span data-noi18n>${esc(m.tr_text || m.text)}</span>`}${trBadge(m)}<small>${hms(new Date(m.t*1000)).slice(0,5)}${m.via?' · via '+m.via:''}${icon(m)}${m.error?' · '+esc(m.error):''}</small></div>`).join('');
   $('#chat-pane').innerHTML = `<div class="chat-status${ask?' ask pulse':''}"><span><button type="button" class="callk big" data-call="${esc(p.call)}">${esc(p.call)}</button> · ${esc(p.status_text)}${p.via?' · last heard via '+p.via:''}</span><span class="acts">${seg}${acts}</span></div>
     ${lstats}<div class="chat-legend" aria-hidden="true"><span><i style="background:#ef4444"></i>${esc(p.call)}</span><span><i style="background:#3b82f6"></i>You</span></div>
     <div class="chat-msgs" id="chat-msgs" role="log" aria-live="polite">${msgs || '<div class="cm sys">No messages yet</div>'}</div>
     <div class="composer">${p.can_send ? `<div class="quick" role="group" aria-label="Quick replies">${['QSL','Roger','Standby','Say again','All OK here','Need help','73'].map(q=>`<button type="button" data-quick="${q}">${q}</button>`).join('')}</div>` : ''}
-    <form class="chat-form" id="chat-form"><button class="btn" type="button" id="b-forms" ${p.can_send?'':'disabled'} title="Weather, SITREP and other message forms">FORMS</button><input class="inset" id="chat-text" maxlength="200" autocomplete="off" placeholder="${p.can_send?'Type a message':'Chat opens when both sides accept'}" ${p.can_send?'':'disabled'}><button class="btn accent" type="submit" ${p.can_send?'':'disabled'}>SEND</button></form></div>`;
+    <form class="chat-form" id="chat-form"><button class="btn" type="button" id="b-forms" ${p.can_send?'':'disabled'} title="Weather, SITREP, ICS and other message forms">FORMS</button><button class="btn" type="button" id="b-attach" ${p.can_send?'':'disabled'} title="Send a picture, voice clip or file (on a QSY chat channel or a 9600 link)" aria-label="Attach">📎</button><button class="btn" type="button" id="b-voice" ${p.can_send?'':'disabled'} title="Record a voice clip (up to 20 s)" aria-label="Voice clip">🎤</button><input type="file" id="f-attach" hidden accept="image/png,image/gif,image/jpeg,image/webp,audio/*,.txt,.csv,.pdf,.json"><input class="inset" id="chat-text" maxlength="${p.tw?400:200}" autocomplete="off" placeholder="${p.can_send?(p.tw?'Type a message (Tradewind station: 200 characters per message)':'Type a message'):'Chat opens when both sides accept'}" ${p.can_send?'':'disabled'}><button class="btn accent" type="submit" ${p.can_send?'':'disabled'}>SEND</button></form></div>`;
   $('#b-forms').onclick = openForms;
+  $('#b-attach').onclick = ()=>$('#f-attach').click();
+  $('#f-attach').onchange = e=>{ const f = e.target.files[0]; e.target.value = ''; if (f) sendFile(p, f); };
+  $('#b-voice').onclick = ()=>voiceToggle(p);
+  if (voiceRec) $('#b-voice').classList.add('rec');
+  $$('[data-play]').forEach(b=>b.onclick = ()=>playClip(b.dataset.play));
+  $$('[data-icsopen]').forEach(b=>b.onclick = ()=>openIcsFile(b.dataset.icsopen));
   $$('[data-quick]').forEach(b=>b.onclick = async ()=>{
     const r = await api('/api/chat', {action:'send', call: p.call, text: b.dataset.quick});
     if (r.errors && r.errors.length) return toast(r.errors[0]);
@@ -2897,24 +2935,35 @@ function formParts(){
   const body = f.build(v).replace(/\s+/g,' ').replace(/ \./g,'.').replace(/\.\s*\./g,'.').trim();
   const head = `${f.tag} ${DTG()}`;
   const words = body.split(' '), parts = []; let cur = '';
-  const room = 67 - head.length - 6;        // room left after "TAG DTG n/m "
+  const peer = ((chatData && chatData.peers) || []).find(x=>x.call===chatSel);
+  const lim = peer && peer.tw ? 200 : 67;    // v3.26: 200 characters to Tradewind stations
+  const room = lim - head.length - 6;        // room left after "TAG DTG n/m "
   for (const w of words){ if ((cur + ' ' + w).trim().length > room){ parts.push(cur.trim()); cur = w.slice(0, room); } else cur += ' ' + w; }
   if (cur.trim()) parts.push(cur.trim());
-  return parts.map((p,i)=>`${head} ${i+1}/${parts.length} ${p}`.slice(0,67));
+  return parts.map((p,i)=>`${head} ${i+1}/${parts.length} ${p}`.slice(0,lim));
 }
 function drawForm(){
+  const ics = ICS.find(x=>x.id===$('#form-pick').value);
+  $('#form-pat').classList.toggle('hide', !ics);
+  if (ics) return drawIcs(ics, icsPrefill);
   const f = FORMS.find(x=>x.id===$('#form-pick').value);
   $('#form-fields').innerHTML = f.fields.map(x=>`<label class="${x.w?'w':''}">${x.label}${
     x.type==='select' ? `<select class="inset" data-f="${x.k}">${x.opts.map(o=>`<option value="${esc(o)}">${o}</option>`).join('')}</select>` :
     `<input class="inset" data-f="${x.k}" ${x.type==='num'?'inputmode="numeric"':''} autocomplete="off">`}</label>`).join('');
   previewForm();
 }
-function previewForm(){ const p = formParts(); $('#form-prev').textContent = p.join('\n') + `\n(${p.length} message${p.length>1?'s':''})`; }
+function previewForm(){ if (ICS.find(x=>x.id===$('#form-pick').value)) return previewIcs(); const p = formParts(); $('#form-prev').textContent = p.join('\n') + `\n(${p.length} message${p.length>1?'s':''})`; }
 $('#form-pick').onchange = drawForm;
 $('#form-fields').addEventListener('input', previewForm); $('#form-fields').addEventListener('change', previewForm);
 $('#form-cancel').onclick = ()=>$('#forms').classList.add('hide');
 $('#form-send').onclick = async ()=>{
   if (!chatSel) return toast('Pick a station in the chat first.');
+  if (ICS.find(x=>x.id===$('#form-pick').value)){
+    const r = await api('/api/ics/send', {call: chatSel, doc: icsDoc(), how:'auto'});
+    if (!r.ok) return toast((r.errors||['Not sent'])[0]);
+    toast(r.sent==='file' ? `Form going to ${chatSel} as a form file` : `Form sent to ${chatSel} as text (send it on a QSY channel or fast link to arrive as a form)`, true);
+    $('#forms').classList.add('hide'); return pollChat();
+  }
   const parts = formParts();
   for (const t of parts){
     const r = await api('/api/chat', {action:'send', call: chatSel, text: t});
@@ -2924,6 +2973,186 @@ $('#form-send').onclick = async ()=>{
   $('#forms').classList.add('hide'); pollChat();
 };
 function openForms(){ $('#forms').classList.remove('hide'); $('#form-to').textContent = chatSel ? 'To ' + chatSel : ''; drawForm(); $('#forms').scrollIntoView({behavior:'smooth', block:'nearest'}); }
+
+/* ---------- v3.26 ICS forms (structured) ---------- */
+let ICS = [], icsPrefill = null;
+fetch('/api/ics/forms').then(r=>r.json()).then(j=>{ ICS = Array.isArray(j) ? j : [];
+  if (ICS.length) $('#form-pick').insertAdjacentHTML('beforeend', `<optgroup label="ICS forms (full)">${ICS.map(f=>`<option value="${f.id}">${esc(f.name)}</option>`).join('')}</optgroup>`);
+}).catch(()=>{});
+function icsCell(k, i, j, v){ return `<input class="inset" data-ics-t="${k}" data-r="${i}" data-c="${j}" value="${esc(v||'')}" autocomplete="off">`; }
+function drawIcs(f, pre){
+  const d = (pre && pre.form===f.id && pre.data) || {};
+  const now = new Date(), iso = now.toISOString();
+  $('#form-fields').innerHTML = f.fields.map(x=>{
+    const v = d[x.k] != null ? d[x.k] : (x.type==='date' ? iso.slice(0,10) : x.type==='time' ? iso.slice(11,16) : '');
+    if (x.type==='table'){
+      const rows = (Array.isArray(v) && v.length ? v : [[]]);
+      return `<div class="w" style="grid-column:1/-1"><span class="note" style="margin:0">${esc(x.label)}</span><table class="ics-tab" data-ics-table="${x.k}" data-cols="${x.cols.length}"><tr>${x.cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr>${rows.map((r,i)=>`<tr>${x.cols.map((c,j)=>`<td>${icsCell(x.k,i,j,r[j])}</td>`).join('')}</tr>`).join('')}</table><button class="btn" type="button" data-ics-add="${x.k}">+ ROW</button></div>`;
+    }
+    const w = ['area','table'].includes(x.type) || /message|reply|special|substitutes/.test(x.k);
+    return `<label class="${w?'w':''}">${esc(x.label)}${
+      x.type==='area' ? `<textarea class="inset" data-ics="${x.k}" rows="4">${esc(v)}</textarea>` :
+      x.type==='select' ? `<select class="inset" data-ics="${x.k}"><option value=""></option>${x.options.map(o=>`<option ${o===v?'selected':''}>${esc(o)}</option>`).join('')}</select>` :
+      `<input class="inset" data-ics="${x.k}" type="${x.type==='date'?'date':x.type==='time'?'time':'text'}" value="${esc(v)}" autocomplete="off">`}</label>`;
+  }).join('');
+  $$('[data-ics-add]').forEach(b=>b.onclick = ()=>{
+    const t = $(`[data-ics-table="${b.dataset.icsAdd}"]`), n = t.rows.length - 1, cols = +t.dataset.cols;
+    t.insertAdjacentHTML('beforeend', `<tr>${Array.from({length:cols},(_,j)=>`<td>${icsCell(b.dataset.icsAdd,n,j,'')}</td>`).join('')}</tr>`);
+  });
+  icsPrefill = null; previewIcs();
+}
+function icsDoc(){
+  const id = $('#form-pick').value, data = {};
+  $$('#form-fields [data-ics]').forEach(el=>data[el.dataset.ics] = el.value.trim());
+  $$('#form-fields [data-ics-table]').forEach(t=>{
+    const k = t.dataset.icsTable, rows = [];
+    t.querySelectorAll('[data-ics-t]').forEach(el=>{ (rows[+el.dataset.r] = rows[+el.dataset.r] || [])[+el.dataset.c] = el.value.trim(); });
+    data[k] = rows.filter(r=>r && r.some(x=>x));
+  });
+  return {form:id, v:1, data};
+}
+function previewIcs(){
+  const d = icsDoc(), f = ICS.find(x=>x.id===d.form), n = Object.values(d.data).filter(v=>Array.isArray(v)?v.length:v).length;
+  $('#form-prev').textContent = `${f.name}: ${n} of ${f.fields.length} boxes filled.\nOn a QSY chat channel or a 9600 link it goes as a form file and opens as the form at the other end; otherwise as text messages.`;
+}
+function icsText(doc){
+  const f = ICS.find(x=>x.id===doc.form); if (!f) return JSON.stringify(doc, null, 1);
+  const L = [f.name.toUpperCase(), '='.repeat(f.name.length)];
+  for (const x of f.fields){ const v = doc.data[x.k]; if (!v || (Array.isArray(v) && !v.length)) continue;
+    if (x.type==='table'){ L.push(x.label + ':'); v.forEach((r,i)=>L.push(`  ${i+1}. ` + x.cols.map((c,j)=>r[j]?`${c}: ${r[j]}`:'').filter(Boolean).join('; '))); }
+    else if (x.type==='area') L.push(x.label + ':', ...String(v).split('\n').map(l=>'  '+l));
+    else L.push(`${x.label}: ${v}`); }
+  return L.join('\n');
+}
+let icsOpen = null;
+async function openIcsFile(id){
+  try {
+    const doc = await (await fetch('/api/file?id=' + encodeURIComponent(id))).json();
+    icsOpen = doc; $('#ics-view-title').textContent = (ICS.find(x=>x.id===doc.form)||{name:'Form'}).name;
+    $('#ics-view').textContent = icsText(doc); $('#ics-view-box').classList.remove('hide');
+    $('#ics-view-box').scrollIntoView({behavior:'smooth', block:'nearest'});
+  } catch(e){ toast('That form could not be opened.'); }
+}
+$('#ics-view-close').onclick = ()=>$('#ics-view-box').classList.add('hide');
+$('#ics-view-reply').onclick = ()=>{ if (!icsOpen) return; icsPrefill = icsOpen; $('#ics-view-box').classList.add('hide'); openForms(); $('#form-pick').value = icsOpen.form; drawForm(); };
+$('#form-pat').onclick = ()=>{ patForm = icsDoc(); const f = ICS.find(x=>x.id===patForm.form);
+  $('#pat-form-note').textContent = `With form: ${f ? f.name : patForm.form} (in the message and attached)`;
+  if (chatSel && !$('#pat-to').value) $('#pat-to').value = chatSel;
+  $('#pat-box').open = true; $('#forms').classList.add('hide'); $('#pat-box').scrollIntoView({behavior:'smooth'}); };
+
+/* ---------- v3.26 pictures, voice clips and files by radio ---------- */
+const FILE_MAX = 64*1024;
+function fileHtml(f, dir){
+  const id = encodeURIComponent(f.id), kb = Math.max(1, Math.round(f.size/1024));
+  const busy = ['sending','receiving'].includes(f.state);
+  const st = f.state==='delivered' ? '✓ delivered' : f.state==='received' ? '✓ received' : f.state==='failed' ? '✗ not completed' :
+    `${f.state==='sending'?'sending':'receiving'} ${f.done}/${f.total}${f.wait?' · '+esc(f.wait):''}`;
+  const have = dir==='out' || f.state==='received';
+  let body = `<span data-noi18n>${esc(f.name)} · ${kb} kB</span>`;
+  if (have && f.mime.startsWith('image/')) body = `<img src="/api/file?id=${id}" alt="${esc(f.name)}" loading="lazy">` + body;
+  else if (have && f.mime.startsWith('audio/')) body = `<button class="btn" type="button" data-play="${id}">▶ PLAY</button>` + body;
+  else if (have && f.mime==='application/json' && /\.json$/.test(f.name)) body = `<button class="btn" type="button" data-icsopen="${id}">OPEN FORM</button>` + body;
+  else if (have) body += ` <a href="/api/file?id=${id}&dl=1">download</a>`;
+  return `<span class="tf">${body}${busy?`<span class="bar"><i style="width:${Math.round(100*f.done/Math.max(1,f.total))}%"></i></span>`:''}<span class="note" style="margin:0">${st}</span></span>`;
+}
+let clip = null;
+function playClip(id){ if (clip){ clip.pause(); } clip = new Audio('/api/file?id=' + id); clip.play().catch(()=>toast('This browser cannot play that clip - download it instead.')); }
+function shrinkImage(file){
+  return new Promise((res, rej)=>{
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = ()=>{
+      URL.revokeObjectURL(url);
+      let side = 640, q = 0.6, out = null;
+      const tryOne = ()=>{
+        const k = Math.min(1, side / Math.max(img.width, img.height)), c = document.createElement('canvas');
+        c.width = Math.round(img.width*k); c.height = Math.round(img.height*k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        c.toBlob(b=>{ out = b; if (b.size <= 40*1024 || side <= 240) res(b); else { side = Math.round(side*0.75); q = Math.max(0.35, q-0.08); tryOne(); } }, 'image/jpeg', q);
+      };
+      tryOne();
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); rej(new Error('not a picture')); };
+    img.src = url;
+  });
+}
+const b64 = blob => new Promise(res=>{ const r = new FileReader(); r.onload = ()=>res(String(r.result).split(',')[1] || ''); r.readAsDataURL(blob); });
+function airEstimate(bytes){
+  const frames = Math.ceil(bytes/162);
+  const per = (216 + 70) * 8 * 1.05 / 1200 + 0.35;
+  return Math.round(frames * per * 2);   // 1200 baud at a 50% share; a 9600 link is about 8x faster
+}
+async function sendFile(p, file){
+  let blob = file, name = file.name || 'file', mime = file.type || 'application/octet-stream';
+  if (/^image\/(jpeg|png|webp)$/.test(mime) || (mime==='image/gif' && file.size > FILE_MAX)){
+    try { blob = await shrinkImage(file); mime = 'image/jpeg'; name = name.replace(/\.[^.]+$/, '') + '.jpg'; }
+    catch(e){ return toast('That picture could not be read.'); }
+    if (file.size <= blob.size && file.size <= FILE_MAX){ blob = file; mime = file.type; name = file.name; }
+  }
+  if (blob.size > FILE_MAX) return toast(`Too big for radio: ${Math.round(blob.size/1024)} kB (up to 64 kB).`);
+  const t = airEstimate(blob.size);
+  if (!confirm(`Send ${name} (${Math.max(1,Math.round(blob.size/1024))} kB) to ${p.call}?\nAbout ${t < 90 ? t + ' s' : Math.round(t/60) + ' min'} at 1200 baud (much less on a 9600 link). Only on a QSY chat channel or the fast link.`)) return;
+  const r = await api('/api/file/send', {call:p.call, name, mime, data: await b64(blob)});
+  if (!r.ok) return toast((r.errors||['Not sent'])[0]);
+  pollChat();
+}
+let voiceRec = null;
+async function voiceToggle(p){
+  if (voiceRec){ voiceRec.stop(); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) return toast('Voice clips need the microphone - open Tradewind on this computer (localhost) or over HTTPS.');
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1, noiseSuppression:true}}); }
+  catch(e){ return toast('No microphone (or permission refused).'); }
+  const type = ['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4'].find(t=>MediaRecorder.isTypeSupported(t)) || '';
+  const rec = new MediaRecorder(stream, type ? {mimeType:type, audioBitsPerSecond:8000} : {audioBitsPerSecond:8000}), parts = [];
+  rec.ondataavailable = e=>parts.push(e.data);
+  rec.onstop = async ()=>{
+    stream.getTracks().forEach(t=>t.stop()); clearTimeout(rec._t); voiceRec = null; drawChat();
+    const mime = (rec.mimeType || 'audio/webm').split(';')[0], blob = new Blob(parts, {type:mime});
+    const ext = {'audio/webm':'webm','audio/ogg':'ogg','audio/mp4':'m4a'}[mime] || 'webm';
+    const f = new File([blob], `voice-${Date.now().toString(36)}.${ext}`, {type:mime});
+    sendFile(p, f);
+  };
+  rec.start(); voiceRec = rec; rec._t = setTimeout(()=>rec.state==='recording' && rec.stop(), 20000);
+  toast('Recording... tap 🎤 again to stop (20 s at most)', true); drawChat();
+}
+
+/* ---------- v3.26 Winlink via Pat ---------- */
+let patForm = null;
+async function patStatus(){
+  try { const s = await api('/api/pat');
+    $('#pat-st').textContent = s.running ? (s.busy ? '- connecting…' : s.connected ? '- connected to ' + (s.remote_addr||'') : '- Pat is running') : '- Pat not running on this computer';
+    $('#pat-last').textContent = s.last && s.last.text ? s.last.text : '';
+  } catch(e){}
+}
+$('#pat-box').addEventListener('toggle', ()=>{ if ($('#pat-box').open){ $('#pat-tr').value = (cfg && cfg.pat_transport) || 'varafm'; patTr(); patStatus(); } });
+function patTr(){ $('#pat-host-l').classList.toggle('hide', $('#pat-tr').value!=='telnet_p2p'); }
+$('#pat-tr').onchange = patTr;
+setInterval(()=>{ if ($('#pat-box').open) patStatus(); }, 5000);
+$('#pat-send').onclick = async ()=>{
+  const files = [];
+  for (const f of $('#pat-files').files) files.push({name:f.name, mime:f.type||'application/octet-stream', data: await b64(f)});
+  const r = await api('/api/pat/send', {to:$('#pat-to').value.trim(), subject:$('#pat-subj').value.trim(), body:$('#pat-body').value,
+    files, form: patForm, transport:$('#pat-tr').value, peer:$('#pat-peer').value.trim() || $('#pat-to').value.trim(),
+    host:$('#pat-host').value.trim(), connect:$('#pat-now').checked});
+  if (!r.ok) return toast((r.errors||['Pat refused the message'])[0]);
+  toast(r.connect ? 'In Pat\'s outbox - Pat is connecting' : 'In Pat\'s outbox', true);
+  patForm = null; $('#pat-form-note').textContent = ''; $('#pat-files').value = ''; $('#pat-body').value = ''; patStatus();
+};
+$('#pat-connect').onclick = async ()=>{
+  const r = await api('/api/pat/connect', {transport:$('#pat-tr').value, peer:$('#pat-peer').value.trim() || $('#pat-to').value.trim(), host:$('#pat-host').value.trim()});
+  if (!r.ok) return toast((r.errors||['Could not start'])[0]); toast('Pat is connecting: ' + r.connect, true); patStatus();
+};
+$('#pat-abort').onclick = async ()=>{ await api('/api/pat/abort', {}); patStatus(); };
+$('#pat-inbox').onclick = async ()=>{
+  const j = await api('/api/pat/box?box=in');
+  if (j.error) return toast(j.error);
+  $('#pat-in').innerHTML = (j.items||[]).map(m=>`<div data-mid="${esc(m.mid)}"><b>${esc(m.from)}</b> · ${esc(m.subject)} <span class="note" style="margin:0">${esc((m.date||'').slice(0,16).replace('T',' '))}${m.files.length?' · '+m.files.length+' attachment(s)':''}</span></div>`).join('') || '<div class="note">Pat\'s inbox is empty.</div>';
+  $$('[data-mid]').forEach(d=>d.onclick = async ()=>{
+    const m = await api('/api/pat/box?box=in&mid=' + encodeURIComponent(d.dataset.mid));
+    if (m.error) return toast(m.error);
+    d.innerHTML = `<b>${esc(m.from)}</b> · ${esc(m.subject)}<div class="ics-view">${esc(m.body)}</div>${m.files.length?'<span class="note">Attachments: '+m.files.map(esc).join(', ')+' (open them in Pat)</span>':''}`;
+  });
+};
 
 /* ---------- stations heard on RF + comms log ---------- */
 const ago = t => { const d = Math.max(0, Date.now()/1000 - t); return d < 60 ? 'now' : d < 3600 ? Math.round(d/60)+' min ago' : Math.round(d/3600)+' h ago'; };

@@ -84,6 +84,7 @@ def main():
     test_v323()
     test_v324()
     test_v325()
+    test_v326()
     test_v3171()
     test_hf()
     test_android_imports()
@@ -1733,6 +1734,221 @@ def test_satrx(s, hi):
     shutil.rmtree(tmp, ignore_errors=True)
     print("Satellite receivers ok (SSTV x4 modes, IC-9100 + FT-991A SSTV pass, USB telemetry, Doppler, SDR jobs"
           + (", H.264 video)" if shutil.which("ffmpeg") else ")"))
+
+
+def test_v326():
+    """v3.26: 200-character messages to Tradewind stations, files by radio, ICS forms, the Pat bridge."""
+    import json
+    import shutil
+    import tempfile
+    import icsforms
+    import patlink
+    import twfile
+    # -- long messages
+    long_text = "A" * 150 + " end"
+    assert len(tnc.format_message("8P5DG", long_text, "1", maxlen=tnc.LONG_TEXT).split("{")[0]) == 11 + len(long_text)
+    assert len(tnc.format_message("8P5DG", long_text, "1").split("{")[0]) == 11 + 67
+    assert len(tnc.split_text("x " * 150)) > 3 and len(tnc.split_text("x " * 150, 200)) == 2
+    out = []
+    cm = tnc.ChatManager("8P5AB", lambda call, info, route: out.append(info) or "A")
+    cm.open_direct("8P5DG", "rf")
+    cm.is_tw = lambda c: c == "8P5DG"
+    cm.send("8P5DG", "word " * 35)
+    cm.tick()
+    assert out and len(out[0].split("{")[0]) - 11 > 67, out
+    st = cm.state()
+    assert st["peers"][0]["tw"] is True
+    out.clear()
+    cm.open_direct("8P6XX", "rf")
+    cm.send("8P6XX", "word " * 35)
+    cm.tick()
+    assert out and len(out[0].split("{")[0]) - 11 <= 67
+    # -- files: a picture between two stations with lost frames, NACK, resend, checksum, delivered
+    clock = [1000.0]
+    now = lambda: clock[0]
+    tmp = tempfile.mkdtemp()
+    air, events = [], []
+    drop = {3, 7}
+
+    def tx_a(to, info):
+        air.append(("8P5AB", info))
+
+    def tx_b(to, info):
+        air.append(("8P5DG", info))
+    A = twfile.Transfers("8P5AB", os.path.join(tmp, "a"), tx_a, lambda d, c, m: events.append(("A", d, c, dict(m))), now)
+    B = twfile.Transfers("8P5DG", os.path.join(tmp, "b"), tx_b, lambda d, c, m: events.append(("B", d, c, dict(m))), now)
+    data = os.urandom(1500)
+    meta = A.send("8p5dg", "photo.jpg", "image/jpeg", data)
+    assert meta["total"] == 10 and meta["state"] == "sending"
+    sent_data = 0
+    for _ in range(400):
+        clock[0] += 1.0
+        A.tick()
+        B.tick()
+        while air:
+            src, info = air.pop(0)
+            assert len(info) <= 256 and info.startswith("{{TF")
+            if src == "8P5AB" and info.startswith("{{TFD"):
+                sent_data += 1
+                seq = int(info.split("|")[3])
+                if seq in drop:
+                    drop.discard(seq)
+                    continue
+            (B if src == "8P5AB" else A).feed(src, info)
+        if not A.tx and not B.rx:
+            break
+    got = B.find(meta["id"], "8P5AB")
+    assert got and open(got, "rb").read() == data
+    assert any(e[0] == "A" and e[3]["state"] == "delivered" for e in events), events[-3:]
+    assert sent_data == 12                              # 10 pieces + the 2 that were lost
+    assert A.find(meta["id"]) and not twfile.Transfers("X", tmp, None, None).find("../../x")
+    # someone else's transfer and unknown kinds are ignored; damaged data is refused
+    assert B.feed("8P6XX", "{{TFD|8P6YY|abcde|0|AAAA") and "abcde" not in B.rx
+    for bad in [("x.exe", "application/x-msdownload", b"MZ"), ("big.png", "image/png", b"x" * (twfile.MAX_BYTES + 1)), ("e.png", "image/png", b"")]:
+        try:
+            A.send("8P5DG", *bad)
+            raise AssertionError(bad[0])
+        except ValueError:
+            pass
+    assert twfile.safe_name("../../etc/passwd", "text/plain") == "passwd.txt" and twfile.safe_name("a b.JPG", "image/jpeg") == "a_b.JPG"
+    # time-outs: the sender gives up after TRIES headers with no answer
+    lost = []
+    C = twfile.Transfers("8P5AB", os.path.join(tmp, "c"), lambda t, i: lost.append(i), lambda *a: events.append(("C",) + a), now)
+    m = C.send("8P5ZZ", "v.webm", "audio/webm", b"\x1aE" * 100)
+    for _ in range(600):
+        clock[0] += 1.0
+        C.tick()
+    assert not C.tx and events[-1][0] == "C" and events[-1][3]["state"] == "failed"
+    # the airtime limit pauses the sender without losing the frame
+    busy = [True]
+
+    def tx_busy(to, info):
+        if busy[0]:
+            raise IOError("airtime limit (50% of 10 min) - try again in 12 s")
+    D = twfile.Transfers("8P5AB", os.path.join(tmp, "d"), tx_busy, lambda *a: None, now)
+    D.send("8P5DG", "t.txt", "text/plain", b"hello")
+    D.tick()
+    assert D.tx[next(iter(D.tx))]["queue"][0] == "H" and D.next_t > clock[0]
+    assert twfile.estimate_s(64 * 1024) > twfile.estimate_s(64 * 1024, 9600) * 3
+    # AirtimeGuard share can be opened up on a QSY channel and put back
+    g = tnc.AirtimeGuard()
+    assert g.pct() == 10
+    g.set_pct(50)
+    assert g.pct() == 50 and g.wait(200) == 0 and g.wait(400) > 0
+    # -- ICS forms
+    names = [f["id"] for f in icsforms.catalogue()]
+    assert names == ["ICS213", "ICS213RR", "ICS214", "ICS205"]
+    doc = icsforms.clean("ics213", {"to": "EOC Manager", "from": "Shelter 3", "subject": "Water", "date": "2026-11-12",
+                                    "message": "Need 200 L of water\nby 1800", "evil": "x", "time": "12:00\x07"})
+    assert doc["form"] == "ICS213" and "evil" not in doc["data"] and doc["data"]["time"] == "12:00"
+    txt = icsforms.render_text(doc)
+    assert "ICS-213 GENERAL MESSAGE" in txt and "  by 1800" in txt and "4. Subject: Water" in txt
+    assert icsforms.render_compact(doc).startswith("ICS213 TO:EOC Manager|FROM:Shelter 3|SUBJ")
+    rr = icsforms.clean("ICS213RR", {"items": [["10", "Cots", "", "Folding cots", "", ""], [], "junk"], "priority": "Urgent"})
+    assert rr["data"]["items"] == [["10", "Cots", "", "Folding cots", "", ""]] and rr["data"]["priority"] == "Urgent"
+    assert icsforms.clean("ICS213RR", {"priority": "Whenever"})["data"]["priority"] == ""
+    assert icsforms.from_bytes(icsforms.to_bytes(rr)) == rr and icsforms.filename(doc) == "ICS213_Water.json"
+    try:
+        icsforms.clean("ICS999", {})
+        raise AssertionError("unknown form")
+    except ValueError:
+        pass
+    # -- Pat bridge
+    assert patlink.connect_url("varafm", "8p5dg") == "varafm:///8P5DG"
+    assert patlink.connect_url("varahf", "8P5DG") == "varahf:///8P5DG"
+    assert patlink.connect_url("telnet_p2p", "8P5DG", "8p5ab", "10.0.0.5") == "telnet://8P5AB@10.0.0.5:8774/"
+    assert patlink.connect_url("cms") == "telnet:///"
+    for bad in [("varafm", ""), ("telnet_p2p", "8P5DG", "8P5AB", "x; rm -rf /"), ("bogus", "8P5DG")]:
+        try:
+            patlink.connect_url(*bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+    reqs = []
+
+    class R:
+        def __init__(self, body):
+            self.body = body
+
+        def read(self):
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def opener(req, timeout=0):
+        reqs.append(req)
+        u = req.full_url
+        if "/api/connect" in u:
+            return R(b'{"NumReceived": 2}')
+        if u.endswith("/api/mailbox/in"):
+            return R(json.dumps([{"MID": "ABCDEF123456", "Date": "2026-11-12T10:00:00Z", "From": {"Addr": "8P5DG"},
+                                  "To": [{"Addr": "8P5AB"}], "Subject": "ICS213 Water", "Files": [{"Name": "a.json", "Size": 9}],
+                                  "P2POnly": True, "Unread": True}]).encode())
+        return R(b'{"ok": 1}')
+    pat = patlink.Pat(opener=opener)
+    pat.post("8P5DG", "ICS213 Water", icsforms.render_text(doc), files=[("ICS213_Water.json", "application/json", icsforms.to_bytes(doc))])
+    rq = reqs[-1]
+    body = rq.data
+    assert rq.full_url.endswith("/api/mailbox/out") and rq.get_method() == "POST"
+    assert b'name="to"\r\n\r\n8P5DG\r\n' in body and b'name="p2ponly"\r\n\r\ntrue' in body and b'name="date"' in body
+    assert b'filename="ICS213_Water.json"' in body and b"Content-Type: application/json" in body
+    assert rq.headers["Content-type"].startswith("multipart/form-data; boundary=")
+    r = pat.connect("varafm:///8P5DG")
+    assert r["ok"] and "2 message" in r["text"] and "url=varafm%3A%2F%2F%2F8P5DG" in reqs[-1].full_url and not pat.busy
+    box = pat.mailbox("in")
+    assert box[0]["from"] == "8P5DG" and box[0]["files"] == ["a.json"] and box[0]["unread"]
+    try:
+        pat.set_url("http://evil.example:8080")
+        raise AssertionError("remote Pat")
+    except ValueError:
+        pass
+    try:
+        pat.post("8P5DG", "s", "b", files=[("x.bin", "application/octet-stream", b"x" * (patlink.MAX_ATTACH + 1))])
+        raise AssertionError("too big")
+    except ValueError:
+        pass
+    assert patlink.Pat(url="http://127.0.0.1:1").status()["running"] is False
+    # -- the station: files only off the APRS frequency
+    import app
+    st = app.Station.__new__(app.Station)
+    app.Station.__init__(st)
+    st.cfg = dict(app.DEFAULTS, call="8P5AB-10", tnc="sound", modem="1200")
+    st.commercial, st.tnc2 = False, None
+    st.chat = tnc.ChatManager("8P5AB-10", lambda *a: "A")
+    try:
+        st.file_route("8P5DG")
+        raise AssertionError("files on the APRS frequency")
+    except IOError as e:
+        assert "QSY" in str(e)
+
+    class K:
+        air_baud = 9600
+
+        def tx_pending(self):
+            return 0
+    st.tnc2 = K()
+    st.cfg["link2_speed"] = 9600
+    assert st.file_route("8P5DG") == "B"
+    st.cfg["link2_speed"] = 1200
+    st.tnc2 = None
+    st.chat.open_direct("8P5DG", "rf")
+    st.chat.peers["8P5DG"]["qsy"] = {"freq": "145.550", "state": "on"}
+    st.qsy_hz = 145550000
+    st.rf_possible = lambda: True
+    assert st.file_route("8P5DG") == "A"
+    try:
+        st.file_route("8P6XX")
+        raise AssertionError("only the QSY'd partner")
+    except IOError:
+        pass
+    assert app.validate(dict(app.DEFAULTS, call="8P5AB", pat_url="http://10.1.1.1:8080")) and \
+        any("Pat" in e for e in app.validate(dict(app.DEFAULTS, call="8P5AB", pat_url="http://10.1.1.1:8080")))
+    shutil.rmtree(tmp, ignore_errors=True)
+    print("v3.26 ok (200-character messages, files by radio with NACK + checksum, ICS-213/213RR/214/205, Pat bridge)")
 
 
 if __name__ == "__main__":

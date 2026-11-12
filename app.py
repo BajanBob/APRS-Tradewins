@@ -36,6 +36,9 @@ import iss as issmod
 import satrx
 import tnc as tncmod
 import translate as trmod
+import twfile
+import icsforms
+import patlink
 import osint as osintmod
 import vhf_prop_aprs as eng
 import wx
@@ -50,7 +53,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.25.3"
+APP_VERSION = "3.26"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -74,6 +77,7 @@ STATE_PATH = os.path.join(CONF_DIR, "announce_state.json")
 HISTORY_PATH = os.path.join(CONF_DIR, "opening_history.json")
 CHAT_DIR = os.path.join(CONF_DIR, "chat")         # saved chats + comms log (per callsign / unit)
 RX_DIR = os.path.join(CONF_DIR, "received")       # v3.16 satellite pictures, video and telemetry
+FILES_DIR = os.path.join(CONF_DIR, "files")         # v3.26 pictures, voice clips and files sent / received by radio
 CACHE_DIR = os.path.join(CONF_DIR, "cache")       # map library + map tiles, for use with no internet
 VENDOR = {"leaflet.js": ("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js", "application/javascript"),
           "leaflet.css": ("https://unpkg.com/leaflet@1.9.4/dist/leaflet.css", "text/css")}
@@ -377,6 +381,8 @@ DEFAULTS = {
     "link1_name": "", "link1_speed": 1200,
     "link2_enabled": False, "link2_name": "70cm 9600 G3RUH", "link2_speed": 9600,
     "link2_tnc": "kiss_tcp", "link2_addr": "127.0.0.1:8002", "link2_serial": "", "link2_baud": 9600,
+    # v3.26 Tradewind -> Pat (Winlink client on this computer)
+    "pat_url": "http://127.0.0.1:8080", "pat_transport": "varafm", "pat_host": "",
     # Phase 4: off-grid / disaster features
     "store_forward": True, "relay_enabled": False,
     "block_list": "",
@@ -734,6 +740,12 @@ def validate(cfg):
         errs.append("LibreTranslate needs its server address, e.g. http://192.168.1.20:5000")
     if cfg.get("tr_engine") == "deepl" and not str(cfg.get("tr_key") or "").strip():
         errs.append("DeepL needs your API key (free at deepl.com/pro-api).")
+    try:
+        patlink.Pat().set_url(cfg.get("pat_url") or patlink.DEFAULT_URL)
+    except ValueError as e:
+        errs.append(str(e))
+    if str(cfg.get("pat_transport") or "varafm") not in patlink.TRANSPORTS:
+        errs.append("Choose how Pat connects from the list.")
     if IS_ANDROID and cfg.get("tnc") in ("sound", "kiss_serial"):
         errs.append("On Android use 'APRS-IS only' or 'KISS over TCP' - the sound modem and USB/serial radios need the Windows/PC version.")
     call = cfg.get("call", "").upper().strip()
@@ -961,6 +973,9 @@ class Station:
         self.kiss_srv = None          # KISS TCP server for other APRS apps
         self.digi = None              # fill-in digipeater (digi.FillInDigi) while it is switched on
         self.qsy_hz = None            # set while a chat has moved off the APRS frequency
+        self.files = None             # v3.26 twfile.Transfers (pictures, voice clips, files by radio)
+        self.air_pct_saved = None     # link A's normal airtime share while a QSY'd chat channel allows more
+        self.pat = patlink.Pat()      # v3.26 bridge to Pat (Winlink client) running on this computer
         self.hf = None                # v3.18 HFCenter (HF selcall / ALE) while HF Calling is on
         self.mail_count = {}          # gateway: (callsign, date) -> emails sent today
         self.mail_next_poll = 0
@@ -1010,6 +1025,7 @@ class Station:
                     else:
                         host, _, port = (c.get("link2_addr") or "127.0.0.1:8002").partition(":")
                         self.tnc2 = tncmod.KissTcpTNC(host, port or 8002)
+                    self.tnc2.air_baud = max(1200, int(c.get("link2_speed") or 1200))
                     self.tnc2.start(lambda line: self.on_rf_packet(line, "B"))
                 except Exception as e:
                     self.tnc2 = None
@@ -1183,6 +1199,8 @@ class Station:
             if self.chat:
                 try:
                     self.chat.tick()
+                    if self.files:
+                        self.files.tick()
                     thursday_autolock(self)
                     if self.chat.seq != self._chat_saved and time.time() - self._chat_save_t > 5:
                         self._save_chat()
@@ -2257,6 +2275,9 @@ class Station:
         self.chat.relay_candidates = self.relay_candidates
         self.chat.is_ok = lambda: bool(self.isc and self.isc.verified)
         self.chat.on_tw = lambda call: self._tw_seen(call, "chat")
+        self.chat.is_tw = lambda call: tncmod.norm_call(call) in self.tw_users   # v3.26: 200-character messages
+        self.files = None if self.commercial else twfile.Transfers(
+            self.cfg["call"], FILES_DIR, self._file_frame, self._file_event)
         self.chat.links = self.linkctl
         robust = self.cfg.get("tnc") == "sound" and self.cfg.get("modem") in ("robust", "robust_dx", "robust_fm")
         self.chat.on_qsy = None if self.commercial else self._on_qsy   # a licensed commercial channel never moves
@@ -2792,6 +2813,15 @@ class Station:
         """Retune for a chat QSY (mhz) or back to the APRS frequency (None). Beacons and RF alerts pause meanwhile."""
         self.qsy_hz = int(round(float(mhz) * 1e6)) if mhz else None
         target = self.qsy_hz or tncmod.aprs_freq_hz(self.cfg)
+        guard = getattr(self.tnc, "airtime", None)
+        if guard:      # v3.26: two stations alone on a chat channel may use more of it (files); APRS gets the normal share
+            if mhz:
+                if self.air_pct_saved is None:
+                    self.air_pct_saved = guard.pct()
+                guard.set_pct(max(self.air_pct_saved, twfile.FILE_AIRTIME_PCT))
+            elif self.air_pct_saved is not None:
+                guard.set_pct(self.air_pct_saved)
+                self.air_pct_saved = None
         tnc = self.tnc
         if tnc and hasattr(tnc, "tune") and getattr(getattr(tnc, "ptt", None), "can_tune", False) and target:
             tnc.tune(target)
@@ -2829,6 +2859,122 @@ class Station:
             if not self.rf_possible() and not self.commercial:
                 raise IOError("RF needs a radio: set a TNC under MENU > RADIO / TNC, or choose APRS-IS")
             self._tx_tnc().send(src, dst, path, info)
+
+    # ---- v3.26 files by radio (pictures, voice clips, small files) ----
+    FILE_RULE = ("Files go only off the APRS frequency: open a chat and use QSY to move to a chat channel, "
+                 "or add a 9600-baud second radio link (MENU > RADIO / TNC > Second radio link).")
+
+    def _qsy_peer(self):
+        for call, p in (self.chat.peers.items() if self.chat else []):
+            if (p.get("qsy") or {}).get("state") == "on":
+                return call
+        return None
+
+    def file_route(self, call):
+        """Which radio link a file to this station would use: 'A' (QSY'd chat channel) or 'B' (fast link). Raises."""
+        c = self.cfg
+        if self.commercial:
+            raise IOError("Files by radio are for amateur mode. In Commercial / EmComm mode use the secure link.")
+        call = tncmod.norm_call(call)
+        slow = c.get("tnc") == "sound" and (str(c.get("modem")) == "300" or afsk.is_robust(str(c.get("modem"))))
+        if self.qsy_hz and self._qsy_peer() == call and not slow and self.rf_possible():
+            return "A"
+        if self.tnc2 and int(c.get("link2_speed") or 0) >= 9600:
+            return "B"
+        if self.qsy_hz and self._qsy_peer() == call and slow:
+            raise IOError("Files need a 1200-baud or faster packet link - the HF modem is too slow.")
+        raise IOError(self.FILE_RULE)
+
+    def _file_frame(self, to, info):
+        link = self.file_route(to)
+        tx = self._tx_tnc() if link == "A" else self.tnc2
+        if tx.tx_pending():
+            raise IOError("radio busy")                 # send the next piece when the last one is out
+        self._link_send(link, self.cfg["call"], eng.TOCALL, ["NOGATE"], info)
+
+    def _file_event(self, direction, call, meta):
+        if self.chat:
+            self.chat.file_note(call, direction, meta)
+        if meta.get("state") in ("received", "delivered", "failed"):
+            self.add_log("SYS", f"File {meta['name']} {'from' if direction == 'in' else 'to'} {call}: {meta['state']}")
+
+    def file_send(self, call, name, mime, b64):
+        import base64
+        if not self.files:
+            raise IOError("Start the station first (amateur mode).")
+        call = tncmod.norm_call(call)
+        self.file_route(call)                          # check before queueing
+        try:
+            data = base64.b64decode(b64 or "", validate=True)
+        except ValueError:
+            raise ValueError("The file did not arrive in one piece - try again.")
+        return self.files.send(call, name, mime, data)
+
+    # ---- v3.26 ICS forms ----
+    def ics_send(self, call, doc, how="auto"):
+        """Send a filled ICS form to a station in a chat: as a form file (QSY'd channel / fast link) or as text."""
+        doc = icsforms.clean(doc.get("form"), doc.get("data"))
+        call = tncmod.norm_call(call)
+        if not self.chat:
+            raise IOError("Start the station first.")
+        if how in ("auto", "file") and self.files:
+            try:
+                self.file_route(call)
+                return {"sent": "file", "meta": self.files.send(call, icsforms.filename(doc), "application/json",
+                                                                icsforms.to_bytes(doc))}
+            except IOError:
+                if how == "file":
+                    raise
+        self.chat.open_direct(call) if call not in self.chat.peers else None
+        self.chat.send(call, icsforms.render_compact(doc))
+        return {"sent": "text"}
+
+    # ---- v3.26 Tradewind -> Pat (Winlink) ----
+    def pat_apply_cfg(self):
+        try:
+            self.pat.set_url(self.cfg.get("pat_url") or patlink.DEFAULT_URL)
+        except ValueError as e:
+            self.add_log("ERR", f"Pat: {e}")
+
+    def pat_send(self, d):
+        """Compose a Winlink message (optional ICS form and attachments), put it in Pat's outbox and, if asked,
+        have Pat connect to the peer now."""
+        import base64
+        self.pat_apply_cfg()
+        files = []
+        for f in (d.get("files") or [])[:6]:
+            mime = str(f.get("mime") or "application/octet-stream")
+            files.append((twfile.safe_name(f.get("name"), mime if mime in twfile.MIMES else "application/octet-stream"),
+                          mime, base64.b64decode(f.get("data") or "", validate=True)))
+        body, subject = str(d.get("body") or ""), str(d.get("subject") or "")
+        if d.get("form"):
+            doc = icsforms.clean(d["form"].get("form"), d["form"].get("data"))
+            body = icsforms.render_text(doc) + ("\n\n" + body if body.strip() else "")
+            subject = subject or icsforms.subject(doc)
+            files.append((icsforms.filename(doc), "application/json", icsforms.to_bytes(doc)))
+        transport = d.get("transport") or self.cfg.get("pat_transport") or "varafm"
+        url = None
+        if d.get("connect"):
+            url = patlink.connect_url(transport, d.get("peer") or d.get("to"), self.cfg.get("call"),
+                                      d.get("host") or self.cfg.get("pat_host"))
+        r = self.pat.post(d.get("to"), subject, body, d.get("cc", ""), files, p2p_only=transport != "cms")
+        self.add_log("SYS", f"Pat: message to {d.get('to')} in the outbox ({len(files)} attachment(s))")
+        if url:
+            threading.Thread(target=self._pat_connect, args=(url,), daemon=True).start()
+        return {"queued": True, "connect": url, "pat": r if isinstance(r, (dict, list)) else None}
+
+    def pat_connect(self, d):
+        self.pat_apply_cfg()
+        transport = d.get("transport") or self.cfg.get("pat_transport") or "varafm"
+        url = patlink.connect_url(transport, d.get("peer"), self.cfg.get("call"), d.get("host") or self.cfg.get("pat_host"))
+        threading.Thread(target=self._pat_connect, args=(url,), daemon=True).start()
+        return {"connect": url}
+
+    def _pat_connect(self, url):
+        if self.qsy_hz and url.startswith(("varafm", "ax25")):
+            self.add_log("SYS", "Pat: connecting while a chat is QSY'd - make sure Pat's radio is not the APRS radio")
+        r = self.pat.connect(url)
+        self.add_log("SYS" if r.get("ok") else "ERR", f"Pat: {r.get('text')}")
 
     def _chat_send(self, call, info, route):
         """Send one APRS message for the chat (RF ignores the propagation-mode standby).
@@ -3022,6 +3168,13 @@ class Station:
             except Exception as e:
                 self.add_log("ERR", f"secure rx: {e}")
             return          # no iGate in commercial mode
+        info0 = line.partition(":")[2]
+        if self.files and info0.startswith(twfile.PREFIX):
+            try:
+                self.files.feed(line.split(">", 1)[0].rstrip("*"), info0)
+            except Exception as e:
+                self.add_log("ERR", f"file transfer: {e}")
+            return          # never digipeated or gated; not an APRS message
         self._digipeat(line, link)
         inner = line.partition(":")[2]
         if inner.startswith("}") and ">" in inner.split(":", 1)[0]:
@@ -3352,6 +3505,40 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/api/file":
+            from urllib.parse import parse_qs, urlsplit
+            q = parse_qs(urlsplit(self.path).query)
+            fp = STATION.files.find((q.get("id") or [""])[0]) if STATION.files else None
+            if not fp:
+                return self._json({"error": "no such file"}, 404)
+            ext = fp.rsplit(".", 1)[-1].lower()
+            mime = next((m for m, e in twfile.MIMES.items() if e == ext), "application/octet-stream")
+            with open(fp, "rb") as fh:
+                data = fh.read()
+            if (q.get("dl") or [""])[0] or mime not in twfile.SHOW_INLINE + ("application/json", "text/plain"):
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Disposition", f'attachment; filename="{os.path.basename(fp).split("_", 2)[-1]}"')
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                return self.wfile.write(data)
+            self._bytes(data, mime if mime != "text/plain" else "text/plain; charset=utf-8")
+        elif path == "/api/ics/forms":
+            self._json(icsforms.catalogue())
+        elif path == "/api/pat":
+            STATION.pat_apply_cfg()
+            self._json(STATION.pat.status())
+        elif path == "/api/pat/box":
+            from urllib.parse import parse_qs, urlsplit
+            q = parse_qs(urlsplit(self.path).query)
+            try:
+                STATION.pat_apply_cfg()
+                mid = (q.get("mid") or [""])[0]
+                box = (q.get("box") or ["in"])[0]
+                self._json(STATION.pat.message(box, mid) if mid else {"items": STATION.pat.mailbox(box)})
+            except Exception as e:
+                self._json({"error": f"Pat: {str(e)[:100]}"}, 502)
         elif path == "/api/chat":
             self._json(STATION.chat.state() if STATION.chat else {"seq": 0, "peers": [], "events": [], "off": True})
         elif path == "/api/hf":
@@ -3531,6 +3718,23 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, IOError) as e:
                 return self._json({"ok": False, "errors": [str(e)]})
             return self._json({"ok": True, "msg": msg, "hf": STATION.hf_state()})
+        elif path in ("/api/file/send", "/api/ics/send", "/api/pat/send", "/api/pat/connect", "/api/pat/abort"):
+            d = self._body()
+            try:
+                if path == "/api/file/send":
+                    r = STATION.file_send(d.get("call"), d.get("name"), d.get("mime"), d.get("data"))
+                elif path == "/api/ics/send":
+                    r = STATION.ics_send(d.get("call"), d.get("doc") or {}, d.get("how") or "auto")
+                elif path == "/api/pat/send":
+                    r = STATION.pat_send(d)
+                elif path == "/api/pat/connect":
+                    r = STATION.pat_connect(d)
+                else:
+                    STATION.pat.abort()
+                    r = {}
+                self._json({"ok": True, **(r if isinstance(r, dict) else {"result": r})})
+            except (ValueError, IOError, OSError) as e:
+                self._json({"ok": False, "errors": [str(e)[:200]]})
         elif path == "/api/chat":
             if not (STATION.running and STATION.chat):
                 return self._json({"ok": False, "errors": ["Turn the station ON first."]})

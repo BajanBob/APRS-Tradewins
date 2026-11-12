@@ -28,6 +28,7 @@ import threading
 import time
 
 import afsk
+import fastmodem as fastmod
 
 FEND, FESC, TFEND, TFESC = 0xC0, 0xDB, 0xDC, 0xDD
 
@@ -488,7 +489,8 @@ class BaseTNC:
 AIRTIME_WINDOW_S = 600       # this station may transmit at most...
 AIRTIME_PCT = 10             # ...10% of any 10 minutes (60 s) on VHF/UHF packet
 AIRTIME_PCT_ROBUST = 25      # Robust HF: one message takes 12-45 s, so 25% (150 s) there
-PTT_MAX_S = {"1200": 10, "300": 20, "robust": 50, "robust_dx": 100, "robust_fm": 50}   # longest single transmission (watchdog)
+FAST_MODEMS = ("9600", "twfast")   # v3.27: data-port modems (fastmodem.py)
+PTT_MAX_S = {"1200": 10, "300": 20, "robust": 50, "robust_dx": 100, "robust_fm": 50, "9600": 10, "twfast": 10}   # longest single transmission (watchdog)
 HF_MAX_S = 60                # v3.18: longest HF Selcall / ALE call (a scanning call covers the channel list)
 
 
@@ -551,7 +553,7 @@ class SoundModemTNC(BaseTNC):
                  txdelay=300, txtail=50, level=0.5, busy_hold=1.5,
                  tune_hz=None, cat_restore=True, modem="1200", fx25_tx=False, multi_decoder=True):
         super().__init__()
-        self.modem = modem if (modem in afsk.PROFILES or afsk.is_robust(modem)) else "1200"
+        self.modem = modem if (modem in afsk.PROFILES or afsk.is_robust(modem) or modem in FAST_MODEMS) else "1200"
         self.fx25_tx = bool(fx25_tx) and not afsk.is_robust(self.modem)
         self.in_dev, self.out_dev, self.rate = in_dev, out_dev, int(rate)
         self.ptt = ptt or PTT()
@@ -561,7 +563,12 @@ class SoundModemTNC(BaseTNC):
         self.audio_taps = []       # v3.16 satellite receivers: callables given each block of received audio
         self.noise_floor = None    # quietest recent audio level: the reference for carrier sense
         self.txq = queue.Queue()
-        if afsk.is_robust(self.modem):
+        self.burst_depth = 8 if self.modem in FAST_MODEMS else 1   # v3.27: frames sent per key-up
+        if self.modem == "9600":
+            self.demod = fastmod.G3ruhMulti(self.rate) if multi_decoder else fastmod.G3ruhDemodulator(self.rate)
+        elif self.modem == "twfast":
+            self.demod = fastmod.FastDemodulator(self.rate)
+        elif afsk.is_robust(self.modem):
             self.demod = afsk.RobustDemodulator(self.rate, self.modem)
         elif multi_decoder:
             self.demod = afsk.MultiDemodulator(self.rate, self.modem)
@@ -569,6 +576,8 @@ class SoundModemTNC(BaseTNC):
             self.demod = afsk.Demodulator(self.rate, self.modem)
         if afsk.is_robust(self.modem):
             self.airtime = AirtimeGuard(AIRTIME_PCT_ROBUST)
+        elif self.modem == "twfast":       # an agreed Tradewind-only data channel: the file-transfer share
+            self.airtime = AirtimeGuard(50)
         self.tune_hz, self.cat_restore = tune_hz, cat_restore
         self.cat_saved = None
         self.cat_status = ""       # shown on the face plate
@@ -603,6 +612,36 @@ class SoundModemTNC(BaseTNC):
             except Exception as e:
                 self.cat_status = f"CAT tuning failed: {e}"
                 return False
+
+    def _fast_audio(self, frame):
+        """v3.27: 9600 G3RUH or Tradewind Fast. Frames already waiting go out in the same transmission
+        (up to burst_depth, within the transmit limit), so the radio keys up once for several."""
+        np = afsk.np
+        frames = [frame]
+        while len(frames) < self.burst_depth:
+            try:
+                nxt = self.txq.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(nxt, tuple):
+                self.txq.put(nxt)
+                break
+            frames.append(nxt)
+        parts, total = [], 0.0
+        for i, fr in enumerate(frames):
+            if self.modem == "9600":
+                a = fastmod.g3ruh_modulate(fr, self.rate, self.txdelay if i == 0 else 20,
+                                           self.txtail if i == len(frames) - 1 else 0, self.level, self.fx25_tx)
+            else:
+                a = fastmod.fast_modulate(fr, self.rate, self.level, snr_db=getattr(self.demod, "last_snr", None))
+                if i == 0:
+                    a = np.concatenate([np.zeros(int(self.rate * self.txdelay / 1000), dtype=np.float32), a])
+            if total + len(a) / self.rate > PTT_MAX_S[self.modem] - 1 and parts:
+                self.txq.put(fr)                       # does not fit: next transmission
+                continue
+            parts.append(a)
+            total += len(a) / self.rate
+        return np.concatenate(parts)
 
     def send_audio(self, audio, max_s=30.0):
         """v3.18: queue a ready-made waveform (HF Selcall / ALE call) for transmission. It gets the same
@@ -681,6 +720,8 @@ class SoundModemTNC(BaseTNC):
                     np = afsk.np
                     audio = np.concatenate([np.zeros(int(self.rate * self.txdelay / 1000), dtype=np.float32),
                                             afsk.robust_modulate(frame, self.rate, self.level, lead_ms=50, modem=self.modem)])
+                elif self.modem in FAST_MODEMS:
+                    audio = self._fast_audio(frame)
                 else:
                     audio = afsk.modulate(frame, self.rate, self.txdelay, self.txtail, self.level, self.modem,
                                           fx25=self.fx25_tx)
@@ -781,6 +822,7 @@ class SoundModemTNC(BaseTNC):
                  decoders=len(getattr(self.demod, "demods", [])) or 1)
         d.update(audio_level=round(self.audio_level, 4), ptt=self.ptt.name, modem=self.modem,
                  snr=round(snr, 1) if snr is not None else None,
+                 fast_mode=fastmod.MODES[fastmod.choose_mode(snr)][2] if self.modem == "twfast" else None,
                  cat=self.cat_status, freq=self.tune_hz)
         return d
 

@@ -28,6 +28,7 @@ GAP_S = 0.4                      # pause between frames when the channel allows 
 RX_IDLE_S = 20                   # receiver: ask for missing pieces after this much silence
 TX_WAIT_S = 45                   # sender: no answer after the last piece -> send the header again
 TRIES = 4
+BURST = 8                        # at most this many pieces per tick (the radio's queue limits it further)
 FILE_AIRTIME_PCT = 50
 MIMES = {"image/png": "png", "image/gif": "gif", "image/jpeg": "jpg", "image/webp": "webp",
          "audio/webm": "webm", "audio/ogg": "ogg", "audio/mpeg": "mp3", "audio/wav": "wav", "audio/mp4": "m4a",
@@ -104,6 +105,12 @@ class Transfers:
                 self._out(r["from"], f"{PREFIX}N|{r['from']}|{xid}|{','.join(map(str, missing[:40]))}")
         if now < self.next_t:
             return
+        for _ in range(BURST):                        # fast links take several pieces per transmission
+            if not self._send_one(now):
+                return
+
+    def _send_one(self, now):
+        """Send the next piece of some transfer. False when nothing was sent (done, or the radio says wait)."""
         for xid, t in list(self.tx.items()):
             if t["queue"]:
                 item = t["queue"][0]
@@ -111,17 +118,19 @@ class Transfers:
                 try:
                     self.send_frame(t["to"], info)
                 except IOError as e:
+                    if "busy" in str(e):
+                        return False                   # the radio still has pieces to send: next tick
                     self.next_t = now + (12 if "airtime" in str(e) else 30)
                     t["meta"]["wait"] = str(e)[:80]
                     self.on_file("out", t["to"], t["meta"])
-                    return
+                    return False
                 t["queue"].pop(0)
                 t["last"], self.next_t = now, now + GAP_S
                 t["meta"].pop("wait", None)
                 if item != "H":
                     t["meta"]["done"] = min(t["meta"]["total"], t["meta"]["done"] + 1)
                 self.on_file("out", t["to"], t["meta"])
-                return
+                return True
             if now - t["last"] >= TX_WAIT_S:
                 if t["tries"] >= TRIES:
                     t["meta"]["state"] = "failed"
@@ -130,6 +139,7 @@ class Transfers:
                     continue
                 t["tries"] += 1
                 t["queue"].append("H")                  # ask the receiver where it stands
+        return False
 
     def _out(self, to, info):
         try:

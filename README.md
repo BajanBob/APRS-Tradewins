@@ -103,6 +103,26 @@ licence profiles by grid square, with the research behind each item: [docs/ROADM
 - v3.22's face plate had a JavaScript error (an apostrophe in the new Gale help text), so its buttons and panels
   did not work. Fixed, and the test suite now checks that the face plate's JavaScript parses. Use 3.22.1 for testing.
 
+## What's new in 3.27: 9600 baud and Tradewind Fast - built-in modems for the radio's data port
+
+Two new choices under MENU > RADIO / TNC > Modem (sound card). Both need the radio's flat data audio: the 6-pin mini-DIN DATA jack, or the radio's 9600 / USB data setting. They don't work through the mic and speaker.
+
+- **9600 baud G3RUH.** The standard 9600 packet modem (scrambler x^17 + x^12 + 1), made by the sound card. Direwolf and hardware TNCs aren't needed. It works with any other 9600 packet station: Direwolf, Kenwood TM-D710 / TH-D74, Mobilinkd, NinoTNC. FX.25 and bit repair work here too.
+- **Tradewind Fast.** Tradewind to Tradewind only. It uses OFDM: 114 carriers from 281 Hz to 5.6 kHz, pilots to follow sound-card clock differences, a K=7 convolutional code and an interleaver. It measures how well it hears the other station and picks the fastest mode that signal supports:
+
+  | Mode | SNR needed | About |
+  |---|---|---|
+  | QPSK 1/2 | 3 dB | 3.5-3.7 kbit/s |
+  | QPSK 3/4 | 9 dB | 4.8-5.2 kbit/s |
+  | 16-QAM 1/2 | 12 dB | 6.0-6.6 kbit/s |
+  | 16-QAM 3/4 | 16 dB | 7.9-9.1 kbit/s |
+  | 64-QAM 2/3, 3/4 | 21-24 dB | 9.4-11.6 kbit/s (about 19 kbit/s while the data symbols are on the air) |
+
+  These are real throughputs for 300- to 511-byte packets, preamble and header included. The modulation is documented, and nothing is hidden. Because only Tradewind stations use a Tradewind Fast channel, Tradewind may use up to 50% of the airtime there.
+- **Several packets per transmission.** On both modes, packets waiting to go out are sent in one key-up, up to 8 and within the 10-second transmit limit. Pictures, voice clips and files go straight away on these modes. A 40 kB picture takes about 70-75 seconds of airtime on 9600 or on Tradewind Fast with a strong signal, against about 10 minutes at 1200 baud. On a 9600 channel the normal 10% airtime share still applies, so a big file spreads over several minutes unless the chat has used QSY.
+- Use a simplex data channel agreed with the other station, not the 1200-baud APRS frequency. Higher speeds over a radio (38,400 and up) need wideband data radios or IP (AREDN mesh); FM voice radios can't carry them. Check your licence for symbol-rate limits on each band.
+- Tested in simulation with noise, a band-limited radio, DC offset and an 80 ppm sound-card clock error, at 48 kHz and 44.1 kHz. **Try it on the air between two of your stations before you rely on it.**
+
 ## What's new in 3.26: longer messages, pictures and voice clips by radio, ICS forms, Winlink via Pat
 
 - **200-character messages between Tradewind stations.** Tradewind knows which stations run Tradewind (the green TRADEWIND badge). To them a message carries up to 200 characters; to every other APRS station it stays at the standard 67 and is split as before. The text is not compressed or hidden - any APRS program that hears it can read it.

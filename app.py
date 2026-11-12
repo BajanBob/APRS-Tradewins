@@ -53,7 +53,7 @@ except ImportError:
 EDITION = commander.EDITION if commander else "amateur"
 
 APP_NAME = "Tradewind"
-APP_VERSION = "3.26"
+APP_VERSION = "3.27"
 APP_TITLE = commander.TITLE if commander else APP_NAME
 # When packaged as an .exe (PyInstaller) bundled files live in sys._MEIPASS
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -806,6 +806,10 @@ def validate(cfg):
                 raise ValueError
         except (TypeError, ValueError):
             errs.append("Digipeater limit must be 1-60 packets a minute.")
+    if cfg.get("modem") in tncmod.FAST_MODEMS and cfg.get("tnc") != "sound":
+        errs.append("9600 G3RUH and Tradewind Fast are made by the built-in sound modem (MENU > RADIO / TNC > TNC type: sound card).")
+    if cfg.get("modem") == "twfast" and cfg.get("digi"):
+        errs.append("Tradewind Fast is for Tradewind-to-Tradewind links: switch the digipeater off, or use 9600 G3RUH.")
     if cfg.get("modem") in ("robust_dx", "robust_fm") and cfg.get("tnc") != "sound":
         errs.append("Robust DX and Robust FM need the built-in sound modem (MENU > RADIO / TNC > TNC type: sound card).")
     if cfg.get("modem") == "robust_fm" and cfg.get("tnc") == "sound":
@@ -1034,6 +1038,8 @@ class Station:
                 s1 = 22 if c.get("tnc") == "sound" and c.get("modem") == "robust_dx" else \
                     44 if c.get("tnc") == "sound" and c.get("modem") in ("robust", "robust_fm") else \
                     300 if c.get("tnc") == "sound" and str(c.get("modem")) == "300" else \
+                    9600 if c.get("tnc") == "sound" and str(c.get("modem")) == "9600" else \
+                    9000 if c.get("tnc") == "sound" and str(c.get("modem")) == "twfast" else \
                     (1200 if c.get("tnc") == "sound" else int(c.get("link1_speed") or 1200))
                 self.linkctl = tncmod.LinkController({
                     "A": {"name": c.get("link1_name") or f"{s1} bps (main radio)", "speed": s1},
@@ -2879,6 +2885,8 @@ class Station:
         slow = c.get("tnc") == "sound" and (str(c.get("modem")) == "300" or afsk.is_robust(str(c.get("modem"))))
         if self.qsy_hz and self._qsy_peer() == call and not slow and self.rf_possible():
             return "A"
+        if c.get("tnc") == "sound" and c.get("modem") in tncmod.FAST_MODEMS and self.rf_possible():
+            return "A"                                 # v3.27: the main radio is on a 9600 / Tradewind Fast data channel
         if self.tnc2 and int(c.get("link2_speed") or 0) >= 9600:
             return "B"
         if self.qsy_hz and self._qsy_peer() == call and slow:
@@ -2888,8 +2896,8 @@ class Station:
     def _file_frame(self, to, info):
         link = self.file_route(to)
         tx = self._tx_tnc() if link == "A" else self.tnc2
-        if tx.tx_pending():
-            raise IOError("radio busy")                 # send the next piece when the last one is out
+        if tx.tx_pending() >= getattr(tx, "burst_depth", 1):
+            raise IOError("radio busy")                 # the radio's queue is full: next tick
         self._link_send(link, self.cfg["call"], eng.TOCALL, ["NOGATE"], info)
 
     def _file_event(self, direction, call, meta):
@@ -3216,7 +3224,7 @@ class Station:
             if not r:
                 return
             tx = self.tnc2 if link == "B" else self._tx_tnc()
-            if not tx or getattr(tx, "modem", "1200") in ("robust", "robust_dx", "robust_fm", "300"):
+            if not tx or getattr(tx, "modem", "1200") in ("robust", "robust_dx", "robust_fm", "300", "twfast"):
                 return
             src, dst, path, info = r
             tx.send(src, dst, path, info)

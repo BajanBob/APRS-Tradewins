@@ -721,7 +721,10 @@ details.more summary::-webkit-details-marker{display:none}
           <option value="robust">Tradewind Robust - HF weak signal, down to about -12 dB (8-FSK, ~44 bit/s)</option>
           <option value="robust_dx">Tradewind Robust DX - SSB APRS for 2 m / 70 cm DX and weak HF, down to about -14 dB (~22 bit/s)</option>
           <option value="robust_fm">Tradewind Robust FM - Robust through an FM radio (FM-D) on a simplex frequency, not 144.390</option>
+          <option value="9600">9600 baud G3RUH - radio's DATA / 9600 port (works with any 9600 packet station)</option>
+          <option value="twfast">Tradewind Fast - DATA / 9600 port, Tradewind to Tradewind, about 3.5-19 kbit/s (adapts to the signal)</option>
         </select></div>
+      <div class="set wide note m-sound m-fast hide" id="fast-note">9600 and Tradewind Fast need the radio's flat data audio: the 6-pin mini-DIN DATA jack (or the radio's 9600 / USB data setting), not the mic and speaker. Set the radio to 9600 data, squelch open or "data squelch" as the radio allows, TX delay 100-200 ms. Use a simplex data channel agreed with the other station, not the 1200-baud APRS frequency. Tradewind Fast measures how well it hears the other station and picks QPSK, 16-QAM or 64-QAM by itself; both ends need Tradewind and this mode. On these modes pictures, voice clips and files go straight away, several packets per transmission.</div>
       <div class="set m-sound m-dxf"><label>Robust / DX dial frequency (MHz, USB)</label><input class="inset" data-k="dx_freq" placeholder="144.150" inputmode="decimal"></div>
       <div class="set m-sound m-fmf"><label>Robust FM simplex frequency (MHz, FM)</label><input class="inset" data-k="fm_freq" placeholder="145.570" inputmode="decimal"></div>
       <div class="set wide note m-sound m-fmf" id="fm-note">Robust FM sends the Robust waveform (8-FSK, ~44 bit/s, about 11 s per packet) through the FM radio in FM data mode. It decodes a few dB below 1200 baud on FM, but FM radios mute below about +10 dB, so for real weak-signal DX use Robust DX in USB. Never on 144.390 (shared APRS channel), 145.800-146.000 or 435-438 (satellites): Tradewind refuses those. Agree the frequency with the other station and listen first - it must be a free simplex frequency, not a repeater input. Robust and Robust FM stations decode each other; ordinary APRS radios cannot.</div>
@@ -1601,6 +1604,7 @@ function updateVisibility(){
     const md = $('#f-modem').value;
     $$('.m-dxf').forEach(e=>e.classList.toggle('hide', !['robust','robust_dx'].includes(md)));
     $$('.m-fmf').forEach(e=>e.classList.toggle('hide', md!=='robust_fm'));
+    $$('.m-fast').forEach(e=>e.classList.toggle('hide', !['9600','twfast'].includes(md)));
     $$('.m-ptt').forEach(e=>e.classList.toggle('hide', p==='VOX'));
     $$('.m-cm108').forEach(e=>e.classList.toggle('hide', p!=='CM108'));
     $$('.m-cat').forEach(e=>e.classList.toggle('hide', !['CIV','YAESU_CAT'].includes(p)));
@@ -2126,7 +2130,8 @@ async function poll(){
   const dg = s.digi, dn = document.getElementById('digi-note');
   if (dn) dn.textContent = !dg ? (cfg.digi ? 'Fill-in digipeater: starts with the station.' : 'Fill-in digipeater off.')
     : `${dg.mode === 'wide' ? 'Wide-area' : 'Fill-in'} digipeater ON: ${dg.count} repeated, ${dg.skipped} skipped (duplicates / limit), ${dg.per_min}/${dg.max_per_min} this minute${dg.last ? ' · last: ' + dg.last.slice(0, 80) : ''}`;
-  $('#l-tnc').textContent = !running ? 'OFF' : (t ? (t.kind==='Sound modem'?'SOUND':t.kind==='APRS-IS only'?'NONE':t.kind.toUpperCase()) : '---');
+  $('#l-tnc').textContent = !running ? 'OFF' : (t ? (t.kind==='Sound modem'?(t.modem==='twfast'?'FAST':t.modem==='9600'?'9600':'SOUND'):t.kind==='APRS-IS only'?'NONE':t.kind.toUpperCase()) : '---');
+  if (t && t.modem==='twfast') $('#l-tnc').title = t.snr!=null ? `Tradewind Fast: last heard at ${t.snr} dB${t.fast_mode?' · sending '+t.fast_mode:''}` : 'Tradewind Fast: nothing heard yet (sends 16-QAM 3/4 until it hears the other station)';
   const lvl = t && t.audio_level ? Math.min(8, Math.round(Math.sqrt(t.audio_level)*16)) : 0;
   $('#meter').innerHTML = (t && t.kind==='Sound modem') ? Array.from({length:8},(_,i)=>`<i class="${i<lvl?'on':''}"></i>`).join('') : '';
   const is = s.aprsis;

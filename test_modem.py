@@ -85,6 +85,7 @@ def main():
     test_v324()
     test_v325()
     test_v326()
+    test_v327()
     test_v3171()
     test_hf()
     test_android_imports()
@@ -1949,6 +1950,91 @@ def test_v326():
         any("Pat" in e for e in app.validate(dict(app.DEFAULTS, call="8P5AB", pat_url="http://10.1.1.1:8080")))
     shutil.rmtree(tmp, ignore_errors=True)
     print("v3.26 ok (200-character messages, files by radio with NACK + checksum, ICS-213/213RR/214/205, Pat bridge)")
+
+
+def test_v327():
+    """v3.27: 9600 G3RUH and Tradewind Fast (OFDM) sound modems for the radio's data port."""
+    import fastmodem as fm
+    rng = np.random.default_rng(27)
+
+    def chan(x, rate, snr_db, ppm=0.0, dc=0.0):
+        h = fm._lowpass(rate, 6500, 101)
+        x = np.convolve(x, h, "same")
+        if ppm:
+            x = fm._resample(x, 1e6, 1e6 * (1 + ppm * 1e-6))
+        p = np.mean(x[np.abs(x) > 1e-4] ** 2)
+        sd = np.sqrt(p / 10 ** (snr_db / 10))
+        return np.concatenate([rng.normal(0, sd, 5000), x + rng.normal(0, sd, len(x)) + dc, rng.normal(0, sd, 8000)])
+
+    def run(d, a):
+        out = []
+        for i in range(0, len(a), 4096):
+            out += d.process(a[i:i + 4096])
+        return out
+    frames = [afsk.encode_ax25("8P5AB-1", "APZPRP", ["NOGATE"], f"{{{{TFD|8P5DG|ab123|{i}|" + "Q" * 216) for i in range(3)]
+    # G3RUH 9600: decodes with noise, clock error and DC offset, both polarities, 48k and 44.1k
+    for rate in (48000, 44100):
+        a = fm.g3ruh_modulate(frames[0], rate, 100, 30)
+        assert frames[0][:-2] in run(fm.G3ruhMulti(rate), chan(a, rate, 14, 60, 0.05)), rate
+        assert frames[0][:-2] in run(fm.G3ruhMulti(rate), -chan(a, rate, 20)), "inverted audio"
+    # scrambler: x^17 + x^12 + 1, self-synchronising (any start state decodes after 17 bits)
+    lv = [int(b) for b in rng.integers(0, 2, 200)]
+    sc = fm._scramble(lv)
+    lfsr, back = 0x1ABCD, []
+    for x in sc:
+        back.append((x ^ (lfsr >> 16) ^ (lfsr >> 11)) & 1)
+        lfsr = ((lfsr << 1) | x) & 0x1FFFF
+    assert back[17:] == lv[17:]
+    # Tradewind Fast: every mode at its SNR (+3 dB), with clock error; 44.1k sound cards too
+    for m in fm.MODES:
+        for rate in ((48000, 44100) if m in (0, 5) else (48000,)):
+            a = fm.fast_modulate(frames[1], rate, mode=m)
+            d = fm.FastDemodulator(rate)
+            assert frames[1][:-2] in run(d, chan(a, rate, fm.MODES[m][3] + 3, 80, 0.02)), (m, rate)
+            assert d.last_mode == m and d.last_snr is not None
+    assert fm.choose_mode(None) == 3 and fm.choose_mode(30) == 5 and fm.choose_mode(10) == 1 and fm.choose_mode(-5) == 0
+    assert fm.mode_rate(5) > 2.5 * fm.mode_rate(0) and fm.mode_rate(5, 511) > 9000
+    # noise alone, or a damaged burst, gives nothing (the AX.25 FCS must check)
+    assert run(fm.FastDemodulator(48000), rng.normal(0, 0.3, 48000 * 2)) == []
+    a = fm.fast_modulate(frames[1], 48000, mode=3)
+    a[len(a) // 2:len(a) // 2 + 3000] = rng.normal(0, 1, 3000)
+    assert frames[1][:-2] not in run(fm.FastDemodulator(48000), a)
+    for bad in (b"", b"x" * (fm.MAX_BYTES + 1)):
+        try:
+            fm.fast_modulate(bad)
+            raise AssertionError("size")
+        except ValueError:
+            pass
+    # the sound TNC: several queued packets go out in one transmission and all decode at the other end
+    for modem, dem in (("twfast", fm.FastDemodulator), ("9600", fm.G3ruhMulti)):
+        t = tnc.SoundModemTNC(modem=modem, txdelay=100)
+        assert t.modem == modem and t.burst_depth == 8 and tnc.PTT_MAX_S[modem] == 10
+        for i in range(3):
+            t.txq.put(frames[i])
+        audio = t._fast_audio(t.txq.get())
+        assert t.txq.qsize() == 0 and len(audio) / 48000 < 10
+        got = run(dem(48000), chan(audio, 48000, 25))
+        assert [f[:-2] for f in frames] == got, (modem, len(got))
+        assert t.tx_pending() == 0
+    # the station: data-port modems carry files on the main radio; Tradewind Fast never digipeats
+    import app
+    st = app.Station.__new__(app.Station)
+    app.Station.__init__(st)
+    st.cfg = dict(app.DEFAULTS, call="8P5AB-10", tnc="sound", modem="twfast")
+    st.commercial, st.tnc2, st.qsy_hz = False, None, None
+    st.chat = tnc.ChatManager("8P5AB-10", lambda *a: "A")
+    st.rf_possible = lambda: True
+    assert st.file_route("8P5DG") == "A"
+    st.cfg["modem"] = "1200"
+    try:
+        st.file_route("8P5DG")
+        raise AssertionError("1200 APRS")
+    except IOError:
+        pass
+    errs = app.validate(dict(app.DEFAULTS, call="8P5AB", tnc="sound", modem="twfast", digi=True))
+    assert any("Tradewind Fast" in e for e in errs)
+    assert any("sound modem" in e for e in app.validate(dict(app.DEFAULTS, call="8P5AB", tnc="kiss_tcp", modem="9600")))
+    print("v3.27 ok (9600 G3RUH + Tradewind Fast OFDM QPSK..64-QAM, multi-packet transmissions, data-port file transfer)")
 
 
 if __name__ == "__main__":

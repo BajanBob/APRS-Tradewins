@@ -2884,7 +2884,7 @@ const FORMS = [
     F('mode','Path used','select',['Tradewind RF chat','Winlink Telnet P2P','Winlink VARA FM P2P','Winlink VARA HF P2P','Winlink Packet P2P']),
     F('freq','Frequency (MHz) or network'), F('rpt','Your signal here','select',['5/9 - loud and clear','4/7 - readable','3/5 - weak but readable','2/3 - barely readable','Not heard by RF']),
     F('loc','My location'), F('note','Note','text',null,true)],
-   build:v=>`${v.stage}. Path ${v.mode}${v.freq?' on '+v.freq:''}. Your sig ${v.rpt.split(' - ')[0]}. ${v.loc}. ${v.note}${v.stage==='First call'?' Pse reply with my report.':v.stage==='Reply'?' Pse confirm.':' 73'}`},
+   build:v=>`${v.stage}. Path ${v.mode}${v.freq?' on '+v.freq:''}. Your sig ${v.rpt.split(' - ')[0]}. ${v.loc}. ${v.note}${v.note && !/[.!?]$/.test(v.note) ? '.' : ''}${v.stage==='First call'?' Pse reply with my report.':v.stage==='Reply'?' Pse confirm.':' 73'}`},
   {id:'ics213', name:'General message (ICS-213 style)', tag:'ICS213', fields:[
     F('to','To (name / position)'), F('from','From (name / position)'), F('subj','Subject','text',null,true),
     F('msg','Message','text',null,true), F('reply','Reply requested','select',['No','Yes'])],

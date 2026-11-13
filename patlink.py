@@ -10,7 +10,7 @@ Pat (getpat.io) is a Winlink client. When it runs on the same computer with its 
       varafm:///CALL      VARA FM peer-to-peer
       varahf:///CALL      VARA HF peer-to-peer
       telnet://MYCALL@host:8774/   Telnet P2P (over a LAN, mesh or the internet)
-      telnet:///          (empty) the Winlink CMS over the internet
+      telnet              Pat's alias for the Winlink CMS over the internet (cms.winlink.org:8772)
   * read Pat's status and mailboxes                                      GET  /api/status, /api/mailbox/<box>
 
 Pat does the Winlink B2F protocol, compression and VARA; Tradewind only composes and asks.
@@ -32,7 +32,7 @@ def connect_url(transport, peer="", mycall="", host=""):
     """The connect string Pat understands for a transport and peer."""
     peer = re.sub(r"[^A-Z0-9/-]", "", str(peer or "").upper())
     if transport == "cms":
-        return "telnet:///"
+        return "telnet"                  # Pat's built-in alias: telnet://{mycall}:CMSTelnet@cms.winlink.org:8772/wl2k
     if not peer:
         raise ValueError("Enter the callsign of the station to connect to.")
     if transport in ("varafm", "varahf", "ardop", "ax25"):
@@ -62,6 +62,22 @@ def multipart(fields, files):
     return b"".join(out), f"multipart/form-data; boundary={b}"
 
 
+def _friendly(e):
+    """Plain words for the usual failures."""
+    text = str(getattr(e, "reason", "") or e)
+    if "10061" in text or "refused" in text.lower():
+        return "Pat isn't running on this computer - start it with: pat http"
+    read = getattr(e, "read", None)
+    if read:
+        try:
+            body = read().decode("utf-8", "replace").strip()
+        except Exception:
+            body = ""
+        if body:
+            return body[:160] + " - see the Pat window for the reason"
+    return text[:160]
+
+
 class Pat:
     def __init__(self, url=DEFAULT_URL, opener=None):
         self.url = url.rstrip("/")
@@ -80,8 +96,11 @@ class Pat:
         req = urllib.request.Request(self.url + path, data=data, method="POST" if data is not None else "GET")
         if ctype:
             req.add_header("Content-Type", ctype)
-        with self.open(req, timeout=timeout) as r:
-            raw = r.read()
+        try:
+            with self.open(req, timeout=timeout) as r:
+                raw = r.read()
+        except OSError as e:                       # URLError / HTTPError / refused: say it plainly
+            raise IOError(_friendly(e)) from e
         try:
             return json.loads(raw or b"null")
         except ValueError:
@@ -94,7 +113,7 @@ class Pat:
             st = st if isinstance(st, dict) else {}
             st["running"] = True
         except Exception as e:
-            st = {"running": False, "error": f"Pat not reachable at {self.url} ({str(e)[:60]})"}
+            st = {"running": False, "error": _friendly(e)}
         st["busy"], st["last"] = self.busy, self.last
         return st
 
@@ -123,8 +142,7 @@ class Pat:
             n = (r or {}).get("NumReceived", 0) if isinstance(r, dict) else 0
             self.last = {"t": time.time(), "text": f"Session finished - {n} message(s) received", "ok": True}
         except Exception as e:
-            msg = getattr(e, "read", None)
-            detail = msg().decode("utf-8", "replace")[:120] if msg else str(e)[:120]
+            detail = _friendly(e)
             self.last = {"t": time.time(), "text": f"Connect failed: {detail}", "ok": False}
         finally:
             self.busy = False

@@ -1858,7 +1858,7 @@ def test_v326():
     assert patlink.connect_url("varafm", "8p5dg") == "varafm:///8P5DG"
     assert patlink.connect_url("varahf", "8P5DG") == "varahf:///8P5DG"
     assert patlink.connect_url("telnet_p2p", "8P5DG", "8p5ab", "10.0.0.5") == "telnet://8P5AB@10.0.0.5:8774/"
-    assert patlink.connect_url("cms") == "telnet:///"
+    assert patlink.connect_url("cms") == "telnet"                   # 3.27.4: Pat's CMS alias
     for bad in [("varafm", ""), ("telnet_p2p", "8P5DG", "8P5AB", "x; rm -rf /"), ("bogus", "8P5DG")]:
         try:
             patlink.connect_url(*bad)
